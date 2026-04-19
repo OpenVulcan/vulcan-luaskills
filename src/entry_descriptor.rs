@@ -1,0 +1,40 @@
+use serde::Serialize;
+
+/// English: One parameter descriptor exposed by a LuaSkills runtime entry.
+/// LuaSkills 运行时入口对外暴露的单个参数描述。
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeEntryParameterDescriptor {
+    /// English: Stable local parameter name.
+    /// 稳定的局部参数名称。
+    pub name: String,
+    /// English: Runtime parameter type string.
+    /// 运行时参数类型字符串。
+    pub param_type: String,
+    /// English: Human-readable parameter description.
+    /// 人类可读的参数说明。
+    pub description: String,
+    /// English: Whether the parameter is required.
+    /// 当前参数是否必填。
+    pub required: bool,
+}
+
+/// English: Generic runtime entry descriptor that stays independent from MCP tool/resource concepts.
+/// 独立于 MCP tool/resource 概念的通用运行时入口描述对象。
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeEntryDescriptor {
+    /// English: Canonical runtime entry identifier in `skill_id-entry_name[-N]` format.
+    /// 采用 `skill_id-entry_name[-N]` 形式的 canonical 运行时入口标识。
+    pub canonical_name: String,
+    /// English: Stable skill namespace that owns the entry.
+    /// 拥有该入口的稳定 skill 命名空间。
+    pub skill_id: String,
+    /// English: Stable local entry name declared by the skill.
+    /// 由 skill 声明的稳定局部入口名称。
+    pub local_name: String,
+    /// English: Human-readable entry description.
+    /// 人类可读的入口描述。
+    pub description: String,
+    /// English: Parameter descriptors of the current entry.
+    /// 当前入口的参数描述列表。
+    pub parameters: Vec<RuntimeEntryParameterDescriptor>,
+}
