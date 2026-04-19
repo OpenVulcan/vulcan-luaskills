@@ -1,0 +1,409 @@
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+
+use crate::dependency::types::{DependencyScope, DependencySourceType};
+
+/// English: Supported archive formats used by LuaSkills dependency packages.
+/// LuaSkills 依赖包支持的归档格式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyArchiveType {
+    /// English: Treat the downloaded payload as one zip archive.
+    /// 将下载载荷视为 zip 归档。
+    Zip,
+    /// English: Treat the downloaded payload as one tar.gz archive.
+    /// 将下载载荷视为 tar.gz 归档。
+    TarGz,
+    /// English: Treat the downloaded payload as one raw single file.
+    /// 将下载载荷视为单个原始文件。
+    #[default]
+    Raw,
+}
+
+/// English: One exported file rule used both for installation and existence detection.
+/// 同时用于安装与存在性检测的单个导出文件规则。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependencyExportSpec {
+    /// English: Relative path inside the downloaded archive or raw file payload.
+    /// 下载归档或原始文件载荷内部的相对路径。
+    pub archive_path: String,
+    /// English: Relative destination path under the dependency root.
+    /// 依赖根目录下的相对目标路径。
+    pub target_path: String,
+    /// English: Whether the exported file should be marked executable on Unix platforms.
+    /// 是否应在 Unix 平台上把导出文件标记为可执行。
+    #[serde(default)]
+    pub executable: bool,
+}
+
+/// English: One platform-specific package record resolved before actual download.
+/// 在实际下载前解析得到的单个平台包记录。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependencyPackageSpec {
+    /// English: Archive format of the package payload.
+    /// 包载荷对应的归档格式。
+    #[serde(default)]
+    pub archive_type: DependencyArchiveType,
+    /// English: Exact GitHub asset file name used for github_release downloads.
+    /// 用于 github_release 下载的精确 GitHub 资产文件名。
+    #[serde(default)]
+    pub asset_name: Option<String>,
+    /// English: Exact download URL used for direct url or resolved skilllist packages.
+    /// 用于直接 url 或已解析 skilllist 包的精确下载地址。
+    #[serde(default)]
+    pub url: Option<String>,
+    /// English: Exported files that must be installed and later used for existence checks.
+    /// 必须被安装、并在之后用于存在性检测的导出文件列表。
+    #[serde(default)]
+    pub exports: Vec<DependencyExportSpec>,
+}
+
+/// English: GitHub-release source configuration used by one dependency.
+/// 单个依赖使用的 GitHub Release 来源配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubReleaseSourceSpec {
+    /// English: GitHub repository in `owner/repo` format.
+    /// `owner/repo` 形式的 GitHub 仓库标识。
+    pub repo: String,
+    /// English: Optional explicit release API URL. When omitted the host-configured GitHub API base is used.
+    /// 可选的显式 release API 地址；省略时使用宿主配置的 GitHub API 基址。
+    #[serde(default)]
+    pub tag_api: Option<String>,
+}
+
+/// English: Direct-URL source configuration used by one dependency.
+/// 单个依赖使用的直接 URL 来源配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UrlSourceSpec {}
+
+/// English: Skill-list source configuration used by one dependency.
+/// 单个依赖使用的 skilllist 来源配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillListSourceSpec {
+    /// English: URL of the remote skill/tool dependency list file.
+    /// 远程 skill/tool 依赖列表文件的下载地址。
+    pub url: String,
+    /// English: Package key inside the downloaded list file.
+    /// 下载后的列表文件内部使用的包键名。
+    pub package: String,
+}
+
+/// English: Unified source specification used by all dependency kinds.
+/// 所有依赖类型共用的统一来源描述。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependencySourceSpec {
+    /// English: Upstream source type used for package resolution.
+    /// 包解析时使用的上游来源类型。
+    #[serde(rename = "type")]
+    pub source_type: DependencySourceType,
+    /// English: Optional GitHub-release source payload.
+    /// 可选的 GitHub Release 来源载荷。
+    #[serde(default)]
+    pub github: Option<GithubReleaseSourceSpec>,
+    /// English: Optional direct-URL source payload.
+    /// 可选的直接 URL 来源载荷。
+    #[serde(default)]
+    pub url: Option<UrlSourceSpec>,
+    /// English: Optional skilllist source payload.
+    /// 可选的 skilllist 来源载荷。
+    #[serde(default)]
+    pub skilllist: Option<SkillListSourceSpec>,
+}
+
+/// English: Tool dependency declaration loaded from one skill package.
+/// 从单个 skill 包加载的工具依赖声明。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolDependencySpec {
+    /// English: Stable dependency name.
+    /// 稳定依赖名称。
+    pub name: String,
+    /// English: Optional expected version string used for display and asset interpolation.
+    /// 用于展示和资产名插值的可选预期版本字符串。
+    #[serde(default)]
+    pub version: Option<String>,
+    /// English: Whether the dependency is required for the skill to load.
+    /// 当前依赖是否为技能加载所必需。
+    #[serde(default = "default_required_dependency")]
+    pub required: bool,
+    /// English: Install scope of the current dependency. Tool dependencies default to shared.
+    /// 当前依赖的安装作用域。工具依赖默认使用 shared。
+    #[serde(default = "default_tool_dependency_scope")]
+    pub scope: DependencyScope,
+    /// English: Dependency source specification.
+    /// 依赖来源描述。
+    pub source: DependencySourceSpec,
+    /// English: Platform-specific package descriptors.
+    /// 平台对应的包描述表。
+    #[serde(default)]
+    pub packages: BTreeMap<String, DependencyPackageSpec>,
+}
+
+/// English: Lua package dependency declaration loaded from one skill package.
+/// 从单个 skill 包加载的 Lua 库依赖声明。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LuaDependencySpec {
+    /// English: Stable dependency name.
+    /// 稳定依赖名称。
+    pub name: String,
+    /// English: Optional expected version string used for display and asset interpolation.
+    /// 用于展示和资产名插值的可选预期版本字符串。
+    #[serde(default)]
+    pub version: Option<String>,
+    /// English: Whether the dependency is required for the skill to load.
+    /// 当前依赖是否为技能加载所必需。
+    #[serde(default = "default_required_dependency")]
+    pub required: bool,
+    /// English: Install scope of the current dependency. Lua dependencies default to skill-private.
+    /// 当前依赖的安装作用域。Lua 依赖默认使用 skill 私有作用域。
+    #[serde(default = "default_runtime_library_scope")]
+    pub scope: DependencyScope,
+    /// English: Dependency source specification.
+    /// 依赖来源描述。
+    pub source: DependencySourceSpec,
+    /// English: Platform-specific package descriptors.
+    /// 平台对应的包描述表。
+    #[serde(default)]
+    pub packages: BTreeMap<String, DependencyPackageSpec>,
+}
+
+/// English: FFI/native library dependency declaration loaded from one skill package.
+/// 从单个 skill 包加载的 FFI/原生库依赖声明。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FfiDependencySpec {
+    /// English: Stable dependency name.
+    /// 稳定依赖名称。
+    pub name: String,
+    /// English: Optional expected version string used for display and asset interpolation.
+    /// 用于展示和资产名插值的可选预期版本字符串。
+    #[serde(default)]
+    pub version: Option<String>,
+    /// English: Whether the dependency is required for the skill to load.
+    /// 当前依赖是否为技能加载所必需。
+    #[serde(default = "default_required_dependency")]
+    pub required: bool,
+    /// English: Install scope of the current dependency. FFI dependencies default to skill-private.
+    /// 当前依赖的安装作用域。FFI 依赖默认使用 skill 私有作用域。
+    #[serde(default = "default_runtime_library_scope")]
+    pub scope: DependencyScope,
+    /// English: Dependency source specification.
+    /// 依赖来源描述。
+    pub source: DependencySourceSpec,
+    /// English: Platform-specific package descriptors.
+    /// 平台对应的包描述表。
+    #[serde(default)]
+    pub packages: BTreeMap<String, DependencyPackageSpec>,
+}
+
+/// English: Full dependencies.yaml payload loaded from one skill package.
+/// 从单个 skill 包加载的完整 dependencies.yaml 载荷。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SkillDependencyManifest {
+    /// English: Tool dependencies such as rg or ast-grep.
+    /// 例如 rg 或 ast-grep 一类的工具依赖。
+    #[serde(default)]
+    pub tool_dependencies: Vec<ToolDependencySpec>,
+    /// English: Lua module dependencies installed under one host-managed lua root.
+    /// 安装到宿主管理 Lua 根目录下的 Lua 模块依赖。
+    #[serde(default)]
+    pub lua_dependencies: Vec<LuaDependencySpec>,
+    /// English: FFI/native library dependencies installed under one host-managed ffi root.
+    /// 安装到宿主管理 FFI 根目录下的原生库依赖。
+    #[serde(default)]
+    pub ffi_dependencies: Vec<FfiDependencySpec>,
+}
+
+/// English: One skilllist package manifest downloaded from one remote list file.
+/// 从远程列表文件下载得到的单个 skilllist 包清单。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillListPackageManifest {
+    /// English: Optional resolved version declared by the list provider.
+    /// 列表提供方声明的可选已解析版本号。
+    #[serde(default)]
+    pub version: Option<String>,
+    /// English: Platform-specific package descriptors resolved from the list provider.
+    /// 从列表提供方解析到的平台包描述表。
+    #[serde(default)]
+    pub packages: BTreeMap<String, DependencyPackageSpec>,
+}
+
+/// English: Remote skilllist file payload that maps package keys to package manifests.
+/// 把包键映射到包清单的远程 skilllist 文件载荷。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SkillListIndexFile {
+    /// English: Package map resolved from the remote list file.
+    /// 从远程列表文件解析得到的包映射。
+    #[serde(default)]
+    pub packages: BTreeMap<String, SkillListPackageManifest>,
+}
+
+/// English: Return the default dependency required flag.
+/// 返回依赖 required 标志的默认值。
+fn default_required_dependency() -> bool {
+    true
+}
+
+/// English: Return the default install scope used by tool dependencies.
+/// 返回工具依赖默认使用的安装作用域。
+fn default_tool_dependency_scope() -> DependencyScope {
+    DependencyScope::Shared
+}
+
+/// English: Return the default install scope used by Lua and FFI runtime-library dependencies.
+/// 返回 Lua 与 FFI 运行时库依赖默认使用的安装作用域。
+fn default_runtime_library_scope() -> DependencyScope {
+    DependencyScope::Skill
+}
+
+impl SkillDependencyManifest {
+    /// English: Load one dependency manifest from `dependencies.yaml`.
+    /// 从 `dependencies.yaml` 加载一份依赖清单。
+    pub fn load_from_path(path: &Path) -> Result<Self, String> {
+        let yaml_text = fs::read_to_string(path)
+            .map_err(|error| format!("Failed to read {}: {}", path.display(), error))?;
+        serde_yaml::from_str(&yaml_text)
+            .map_err(|error| format!("Failed to parse {}: {}", path.display(), error))
+    }
+
+    /// English: Return whether the manifest contains any declared dependency.
+    /// 返回当前清单是否声明了任何依赖。
+    pub fn is_empty(&self) -> bool {
+        self.tool_dependencies.is_empty()
+            && self.lua_dependencies.is_empty()
+            && self.ffi_dependencies.is_empty()
+    }
+}
+
+impl ToolDependencySpec {
+    /// English: Return the platform package descriptor selected for one normalized platform key.
+    /// 返回按标准平台键选中的平台包描述。
+    pub fn package_for_platform(&self, platform_key: &str) -> Option<&DependencyPackageSpec> {
+        self.packages.get(platform_key)
+    }
+}
+
+impl LuaDependencySpec {
+    /// English: Return the platform package descriptor selected for one normalized platform key.
+    /// 返回按标准平台键选中的平台包描述。
+    pub fn package_for_platform(&self, platform_key: &str) -> Option<&DependencyPackageSpec> {
+        self.packages.get(platform_key)
+    }
+}
+
+impl FfiDependencySpec {
+    /// English: Return the platform package descriptor selected for one normalized platform key.
+    /// 返回按标准平台键选中的平台包描述。
+    pub fn package_for_platform(&self, platform_key: &str) -> Option<&DependencyPackageSpec> {
+        self.packages.get(platform_key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SkillDependencyManifest;
+
+    /// English: Verify that the new dependency manifest format parses tool/lua/ffi groups correctly.
+    /// 验证新的依赖清单格式能正确解析 tool/lua/ffi 三个分组。
+    #[test]
+    fn parse_dependency_manifest_groups() {
+        let yaml_text = r#"
+tool_dependencies:
+  - name: ast-grep
+    scope: shared
+    source:
+      type: github_release
+      github:
+        repo: ast-grep/ast-grep
+    packages:
+      windows-x64:
+        archive_type: zip
+        asset_name: app-x86_64-pc-windows-msvc.zip
+        exports:
+          - archive_path: ast-grep.exe
+            target_path: bin/ast-grep.exe
+lua_dependencies:
+  - name: lua-cjson
+    required: false
+    scope: skill
+    source:
+      type: url
+      url: {}
+    packages:
+      windows-x64:
+        archive_type: raw
+        url: https://example.com/cjson.lua
+        exports:
+          - archive_path: cjson.lua
+            target_path: share/lua/cjson.lua
+ffi_dependencies:
+  - name: example-lib
+    source:
+      type: skilllist
+      skilllist:
+        url: https://example.com/index.yaml
+        package: example-lib
+"#;
+        let manifest: SkillDependencyManifest =
+            serde_yaml::from_str(yaml_text).expect("manifest should parse");
+        assert_eq!(manifest.tool_dependencies.len(), 1);
+        assert_eq!(manifest.lua_dependencies.len(), 1);
+        assert_eq!(manifest.ffi_dependencies.len(), 1);
+        assert_eq!(
+            manifest.tool_dependencies[0].scope,
+            crate::dependency::types::DependencyScope::Shared
+        );
+        assert_eq!(
+            manifest.lua_dependencies[0].scope,
+            crate::dependency::types::DependencyScope::Skill
+        );
+        assert_eq!(
+            manifest.tool_dependencies[0]
+                .package_for_platform("windows-x64")
+                .expect("windows package should exist")
+                .exports[0]
+                .target_path,
+            "bin/ast-grep.exe"
+        );
+    }
+
+    /// English: Verify that missing scope fields still fall back to the expected per-kind defaults.
+    /// 验证省略 scope 字段时仍会回落到按依赖类型定义的默认作用域。
+    #[test]
+    fn dependency_scope_defaults_match_kind_policy() {
+        let yaml_text = r#"
+tool_dependencies:
+  - name: rg
+    source:
+      type: url
+      url: {}
+    packages: {}
+lua_dependencies:
+  - name: demo-lua
+    source:
+      type: url
+      url: {}
+    packages: {}
+ffi_dependencies:
+  - name: demo-ffi
+    source:
+      type: url
+      url: {}
+    packages: {}
+"#;
+        let manifest: SkillDependencyManifest =
+            serde_yaml::from_str(yaml_text).expect("manifest should parse");
+        assert_eq!(
+            manifest.tool_dependencies[0].scope,
+            crate::dependency::types::DependencyScope::Shared
+        );
+        assert_eq!(
+            manifest.lua_dependencies[0].scope,
+            crate::dependency::types::DependencyScope::Skill
+        );
+        assert_eq!(
+            manifest.ffi_dependencies[0].scope,
+            crate::dependency::types::DependencyScope::Skill
+        );
+    }
+}

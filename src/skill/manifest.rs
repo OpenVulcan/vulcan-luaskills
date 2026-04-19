@@ -207,6 +207,10 @@ pub struct SkillMeta {
     /// Stable skill namespace used to build canonical entry ids.
     /// 用于生成 canonical 入口 id 的稳定 skill 命名空间。
     pub skill_id: String,
+    /// Whether the current skill is allowed to load. Defaults to enabled when omitted.
+    /// 当前 skill 是否允许被加载；省略时默认启用。
+    #[serde(default = "default_skill_enable_flag")]
+    pub enable: bool,
     /// Debug mode: reload Lua source from disk on each invocation.
     /// 调试模式：每次调用时都从磁盘热加载 Lua 源文件。
     #[serde(default)]
@@ -263,6 +267,12 @@ pub fn validate_luaskills_identifier(value: &str, label: &str) -> Result<(), Str
     ))
 }
 
+/// Return the default enabled flag for one skill manifest.
+/// 返回单个技能清单的默认启用标记。
+fn default_skill_enable_flag() -> bool {
+    true
+}
+
 impl SkillMeta {
     /// Return the effective LanceDB configuration.
     /// 返回生效的 LanceDB 配置。
@@ -280,6 +290,12 @@ impl SkillMeta {
     /// 返回用于 canonical 入口名的生效 skill id。
     pub fn effective_skill_id(&self) -> &str {
         self.skill_id.trim()
+    }
+
+    /// Return whether the manifest itself allows the skill to load.
+    /// 返回当前清单本身是否允许技能被加载。
+    pub fn is_enabled(&self) -> bool {
+        self.enable
     }
 
     /// Iterate over all top-level entries.

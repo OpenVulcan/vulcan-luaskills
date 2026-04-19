@@ -1,4 +1,5 @@
 use crate::runtime_context::RuntimeRequestContext;
+use crate::skill::manager::SkillProtectionConfig;
 use crate::tool_cache::ToolCacheConfig;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -20,6 +21,42 @@ pub struct LuaRuntimeHostOptions {
     /// English: Optional external program path used by `vulcan.runtime.lua.exec` subprocess mode.
     /// `vulcan.runtime.lua.exec` 子进程模式使用的可选外部程序路径。
     pub luaexec_program: Option<PathBuf>,
+    /// English: Host-managed root directory used for shared tool dependencies such as rg or ast-grep.
+    /// 宿主管理的共享工具依赖根目录，用于 rg 或 ast-grep 一类工具。
+    pub tool_dependency_root: Option<PathBuf>,
+    /// English: Host-managed root directory used only to probe host-provided tool dependencies.
+    /// 仅用于探测宿主提供工具依赖的宿主管理根目录。
+    pub host_provided_tool_root: Option<PathBuf>,
+    /// English: Host-managed root directory used for Lua package dependencies.
+    /// 宿主管理的 Lua 包依赖根目录。
+    pub lua_dependency_root: Option<PathBuf>,
+    /// English: Host-managed root directory used only to probe host-provided Lua package dependencies.
+    /// 仅用于探测宿主提供 Lua 包依赖的宿主管理根目录。
+    pub host_provided_lua_root: Option<PathBuf>,
+    /// English: Host-managed root directory used for FFI/native library dependencies.
+    /// 宿主管理的 FFI/原生库依赖根目录。
+    pub ffi_dependency_root: Option<PathBuf>,
+    /// English: Host-managed root directory used only to probe host-provided FFI/native dependencies.
+    /// 仅用于探测宿主提供 FFI/原生依赖的宿主管理根目录。
+    pub host_provided_ffi_root: Option<PathBuf>,
+    /// English: Host-managed cache directory used for downloaded archives and remote manifests.
+    /// 宿主管理的下载缓存目录，用于归档文件和远程清单缓存。
+    pub download_cache_root: Option<PathBuf>,
+    /// English: Host-managed directory used to persist skill enabled/disabled state markers.
+    /// 宿主管理的技能启用/停用状态标记目录。
+    pub skill_state_root: Option<PathBuf>,
+    /// English: Host-provided protected skill identifiers reserved for the system plane.
+    /// 由宿主提供、保留给 system 平面的受保护技能标识符。
+    pub protection: SkillProtectionConfig,
+    /// English: Whether the runtime is allowed to perform network downloads while installing dependencies.
+    /// 运行时在安装依赖时是否允许执行网络下载。
+    pub allow_network_download: bool,
+    /// English: Optional GitHub site base URL override used to rewrite browser download URLs.
+    /// 可选的 GitHub 站点基址覆盖，用于重写浏览器下载地址。
+    pub github_base_url: Option<String>,
+    /// English: Optional GitHub API base URL override used to resolve release metadata.
+    /// 可选的 GitHub API 基址覆盖，用于解析 release 元数据。
+    pub github_api_base_url: Option<String>,
     /// English: Explicit SQLite dynamic-library path owned by the host.
     /// 由宿主显式提供的 SQLite 动态库路径。
     pub sqlite_library_path: Option<PathBuf>,

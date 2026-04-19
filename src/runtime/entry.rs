@@ -2,7 +2,7 @@ use serde::Serialize;
 
 /// English: One parameter descriptor exposed by a LuaSkills runtime entry.
 /// LuaSkills 运行时入口对外暴露的单个参数描述。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RuntimeEntryParameterDescriptor {
     /// English: Stable local parameter name.
     /// 稳定的局部参数名称。
@@ -20,7 +20,7 @@ pub struct RuntimeEntryParameterDescriptor {
 
 /// English: Generic runtime entry descriptor that stays independent from MCP tool/resource concepts.
 /// 独立于 MCP tool/resource 概念的通用运行时入口描述对象。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RuntimeEntryDescriptor {
     /// English: Canonical runtime entry identifier in `skill_id-entry_name[-N]` format.
     /// 采用 `skill_id-entry_name[-N]` 形式的 canonical 运行时入口标识。

@@ -9,6 +9,13 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::dependency::manager::{
+    DependencyManager, DependencyManagerConfig, ensure_directory, fallback_download_cache_root,
+    fallback_tool_root,
+};
+use crate::host::callbacks::{
+    RuntimeEntryRegistryDelta, RuntimeSkillLifecycleEvent,
+};
 use crate::entry_descriptor::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
 use crate::lancedb_host::{LanceDbSkillBinding, LanceDbSkillHost, disabled_skill_status_json};
 use crate::lua_skill::{SkillMeta, validate_luaskills_identifier};
@@ -18,6 +25,10 @@ use crate::runtime_options::{LuaInvocationContext, LuaRuntimeHostOptions};
 use crate::runtime_logging::{error as log_error, info as log_info, warn as log_warn};
 use crate::runtime_result::{
     NON_STRING_TOOL_RESULT_ERROR, RuntimeInvocationResult, ToolOverflowMode,
+};
+use crate::skill::dependencies::SkillDependencyManifest;
+use crate::skill::manager::{
+    SkillApplyResult, SkillInstallRequest, SkillManager, SkillManagerConfig, SkillOperationPlane,
 };
 use crate::sqlite_host::{
     SqliteSkillBinding, SqliteSkillHost,
@@ -35,6 +46,22 @@ struct LoadedSkill {
     lancedb_binding: Option<Arc<LanceDbSkillBinding>>,
     sqlite_binding: Option<Arc<SqliteSkillBinding>>,
     resolved_entry_names: HashMap<String, String>,
+}
+
+/// English: Minimal manifest subset used to decide whether one skill should participate in reload/load.
+/// 用于决定单个技能是否参与重载/加载的最小清单子集。
+#[derive(Debug, Deserialize)]
+struct SkillEnableProbe {
+    /// English: When omitted the skill is treated as enabled.
+    /// 省略时表示技能默认启用。
+    #[serde(default = "default_skill_enable_probe")]
+    enable: bool,
+}
+
+/// English: Return the default enabled flag used by the lightweight manifest probe.
+/// 返回轻量技能清单探针使用的默认启用标记。
+fn default_skill_enable_probe() -> bool {
+    true
 }
 
 /// Pool sizing configuration for Lua virtual machines.
@@ -1406,6 +1433,135 @@ impl LuaEngine {
         })
     }
 
+    /// English: Build the dependency-manager configuration for one shared skill base directory.
+    /// 为单个共享 skill 基目录构造依赖管理器配置。
+    fn dependency_manager_config_for(
+        &self,
+        skill_base_dir: &Path,
+    ) -> Result<DependencyManagerConfig, String> {
+        let tool_root = self
+            .host_options
+            .tool_dependency_root
+            .clone()
+            .unwrap_or_else(|| fallback_tool_root(skill_base_dir));
+        let host_tool_root = self
+            .host_options
+            .host_provided_tool_root
+            .clone()
+            .unwrap_or_else(|| skill_base_dir.join("__host_tools"));
+        let lua_root = self
+            .host_options
+            .lua_dependency_root
+            .clone()
+            .unwrap_or_else(|| skill_base_dir.join("__lua_packages"));
+        let host_lua_root = self
+            .host_options
+            .host_provided_lua_root
+            .clone()
+            .or_else(|| self.host_options.lua_packages_dir.clone())
+            .unwrap_or_else(|| skill_base_dir.join("__host_lua"));
+        let ffi_root = self
+            .host_options
+            .ffi_dependency_root
+            .clone()
+            .unwrap_or_else(|| skill_base_dir.join("__ffi"));
+        let host_ffi_root = self
+            .host_options
+            .host_provided_ffi_root
+            .clone()
+            .or_else(|| {
+                self.host_options
+                    .lancedb_library_path
+                    .as_ref()
+                    .and_then(|path| path.parent().map(Path::to_path_buf))
+            })
+            .or_else(|| {
+                self.host_options
+                    .sqlite_library_path
+                    .as_ref()
+                    .and_then(|path| path.parent().map(Path::to_path_buf))
+            })
+            .unwrap_or_else(|| skill_base_dir.join("__host_ffi"));
+        let download_cache_root = self
+            .host_options
+            .download_cache_root
+            .clone()
+            .unwrap_or_else(|| fallback_download_cache_root(skill_base_dir));
+
+        ensure_directory(&tool_root)?;
+        ensure_directory(&host_tool_root)?;
+        ensure_directory(&lua_root)?;
+        ensure_directory(&host_lua_root)?;
+        ensure_directory(&ffi_root)?;
+        ensure_directory(&host_ffi_root)?;
+        ensure_directory(&download_cache_root)?;
+
+        Ok(DependencyManagerConfig {
+            tool_root,
+            host_tool_root,
+            lua_root,
+            host_lua_root,
+            ffi_root,
+            host_ffi_root,
+            download_cache_root,
+            allow_network_download: self.host_options.allow_network_download,
+            github_base_url: self.host_options.github_base_url.clone(),
+            github_api_base_url: self.host_options.github_api_base_url.clone(),
+        })
+    }
+
+    /// English: Build the skill-manager configuration for one shared skill base directory.
+    /// 为单个共享 skill 基目录构造技能管理器配置。
+    fn skill_manager_for(&self, skill_base_dir: &Path) -> Result<SkillManager, String> {
+        let state_root = self
+            .host_options
+            .skill_state_root
+            .clone()
+            .unwrap_or_else(|| skill_base_dir.join("__skill_state"));
+        ensure_directory(&state_root)?;
+        Ok(SkillManager::new(SkillManagerConfig {
+            skill_root: skill_base_dir.to_path_buf(),
+            state_root,
+            protection: self.host_options.protection.clone(),
+        }))
+    }
+
+    /// English: Ensure dependencies declared by one skill directory are installed before the skill is loaded.
+    /// 在真正加载 skill 前确保该目录声明的依赖已经安装完成。
+    fn ensure_skill_dependencies(
+        &self,
+        skill_base_dir: &Path,
+        skill_dir: &Path,
+    ) -> Result<(), String> {
+        let dependencies_path = skill_dir.join("dependencies.yaml");
+        if !dependencies_path.exists() {
+            return Ok(());
+        }
+
+        let manifest = SkillDependencyManifest::load_from_path(&dependencies_path)?;
+        if manifest.is_empty() {
+            return Ok(());
+        }
+
+        let skill_name = skill_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("unknown-skill");
+        let manager = DependencyManager::new(self.dependency_manager_config_for(skill_base_dir)?);
+        manager.ensure_skill_dependencies(skill_name, &manifest)
+    }
+
+    /// English: Read the manifest enable flag before dependency preparation and full load.
+    /// 在依赖准备与完整加载之前读取技能清单中的启用标记。
+    fn is_skill_manifest_enabled(skill_dir: &Path) -> Result<bool, String> {
+        let skill_yaml = skill_dir.join("skill.yaml");
+        let yaml_text = std::fs::read_to_string(&skill_yaml)
+            .map_err(|error| format!("Failed to read {}: {}", skill_yaml.display(), error))?;
+        let probe: SkillEnableProbe = serde_yaml::from_str(&yaml_text)
+            .map_err(|error| format!("Failed to parse {}: {}", skill_yaml.display(), error))?;
+        Ok(probe.enable)
+    }
+
     /// Resolve final canonical entry names for all loaded skills with stable collision indexing.
     /// 为全部已加载 skill 解析最终 canonical 入口名，并以稳定顺序处理冲突编号。
     fn rebuild_entry_registry(&mut self) -> Result<(), String> {
@@ -1532,6 +1688,7 @@ impl LuaEngine {
         }
 
         let mut discovered_skills = Vec::new();
+        let skill_manager = self.skill_manager_for(base_dir)?;
         for entry in std::fs::read_dir(base_dir)? {
             let entry = entry?;
             let skill_dir = entry.path();
@@ -1552,6 +1709,13 @@ impl LuaEngine {
         discovered_skills.sort_by(|left, right| left.0.cmp(&right.0));
 
         for (skill_name, skill_dir) in discovered_skills {
+            if !skill_manager.is_skill_enabled(&skill_name)? {
+                log_warn(format!(
+                    "[LuaSkill] Skipped disabled skill '{}'",
+                    skill_name
+                ));
+                continue;
+            }
 
             // Check override directory
             let actual_dir = if let Some(od) = override_dir {
@@ -1576,10 +1740,44 @@ impl LuaEngine {
                 skill_dir
             };
 
+            match Self::is_skill_manifest_enabled(&actual_dir) {
+                Ok(true) => {}
+                Ok(false) => {
+                    log_info(format!(
+                        "[LuaSkill] Skipped manifest-disabled skill '{}'",
+                        skill_name
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    log_error(format!(
+                        "[LuaSkill] Failed to read enable flag for {}: {}",
+                        skill_name, error
+                    ));
+                    continue;
+                }
+            }
+
+            if let Err(error) = self.ensure_skill_dependencies(base_dir, &actual_dir) {
+                log_error(format!(
+                    "[LuaSkill] Failed to prepare dependencies for {}: {}",
+                    skill_name, error
+                ));
+                continue;
+            }
+
             if let Err(e) = self.load_single_skill(&actual_dir) {
                 log_error(format!("[LuaSkill] Failed to load {}: {}", skill_name, e));
             }
         }
+
+        let dependency_manager = DependencyManager::new(
+            self.dependency_manager_config_for(base_dir)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+        );
+        dependency_manager
+            .cleanup_orphaned_shared_dependencies(base_dir, override_dir)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
 
         self.rebuild_entry_registry()
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
@@ -1592,6 +1790,387 @@ impl LuaEngine {
         Ok(())
     }
 
+    /// English: Reload all skills from the given directories and rebuild runtime state from scratch.
+    /// 从给定目录重新加载全部技能，并从零重建运行时状态。
+    pub fn reload_from_dirs(
+        &mut self,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let previous_entries = self.list_entries();
+        self.reset_runtime_state();
+        self.load_from_dirs(base_dir, override_dir)?;
+        self.emit_entry_registry_delta(previous_entries);
+        Ok(())
+    }
+
+    /// English: Execute one mutating skill lifecycle action in the requested operation plane and then reload the runtime view.
+    /// 在指定操作平面执行一次会改变状态的技能生命周期动作，并在完成后立即重载运行时视图。
+    fn mutate_skill_state_and_reload(
+        &mut self,
+        plane: SkillOperationPlane,
+        action: crate::skill::manager::SkillLifecycleAction,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+        skill_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        validate_luaskills_identifier(skill_id, "skill_id")
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let manager = self
+            .skill_manager_for(base_dir)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let removed_dependency_manifest = if action == crate::skill::manager::SkillLifecycleAction::Uninstall {
+            let dependencies_path = manager.skill_root().join(skill_id).join("dependencies.yaml");
+            if dependencies_path.exists() {
+                Some(
+                    SkillDependencyManifest::load_from_path(&dependencies_path)
+                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Err(error) = manager.guard_operation(plane, action, skill_id) {
+            self.emit_skill_lifecycle_event(
+                plane,
+                action,
+                skill_id,
+                "blocked",
+                Some(error.clone()),
+            );
+            return Err(error.into());
+        }
+        let action_result = match action {
+            crate::skill::manager::SkillLifecycleAction::Disable => manager
+                .disable_skill_in_plane(plane, skill_id, reason)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() }),
+            crate::skill::manager::SkillLifecycleAction::Enable => manager
+                .enable_skill_in_plane(plane, skill_id)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() }),
+            crate::skill::manager::SkillLifecycleAction::Uninstall => manager
+                .uninstall_skill_in_plane(plane, skill_id)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() }),
+            _ => {
+                return Err(format!(
+                    "unsupported state mutation action {:?} / 不支持的状态变更动作 {:?}",
+                    action, action
+                )
+                .into());
+            }
+        };
+        if let Err(error) = action_result {
+            let message = error.to_string();
+            self.emit_skill_lifecycle_event(plane, action, skill_id, "failed", Some(message));
+            return Err(error);
+        }
+        if action == crate::skill::manager::SkillLifecycleAction::Uninstall {
+            let dependency_manager = DependencyManager::new(
+                self.dependency_manager_config_for(base_dir)
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+            );
+            dependency_manager
+                .cleanup_uninstalled_skill_dependencies(
+                    base_dir,
+                    override_dir,
+                    skill_id,
+                    removed_dependency_manifest.as_ref(),
+                )
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        }
+        self.reload_from_dirs(base_dir, override_dir)?;
+        self.emit_skill_lifecycle_event(plane, action, skill_id, "completed", None);
+        Ok(())
+    }
+
+    /// English: Execute one install or update preflight request in the requested operation plane.
+    /// 在指定操作平面执行一次安装或更新预检查请求。
+    fn apply_skill_request(
+        &mut self,
+        plane: SkillOperationPlane,
+        action: crate::skill::manager::SkillLifecycleAction,
+        base_dir: &Path,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        if !matches!(
+            action,
+            crate::skill::manager::SkillLifecycleAction::Install
+                | crate::skill::manager::SkillLifecycleAction::Update
+        ) {
+            return Err(format!(
+                "unsupported apply action {:?} / 不支持的应用动作 {:?}",
+                action, action
+            )
+            .into());
+        }
+        let manager = self
+            .skill_manager_for(base_dir)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let result = match action {
+            crate::skill::manager::SkillLifecycleAction::Install => manager
+                .install_skill(plane, request)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+            crate::skill::manager::SkillLifecycleAction::Update => manager
+                .update_skill(plane, request)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+            _ => unreachable!("unsupported apply action should have returned early"),
+        };
+        self.emit_skill_lifecycle_event(
+            plane,
+            action,
+            &result.skill_id,
+            &result.status,
+            Some(result.message.clone()),
+        );
+        Ok(result)
+    }
+
+    /// English: Mark one skill disabled through the ordinary skills plane and immediately reload the runtime view.
+    /// 通过普通 skills 平面将单个技能标记为停用，并立即重载运行时视图。
+    pub fn disable_skill(
+        &mut self,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+        skill_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.mutate_skill_state_and_reload(
+            SkillOperationPlane::Skills,
+            crate::skill::manager::SkillLifecycleAction::Disable,
+            base_dir,
+            override_dir,
+            skill_id,
+            reason,
+        )
+    }
+
+    /// English: Mark one skill disabled through the host-controlled system plane and immediately reload the runtime view.
+    /// 通过宿主控制的 system 平面将单个技能标记为停用，并立即重载运行时视图。
+    pub fn system_disable_skill(
+        &mut self,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+        skill_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.mutate_skill_state_and_reload(
+            SkillOperationPlane::System,
+            crate::skill::manager::SkillLifecycleAction::Disable,
+            base_dir,
+            override_dir,
+            skill_id,
+            reason,
+        )
+    }
+
+    /// English: Remove the disabled marker of one skill through the ordinary skills plane and immediately reload the runtime view.
+    /// 通过普通 skills 平面移除单个技能的停用标记，并立即重载运行时视图。
+    pub fn enable_skill(
+        &mut self,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+        skill_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.mutate_skill_state_and_reload(
+            SkillOperationPlane::Skills,
+            crate::skill::manager::SkillLifecycleAction::Enable,
+            base_dir,
+            override_dir,
+            skill_id,
+            None,
+        )
+    }
+
+    /// English: Remove the disabled marker of one skill through the host-controlled system plane and immediately reload the runtime view.
+    /// 通过宿主控制的 system 平面移除单个技能的停用标记，并立即重载运行时视图。
+    pub fn system_enable_skill(
+        &mut self,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+        skill_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.mutate_skill_state_and_reload(
+            SkillOperationPlane::System,
+            crate::skill::manager::SkillLifecycleAction::Enable,
+            base_dir,
+            override_dir,
+            skill_id,
+            None,
+        )
+    }
+
+    /// English: Uninstall one skill directory through the ordinary skills plane and immediately reload the runtime view.
+    /// 通过普通 skills 平面卸载单个技能目录，并立即重载运行时视图。
+    pub fn uninstall_skill(
+        &mut self,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+        skill_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.mutate_skill_state_and_reload(
+            SkillOperationPlane::Skills,
+            crate::skill::manager::SkillLifecycleAction::Uninstall,
+            base_dir,
+            override_dir,
+            skill_id,
+            None,
+        )
+    }
+
+    /// English: Uninstall one skill directory through the host-controlled system plane and immediately reload the runtime view.
+    /// 通过宿主控制的 system 平面卸载单个技能目录，并立即重载运行时视图。
+    pub fn system_uninstall_skill(
+        &mut self,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+        skill_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.mutate_skill_state_and_reload(
+            SkillOperationPlane::System,
+            crate::skill::manager::SkillLifecycleAction::Uninstall,
+            base_dir,
+            override_dir,
+            skill_id,
+            None,
+        )
+    }
+
+    /// English: Preflight one install request through the ordinary skills plane and return a structured result.
+    /// 通过普通 skills 平面对一次安装请求执行预检查，并返回结构化结果。
+    pub fn install_skill(
+        &mut self,
+        base_dir: &Path,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        self.apply_skill_request(
+            SkillOperationPlane::Skills,
+            crate::skill::manager::SkillLifecycleAction::Install,
+            base_dir,
+            request,
+        )
+    }
+
+    /// English: Preflight one install request through the host-controlled system plane and return a structured result.
+    /// 通过宿主控制的 system 平面对一次安装请求执行预检查，并返回结构化结果。
+    pub fn system_install_skill(
+        &mut self,
+        base_dir: &Path,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        self.apply_skill_request(
+            SkillOperationPlane::System,
+            crate::skill::manager::SkillLifecycleAction::Install,
+            base_dir,
+            request,
+        )
+    }
+
+    /// English: Preflight one update request through the ordinary skills plane and return a structured result.
+    /// 通过普通 skills 平面对一次更新请求执行预检查，并返回结构化结果。
+    pub fn update_skill(
+        &mut self,
+        base_dir: &Path,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        self.apply_skill_request(
+            SkillOperationPlane::Skills,
+            crate::skill::manager::SkillLifecycleAction::Update,
+            base_dir,
+            request,
+        )
+    }
+
+    /// English: Preflight one update request through the host-controlled system plane and return a structured result.
+    /// 通过宿主控制的 system 平面对一次更新请求执行预检查，并返回结构化结果。
+    pub fn system_update_skill(
+        &mut self,
+        base_dir: &Path,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        self.apply_skill_request(
+            SkillOperationPlane::System,
+            crate::skill::manager::SkillLifecycleAction::Update,
+            base_dir,
+            request,
+        )
+    }
+
+    /// English: Reset all loaded skills, providers, and pooled VMs before one full reload.
+    /// 在执行一次完整重载前重置全部已加载技能、provider 与虚拟机池。
+    fn reset_runtime_state(&mut self) {
+        let pool_config = self.pool.config;
+        self.skills.clear();
+        self.entry_registry.clear();
+        self.lancedb_host = None;
+        self.sqlite_host = None;
+        self.pool = Arc::new(LuaVmPool::new(pool_config));
+    }
+
+    /// English: Emit one structured lifecycle event through the host callback bridge.
+    /// 通过宿主回调桥发送一条结构化生命周期事件。
+    fn emit_skill_lifecycle_event(
+        &self,
+        plane: SkillOperationPlane,
+        action: crate::skill::manager::SkillLifecycleAction,
+        skill_id: &str,
+        status: &str,
+        message: Option<String>,
+    ) {
+        crate::host::callbacks::emit_skill_lifecycle_event(&RuntimeSkillLifecycleEvent {
+            plane,
+            action,
+            skill_id: skill_id.to_string(),
+            status: status.to_string(),
+            message,
+        });
+    }
+
+    /// English: Compare pre-reload and post-reload entry snapshots and emit one host-visible registry delta.
+    /// 对比重载前后入口快照并发出一条宿主可见的注册表差异事件。
+    fn emit_entry_registry_delta(&self, previous_entries: Vec<RuntimeEntryDescriptor>) {
+        let current_entries = self.list_entries();
+        let previous_map = previous_entries
+            .into_iter()
+            .map(|entry| (entry.canonical_name.clone(), entry))
+            .collect::<BTreeMap<String, RuntimeEntryDescriptor>>();
+        let current_map = current_entries
+            .into_iter()
+            .map(|entry| (entry.canonical_name.clone(), entry))
+            .collect::<BTreeMap<String, RuntimeEntryDescriptor>>();
+
+        let mut added_entries = Vec::new();
+        let mut updated_entries = Vec::new();
+        let mut removed_entry_names = Vec::new();
+
+        for (canonical_name, current_entry) in &current_map {
+            match previous_map.get(canonical_name) {
+                None => added_entries.push(current_entry.clone()),
+                Some(previous_entry) if previous_entry != current_entry => {
+                    updated_entries.push(current_entry.clone());
+                }
+                Some(_) => {}
+            }
+        }
+
+        for canonical_name in previous_map.keys() {
+            if !current_map.contains_key(canonical_name) {
+                removed_entry_names.push(canonical_name.clone());
+            }
+        }
+
+        if added_entries.is_empty() && updated_entries.is_empty() && removed_entry_names.is_empty() {
+            return;
+        }
+
+        crate::host::callbacks::emit_entry_registry_delta(&RuntimeEntryRegistryDelta {
+            added_entries,
+            removed_entry_names,
+            updated_entries,
+        });
+    }
+
     /// Load a single skill from its directory.
     fn load_single_skill(&mut self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let skill_yaml = dir.join("skill.yaml");
@@ -1601,6 +2180,14 @@ impl LuaEngine {
 
         let yaml_str = std::fs::read_to_string(&skill_yaml)?;
         let meta: SkillMeta = serde_yaml::from_str(&yaml_str)?;
+
+        if !meta.is_enabled() {
+            log_info(format!(
+                "[LuaSkill] Skip disabled skill '{}'",
+                meta.effective_skill_id()
+            ));
+            return Ok(());
+        }
 
         if meta.skill_id.trim().is_empty() {
             return Err(format!("skill {} must declare non-empty skill_id", meta.name).into());
@@ -3843,7 +4430,11 @@ end
         lua: &Lua,
         host_options: &LuaRuntimeHostOptions,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let Some(lua_packages) = host_options.lua_packages_dir.as_ref() else {
+        let Some(lua_packages) = host_options
+            .lua_dependency_root
+            .as_ref()
+            .or(host_options.lua_packages_dir.as_ref())
+        else {
             return Ok(());
         };
         if !lua_packages.exists() {
@@ -4284,6 +4875,7 @@ mod tests {
             meta: SkillMeta {
                 name: skill_id.to_string(),
                 skill_id: skill_id.to_string(),
+                enable: true,
                 debug: false,
                 lancedb: SkillLanceDbMeta::default(),
                 sqlite: SkillSqliteMeta::default(),
