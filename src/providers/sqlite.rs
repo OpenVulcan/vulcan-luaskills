@@ -13,72 +13,72 @@ use crate::lua_skill::{SkillSqliteLogLevel, SkillSqliteMeta};
 use crate::runtime_options::LuaRuntimeHostOptions;
 use crate::runtime_logging::{info as log_info, warn as log_warn};
 
-/// 中文：FFI runtime 句柄前置声明，仅用于跨动态库传递裸指针。
-/// English: Forward declaration of the FFI runtime handle used only for raw cross-library pointers.
+/// Forward declaration of the FFI runtime handle used only for raw cross-library pointers.
+/// FFI runtime 句柄前置声明，仅用于跨动态库传递裸指针。
 #[repr(C)]
 struct VldbSqliteRuntimeHandle {
     _private: [u8; 0],
 }
 
-/// 中文：FFI 数据库句柄前置声明，仅用于跨动态库传递裸指针。
-/// English: Forward declaration of the FFI database handle used only for raw cross-library pointers.
+/// Forward declaration of the FFI database handle used only for raw cross-library pointers.
+/// FFI 数据库句柄前置声明，仅用于跨动态库传递裸指针。
 #[repr(C)]
 struct VldbSqliteDatabaseHandle {
     _private: [u8; 0],
 }
 
-/// 中文：FFI 分词结果句柄前置声明。
-/// English: Forward declaration of the FFI tokenize-result handle.
+/// Forward declaration of the FFI tokenize-result handle.
+/// FFI 分词结果句柄前置声明。
 #[repr(C)]
 struct VldbSqliteTokenizeResultHandle {
     _private: [u8; 0],
 }
 
-/// 中文：FFI 自定义词列表句柄前置声明。
-/// English: Forward declaration of the FFI custom-word list handle.
+/// Forward declaration of the FFI custom-word list handle.
+/// FFI 自定义词列表句柄前置声明。
 #[repr(C)]
 struct VldbSqliteCustomWordListHandle {
     _private: [u8; 0],
 }
 
-/// 中文：FFI 检索结果句柄前置声明。
-/// English: Forward declaration of the FFI search-result handle.
+/// Forward declaration of the FFI search-result handle.
+/// FFI 检索结果句柄前置声明。
 #[repr(C)]
 struct VldbSqliteSearchResultHandle {
     _private: [u8; 0],
 }
 
-/// 中文：FFI 通用 SQL 执行结果句柄前置声明。
-/// English: Forward declaration of the FFI shared SQL execute-result handle.
+/// Forward declaration of the FFI shared SQL execute-result handle.
+/// FFI 通用 SQL 执行结果句柄前置声明。
 #[repr(C)]
 struct VldbSqliteExecuteResultHandle {
     _private: [u8; 0],
 }
 
-/// 中文：FFI JSON 查询结果句柄前置声明。
-/// English: Forward declaration of the FFI JSON-query result handle.
+/// Forward declaration of the FFI JSON-query result handle.
+/// FFI JSON 查询结果句柄前置声明。
 #[repr(C)]
 struct VldbSqliteQueryJsonResultHandle {
     _private: [u8; 0],
 }
 
-/// 中文：FFI QueryStream 结果句柄前置声明。
-/// English: Forward declaration of the FFI QueryStream result handle.
+/// Forward declaration of the FFI QueryStream result handle.
+/// FFI QueryStream 结果句柄前置声明。
 #[repr(C)]
 struct VldbSqliteQueryStreamHandle {
     _private: [u8; 0],
 }
 
-/// 中文：SQLite FFI 返回状态码。
-/// English: SQLite FFI status code.
+/// SQLite FFI status code.
+/// SQLite FFI 返回状态码。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VldbSqliteStatusCode {
     Success = 0,
 }
 
-/// 中文：SQLite FFI 分词模式枚举，需与导出头文件严格保持一致。
-/// English: SQLite FFI tokenizer-mode enum kept ABI-compatible with the exported header.
+/// SQLite FFI tokenizer-mode enum kept ABI-compatible with the exported header.
+/// SQLite FFI 分词模式枚举，需与导出头文件严格保持一致。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VldbSqliteFfiTokenizerMode {
@@ -86,8 +86,8 @@ enum VldbSqliteFfiTokenizerMode {
     Jieba = 1,
 }
 
-/// 中文：自定义词修改结果 POD 结构。
-/// English: POD result structure for custom-word mutations.
+/// POD result structure for custom-word mutations.
+/// 自定义词修改结果 POD 结构。
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct VldbSqliteDictionaryMutationResultPod {
@@ -95,8 +95,8 @@ struct VldbSqliteDictionaryMutationResultPod {
     affected_rows: u64,
 }
 
-/// 中文：FTS 索引创建结果 POD 结构。
-/// English: POD result structure for FTS ensure-index operations.
+/// POD result structure for FTS ensure-index operations.
+/// FTS 索引创建结果 POD 结构。
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct VldbSqliteEnsureFtsIndexResultPod {
@@ -104,8 +104,8 @@ struct VldbSqliteEnsureFtsIndexResultPod {
     tokenizer_mode: u32,
 }
 
-/// 中文：FTS 索引重建结果 POD 结构。
-/// English: POD result structure for FTS rebuild-index operations.
+/// POD result structure for FTS rebuild-index operations.
+/// FTS 索引重建结果 POD 结构。
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct VldbSqliteRebuildFtsIndexResultPod {
@@ -114,8 +114,8 @@ struct VldbSqliteRebuildFtsIndexResultPod {
     reindexed_rows: u64,
 }
 
-/// 中文：FTS 文档写入/删除结果 POD 结构。
-/// English: POD result structure for FTS document mutations.
+/// POD result structure for FTS document mutations.
+/// FTS 文档写入/删除结果 POD 结构。
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct VldbSqliteFtsMutationResultPod {
@@ -123,8 +123,8 @@ struct VldbSqliteFtsMutationResultPod {
     affected_rows: u64,
 }
 
-/// 中文：FFI 字节视图结构，供 bytes 参数使用。
-/// English: FFI byte-view structure used for bytes parameters.
+/// FFI byte-view structure used for bytes parameters.
+/// FFI 字节视图结构，供 bytes 参数使用。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct VldbSqliteByteView {
@@ -132,8 +132,8 @@ struct VldbSqliteByteView {
     len: u64,
 }
 
-/// 中文：FFI 可释放字节缓冲区，供 QueryStream chunk getter 返回。
-/// English: FFI releasable byte buffer returned by QueryStream chunk getters.
+/// FFI releasable byte buffer returned by QueryStream chunk getters.
+/// FFI 可释放字节缓冲区，供 QueryStream chunk getter 返回。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct VldbSqliteByteBuffer {
@@ -142,8 +142,8 @@ struct VldbSqliteByteBuffer {
     cap: u64,
 }
 
-/// 中文：FFI SQL 值类型枚举，必须与头文件定义保持一致。
-/// English: FFI SQL value-kind enum kept ABI-compatible with the exported header.
+/// FFI SQL value-kind enum kept ABI-compatible with the exported header.
+/// FFI SQL 值类型枚举，必须与头文件定义保持一致。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VldbSqliteFfiValueKind {
@@ -155,8 +155,8 @@ enum VldbSqliteFfiValueKind {
     Bool = 5,
 }
 
-/// 中文：FFI SQL 参数值结构。
-/// English: FFI SQL parameter value structure.
+/// FFI SQL parameter value structure.
+/// FFI SQL 参数值结构。
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct VldbSqliteFfiValue {
@@ -168,8 +168,8 @@ struct VldbSqliteFfiValue {
     bool_value: u8,
 }
 
-/// 中文：FFI SQL 参数切片结构，用于批量执行。
-/// English: FFI SQL parameter-slice structure used by batch execution.
+/// FFI SQL parameter-slice structure used by batch execution.
+/// FFI SQL 参数切片结构，用于批量执行。
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct VldbSqliteFfiValueSlice {
@@ -327,8 +327,8 @@ type SearchResultGetRankFn = unsafe extern "C" fn(*mut VldbSqliteSearchResultHan
 type SearchResultGetRawScoreFn =
     unsafe extern "C" fn(*mut VldbSqliteSearchResultHandle, u64) -> f64;
 
-/// 中文：已加载的 SQLite FFI API 表，持有动态库生命周期与全部导出函数指针。
-/// English: Loaded SQLite FFI API table that owns the dynamic-library lifetime and all exported function pointers.
+/// Loaded SQLite FFI API table that owns the dynamic-library lifetime and all exported function pointers.
+/// 已加载的 SQLite FFI API 表，持有动态库生命周期与全部导出函数指针。
 struct LoadedSqliteApi {
     _library: Library,
     library_path: PathBuf,
@@ -393,35 +393,27 @@ struct LoadedSqliteApi {
     search_result_get_raw_score: SearchResultGetRawScoreFn,
 }
 
-/// 中文：动态库句柄与函数表初始化后只读，跨线程共享由外层锁负责保护。
-/// English: The loaded library and function table stay immutable after initialization, while outer locks protect shared access.
+/// The loaded library and function table stay immutable after initialization, while outer locks protect shared access.
+/// 动态库句柄与函数表初始化后只读，跨线程共享由外层锁负责保护。
 unsafe impl Send for LoadedSqliteApi {}
 unsafe impl Sync for LoadedSqliteApi {}
 
 impl LoadedSqliteApi {
-    /// 中文：按宿主约定加载 SQLite 动态库，优先查找显式环境变量和运行时目录。
-    /// English: Load the SQLite dynamic library using host conventions, preferring an explicit environment variable and runtime directories.
+    /// Load the SQLite dynamic library using host conventions, preferring an explicit environment variable and runtime directories.
+    /// 按宿主约定加载 SQLite 动态库，优先查找显式环境变量和运行时目录。
     fn load(library_path: &Path) -> Result<Self, String> {
         if !library_path.exists() {
-            return Err(format!(
-                "SQLite dynamic library path does not exist / SQLite 动态库路径不存在: {}",
-                library_path.display()
-            ));
+            return Err(format!("SQLite dynamic library path does not exist: {}", library_path.display()));
         }
 
         let library = unsafe { Library::new(library_path) }.map_err(|error| {
-            format!(
-                "failed to load {}: {} / 加载 SQLite 动态库失败: {}",
-                library_path.display(),
-                error,
-                error
-            )
+            format!("failed to load {}: {}: {}", library_path.display(), error, error)
         })?;
         unsafe { Self::from_library(library_path.to_path_buf(), library) }
     }
 
-    /// 中文：从已打开的动态库中复制所需函数指针，并保留库句柄防止提前卸载。
-    /// English: Copy required exported function pointers from the opened dynamic library while retaining the library handle.
+    /// Copy required exported function pointers from the opened dynamic library while retaining the library handle.
+    /// 从已打开的动态库中复制所需函数指针，并保留库句柄防止提前卸载。
     unsafe fn from_library(library_path: PathBuf, library: Library) -> Result<Self, String> {
         macro_rules! load_symbol {
             ($name:literal, $ty:ty) => {{
@@ -429,12 +421,7 @@ impl LoadedSqliteApi {
                     *library
                         .get::<$ty>(concat!($name, "\0").as_bytes())
                         .map_err(|error| {
-                            format!(
-                                "failed to load symbol {} from {}: {}",
-                                $name,
-                                library_path.display(),
-                                error
-                            )
+                            format!("failed to load symbol {} from {}: {}", $name, library_path.display(), error)
                         })?
                 }
             }};
@@ -655,13 +642,13 @@ impl LoadedSqliteApi {
         })
     }
 
-    /// 中文：读取最近一次 FFI 调用错误并转换成稳定 Rust 字符串。
-    /// English: Read the latest FFI error and convert it into a stable Rust string.
+    /// Read the latest FFI error and convert it into a stable Rust string.
+    /// 读取最近一次 FFI 调用错误并转换成稳定 Rust 字符串。
     fn take_last_error_message(&self) -> String {
         unsafe {
             let ptr = (self.last_error_message)();
             let text = if ptr.is_null() {
-                "unknown SQLite host error / 未知 SQLite 宿主错误".to_string()
+                "unknown SQLite host error".to_string()
             } else {
                 CStr::from_ptr(ptr).to_string_lossy().to_string()
             };
@@ -670,8 +657,8 @@ impl LoadedSqliteApi {
         }
     }
 
-    /// 中文：释放动态库分配的字符串并转换成 Rust `String`。
-    /// English: Convert a dynamic-library allocated string into a Rust `String` and free the original allocation.
+    /// Convert a dynamic-library allocated string into a Rust `String` and free the original allocation.
+    /// 释放动态库分配的字符串并转换成 Rust `String`。
     fn take_owned_string(&self, ptr: *mut c_char) -> Result<String, String> {
         if ptr.is_null() {
             return Err(self.take_last_error_message());
@@ -684,8 +671,8 @@ impl LoadedSqliteApi {
         }
     }
 
-    /// 中文：将动态库分配的可选字符串转换成 Rust `Option<String>`。
-    /// English: Convert a dynamic-library allocated optional string into Rust `Option<String>`.
+    /// Convert a dynamic-library allocated optional string into Rust `Option<String>`.
+    /// 将动态库分配的可选字符串转换成 Rust `Option<String>`。
     fn take_optional_string(&self, ptr: *mut c_char) -> Option<String> {
         if ptr.is_null() {
             return None;
@@ -697,8 +684,8 @@ impl LoadedSqliteApi {
         }
     }
 
-    /// 中文：调用无参 JSON FFI 接口并解析成 `serde_json::Value`。
-    /// English: Invoke a zero-argument JSON FFI entrypoint and parse the response into `serde_json::Value`.
+    /// Invoke a zero-argument JSON FFI entrypoint and parse the response into `serde_json::Value`.
+    /// 调用无参 JSON FFI 接口并解析成 `serde_json::Value`。
     fn call_json_noarg(
         &self,
         function: LibraryInfoJsonFn,
@@ -708,16 +695,13 @@ impl LoadedSqliteApi {
             let response_ptr = function();
             let response_text = self.take_owned_string(response_ptr)?;
             serde_json::from_str(&response_text).map_err(|error| {
-                format!(
-                    "{} returned invalid JSON: {} / {} 返回了无效 JSON: {}",
-                    operation, error, operation, error
-                )
+                format!("{} returned invalid JSON: {}", operation, error)
             })
         }
     }
 
-    /// 中文：把 QueryStream 返回的字节缓冲区复制成宿主拥有的 `Vec<u8>`，并回收底层分配。
-    /// English: Copy a QueryStream byte buffer into a host-owned `Vec<u8>` and free the underlying allocation.
+    /// Copy a QueryStream byte buffer into a host-owned `Vec<u8>` and free the underlying allocation.
+    /// 把 QueryStream 返回的字节缓冲区复制成宿主拥有的 `Vec<u8>`，并回收底层分配。
     fn take_chunk_bytes(&self, buffer: VldbSqliteByteBuffer) -> Result<Vec<u8>, String> {
         if buffer.data.is_null() {
             if buffer.len == 0 {
@@ -727,7 +711,7 @@ impl LoadedSqliteApi {
         }
 
         let len = usize::try_from(buffer.len)
-            .map_err(|_| "chunk length exceeds usize / chunk 长度超过 usize".to_string())?;
+            .map_err(|_| "chunk length exceeds usize".to_string())?;
         unsafe {
             let bytes = std::slice::from_raw_parts(buffer.data, len).to_vec();
             (self.bytes_free)(buffer);
@@ -736,8 +720,8 @@ impl LoadedSqliteApi {
     }
 }
 
-/// 中文：单个 skill 的 SQLite 句柄集合，由宿主统一管理生命周期。
-/// English: SQLite handle set for a single skill, with lifetime managed centrally by the host.
+/// SQLite handle set for a single skill, with lifetime managed centrally by the host.
+/// 单个 skill 的 SQLite 句柄集合，由宿主统一管理生命周期。
 struct SkillHandleState {
     runtime: *mut VldbSqliteRuntimeHandle,
     database: *mut VldbSqliteDatabaseHandle,
@@ -745,12 +729,12 @@ struct SkillHandleState {
     next_stream_id: u64,
 }
 
-/// 中文：FFI 句柄仅通过宿主互斥量串行访问，跨线程共享由宿主统一控制。
-/// English: FFI handles are accessed only behind a host-side mutex, with all cross-thread sharing managed by the host.
+/// FFI handles are accessed only behind a host-side mutex, with all cross-thread sharing managed by the host.
+/// FFI 句柄仅通过宿主互斥量串行访问，跨线程共享由宿主统一控制。
 unsafe impl Send for SkillHandleState {}
 
-/// 中文：启用 SQLite 的 skill 所绑定的数据库上下文。
-/// English: Database context bound to one SQLite-enabled skill.
+/// Database context bound to one SQLite-enabled skill.
+/// 启用 SQLite 的 skill 所绑定的数据库上下文。
 pub struct SqliteSkillBinding {
     api: Arc<LoadedSqliteApi>,
     skill_name: String,
@@ -761,8 +745,8 @@ pub struct SqliteSkillBinding {
 }
 
 impl SqliteSkillBinding {
-    /// 中文：返回当前 skill 的稳定 SQLite 状态信息；无论启用与否，结构都保持稳定。
-    /// English: Return the stable SQLite status payload for the current skill; the response shape stays stable whether enabled or disabled.
+    /// Return the stable SQLite status payload for the current skill; the response shape stays stable whether enabled or disabled.
+    /// 返回当前 skill 的稳定 SQLite 状态信息；无论启用与否，结构都保持稳定。
     pub fn status_json(&self) -> Value {
         let library_info = self
             .api
@@ -794,8 +778,8 @@ impl SqliteSkillBinding {
         })
     }
 
-    /// 中文：返回当前 skill 所绑定 SQLite 的基础信息。
-    /// English: Return basic information about the SQLite binding for the current skill.
+    /// Return basic information about the SQLite binding for the current skill.
+    /// 返回当前 skill 所绑定 SQLite 的基础信息。
     pub fn info_json(&self) -> Value {
         let mut status = self.status_json();
         if let Some(status_object) = status.as_object_mut() {
@@ -816,8 +800,8 @@ impl SqliteSkillBinding {
         status
     }
 
-    /// 中文：通过非 JSON 主接口执行脚本或单条 SQL。
-    /// English: Execute a script or single SQL statement through the non-JSON primary interface.
+    /// Execute a script or single SQL statement through the non-JSON primary interface.
+    /// 通过非 JSON 主接口执行脚本或单条 SQL。
     pub fn execute_script(&self, input: &Value) -> Result<Value, String> {
         let sql = require_string_field(input, "sql")?;
         let params = parse_single_sql_params(input)?;
@@ -859,8 +843,8 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：通过非 JSON 主接口批量执行 SQL。
-    /// English: Execute batch SQL through the non-JSON primary interface.
+    /// Execute batch SQL through the non-JSON primary interface.
+    /// 通过非 JSON 主接口批量执行 SQL。
     pub fn execute_batch(&self, input: &Value) -> Result<Value, String> {
         let sql = require_string_field(input, "sql")?;
         let rows = parse_batch_sql_params(input)?;
@@ -897,8 +881,8 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：通过非 JSON 主接口执行 JSON 行集查询。
-    /// English: Execute a JSON row-set query through the non-JSON primary interface.
+    /// Execute a JSON row-set query through the non-JSON primary interface.
+    /// 通过非 JSON 主接口执行 JSON 行集查询。
     pub fn query_json(&self, input: &Value) -> Result<Value, String> {
         let sql = require_string_field(input, "sql")?;
         let params = parse_single_sql_params(input)?;
@@ -931,10 +915,7 @@ impl SqliteSkillBinding {
                 .api
                 .take_owned_string((self.api.query_json_result_json_data)(result_handle))?;
             let rows = serde_json::from_str::<Value>(&json_data).map_err(|error| {
-                format!(
-                    "query_json returned invalid json_data: {} / query_json 返回的 json_data 非法: {}",
-                    error, error
-                )
+                format!("query_json returned invalid json_data: {}", error)
             })?;
             (self.api.query_json_result_destroy)(result_handle);
             drop(guard);
@@ -952,8 +933,8 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：通过非 JSON 主接口创建 QueryStream 句柄。
-    /// English: Create a QueryStream handle through the non-JSON primary interface.
+    /// Create a QueryStream handle through the non-JSON primary interface.
+    /// 通过非 JSON 主接口创建 QueryStream 句柄。
     pub fn query_stream(&self, input: &Value) -> Result<Value, String> {
         let sql = require_string_field(input, "sql")?;
         let params = parse_single_sql_params(input)?;
@@ -1004,21 +985,18 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：等待 QueryStream 最终统计信息就绪，并返回终态指标。
-    /// English: Wait for final QueryStream metrics and return terminal statistics.
+    /// Wait for final QueryStream metrics and return terminal statistics.
+    /// 等待 QueryStream 最终统计信息就绪，并返回终态指标。
     pub fn query_stream_wait_metrics(&self, input: &Value) -> Result<Value, String> {
         let stream_id = input
             .get("stream_id")
             .and_then(Value::as_u64)
-            .ok_or_else(|| "stream_id is required / 必须提供 stream_id".to_string())?;
+            .ok_or_else(|| "stream_id is required".to_string())?;
         self.log_info("query_stream_wait_metrics", None);
         let started_at = Instant::now();
         let guard = self.lock_handles()?;
         let stream_handle = *guard.query_streams.get(&stream_id).ok_or_else(|| {
-            format!(
-                "query stream handle not found: {} / QueryStream 句柄不存在: {}",
-                stream_id, stream_id
-            )
+            format!("query stream handle not found: {}", stream_id)
         })?;
         unsafe {
             let row_count = (self.api.query_stream_row_count)(stream_handle);
@@ -1028,10 +1006,7 @@ impl SqliteSkillBinding {
             self.log_if_slow(
                 "query_stream_wait_metrics",
                 started_at,
-                Some(format!(
-                    "stream_id={} chunks={} rows={} bytes={}",
-                    stream_id, chunk_count, row_count, total_bytes
-                )),
+                Some(format!("stream_id={} chunks={} rows={} bytes={}", stream_id, chunk_count, row_count, total_bytes)),
             );
             Ok(json!({
                 "success": true,
@@ -1044,25 +1019,22 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：读取单个 QueryStream chunk，并以 base64 形式返回。
-    /// English: Read a single QueryStream chunk and return it as base64 text.
+    /// Read a single QueryStream chunk and return it as base64 text.
+    /// 读取单个 QueryStream chunk，并以 base64 形式返回。
     pub fn query_stream_chunk(&self, input: &Value) -> Result<Value, String> {
         let stream_id = input
             .get("stream_id")
             .and_then(Value::as_u64)
-            .ok_or_else(|| "stream_id is required / 必须提供 stream_id".to_string())?;
+            .ok_or_else(|| "stream_id is required".to_string())?;
         let index = input
             .get("index")
             .and_then(Value::as_u64)
-            .ok_or_else(|| "index is required / 必须提供 index".to_string())?;
+            .ok_or_else(|| "index is required".to_string())?;
         self.log_info("query_stream_chunk", None);
         let started_at = Instant::now();
         let guard = self.lock_handles()?;
         let stream_handle = *guard.query_streams.get(&stream_id).ok_or_else(|| {
-            format!(
-                "query stream handle not found: {} / QueryStream 句柄不存在: {}",
-                stream_id, stream_id
-            )
+            format!("query stream handle not found: {}", stream_id)
         })?;
         unsafe {
             let buffer = (self.api.query_stream_get_chunk)(stream_handle, index);
@@ -1071,12 +1043,7 @@ impl SqliteSkillBinding {
             self.log_if_slow(
                 "query_stream_chunk",
                 started_at,
-                Some(format!(
-                    "stream_id={} index={} bytes={}",
-                    stream_id,
-                    index,
-                    chunk.len()
-                )),
+                Some(format!("stream_id={} index={} bytes={}", stream_id, index, chunk.len())),
             );
             Ok(json!({
                 "success": true,
@@ -1088,21 +1055,18 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：关闭 QueryStream 句柄并释放宿主缓存的流结果。
-    /// English: Close a QueryStream handle and release the host-cached stream result.
+    /// Close a QueryStream handle and release the host-cached stream result.
+    /// 关闭 QueryStream 句柄并释放宿主缓存的流结果。
     pub fn query_stream_close(&self, input: &Value) -> Result<Value, String> {
         let stream_id = input
             .get("stream_id")
             .and_then(Value::as_u64)
-            .ok_or_else(|| "stream_id is required / 必须提供 stream_id".to_string())?;
+            .ok_or_else(|| "stream_id is required".to_string())?;
         self.log_info("query_stream_close", None);
         let started_at = Instant::now();
         let mut guard = self.lock_handles()?;
         let stream_handle = guard.query_streams.remove(&stream_id).ok_or_else(|| {
-            format!(
-                "query stream handle not found: {} / QueryStream 句柄不存在: {}",
-                stream_id, stream_id
-            )
+            format!("query stream handle not found: {}", stream_id)
         })?;
         unsafe {
             (self.api.query_stream_destroy)(stream_handle);
@@ -1120,8 +1084,8 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：执行文本分词，并返回标准化结果。
-    /// English: Execute text tokenization and return a normalized result payload.
+    /// Execute text tokenization and return a normalized result payload.
+    /// 执行文本分词，并返回标准化结果。
     pub fn tokenize_text_json(&self, input: &Value) -> Result<Value, String> {
         let tokenizer_mode = parse_tokenizer_mode(
             input
@@ -1138,11 +1102,7 @@ impl SqliteSkillBinding {
 
         self.log_info(
             "tokenize_text",
-            Some(format!(
-                "tokenizer_mode={} search_mode={}",
-                tokenizer_mode_name(tokenizer_mode),
-                search_mode
-            )),
+            Some(format!("tokenizer_mode={} search_mode={}", tokenizer_mode_name(tokenizer_mode), search_mode)),
         );
         let started_at = Instant::now();
         let guard = self.lock_handles()?;
@@ -1190,8 +1150,8 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：写入或更新自定义词。
-    /// English: Insert or update a custom dictionary word.
+    /// Insert or update a custom dictionary word.
+    /// 写入或更新自定义词。
     pub fn upsert_custom_word_json(&self, input: &Value) -> Result<Value, String> {
         let word = require_string_field(input, "word")?;
         let weight = input.get("weight").and_then(Value::as_u64).unwrap_or(1);
@@ -1222,8 +1182,8 @@ impl SqliteSkillBinding {
         }))
     }
 
-    /// 中文：删除自定义词。
-    /// English: Remove a custom dictionary word.
+    /// Remove a custom dictionary word.
+    /// 删除自定义词。
     pub fn remove_custom_word_json(&self, input: &Value) -> Result<Value, String> {
         let word = require_string_field(input, "word")?;
         self.log_info("remove_custom_word", Some(format!("word={}", word)));
@@ -1247,8 +1207,8 @@ impl SqliteSkillBinding {
         }))
     }
 
-    /// 中文：列出当前数据库中启用的自定义词。
-    /// English: List enabled custom dictionary words from the current database.
+    /// List enabled custom dictionary words from the current database.
+    /// 列出当前数据库中启用的自定义词。
     pub fn list_custom_words_json(&self) -> Result<Value, String> {
         self.log_info("list_custom_words", None);
         let started_at = Instant::now();
@@ -1290,8 +1250,8 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：确保指定 FTS 索引存在。
-    /// English: Ensure the specified FTS index exists.
+    /// Ensure the specified FTS index exists.
+    /// 确保指定 FTS 索引存在。
     pub fn ensure_fts_index_json(&self, input: &Value) -> Result<Value, String> {
         let index_name = require_string_field(input, "index_name")?;
         let tokenizer_mode = parse_tokenizer_mode(
@@ -1330,8 +1290,8 @@ impl SqliteSkillBinding {
         }))
     }
 
-    /// 中文：使用当前词典和分词模式重建 FTS 索引。
-    /// English: Rebuild an FTS index using the current dictionary and tokenizer mode.
+    /// Rebuild an FTS index using the current dictionary and tokenizer mode.
+    /// 使用当前词典和分词模式重建 FTS 索引。
     pub fn rebuild_fts_index_json(&self, input: &Value) -> Result<Value, String> {
         let index_name = require_string_field(input, "index_name")?;
         let tokenizer_mode = parse_tokenizer_mode(
@@ -1372,8 +1332,8 @@ impl SqliteSkillBinding {
         }))
     }
 
-    /// 中文：写入或更新一条 FTS 文档。
-    /// English: Insert or update a single FTS document.
+    /// Insert or update a single FTS document.
+    /// 写入或更新一条 FTS 文档。
     pub fn upsert_fts_document_json(&self, input: &Value) -> Result<Value, String> {
         let index_name = require_string_field(input, "index_name")?;
         let tokenizer_mode = parse_tokenizer_mode(
@@ -1425,8 +1385,8 @@ impl SqliteSkillBinding {
         }))
     }
 
-    /// 中文：删除一条 FTS 文档。
-    /// English: Delete a single FTS document.
+    /// Delete a single FTS document.
+    /// 删除一条 FTS 文档。
     pub fn delete_fts_document_json(&self, input: &Value) -> Result<Value, String> {
         let index_name = require_string_field(input, "index_name")?;
         let id = require_string_field(input, "id")?;
@@ -1461,8 +1421,8 @@ impl SqliteSkillBinding {
         }))
     }
 
-    /// 中文：执行 FTS 检索并返回富结果结构。
-    /// English: Execute FTS search and return a rich result payload.
+    /// Execute FTS search and return a rich result payload.
+    /// 执行 FTS 检索并返回富结果结构。
     pub fn search_fts_json(&self, input: &Value) -> Result<Value, String> {
         let index_name = require_string_field(input, "index_name")?;
         let tokenizer_mode = parse_tokenizer_mode(
@@ -1477,13 +1437,7 @@ impl SqliteSkillBinding {
         let offset = input.get("offset").and_then(Value::as_u64).unwrap_or(0) as u32;
         self.log_info(
             "search_fts",
-            Some(format!(
-                "index_name={} tokenizer_mode={} limit={} offset={}",
-                index_name,
-                tokenizer_mode_name(tokenizer_mode),
-                limit,
-                offset
-            )),
+            Some(format!("index_name={} tokenizer_mode={} limit={} offset={}", index_name, tokenizer_mode_name(tokenizer_mode), limit, offset)),
         );
         let started_at = Instant::now();
         let guard = self.lock_handles()?;
@@ -1543,25 +1497,19 @@ impl SqliteSkillBinding {
         }
     }
 
-    /// 中文：按配置输出普通信息级日志。
-    /// English: Emit informational logs according to the configured skill policy.
+    /// Emit informational logs according to the configured skill policy.
+    /// 按配置输出普通信息级日志。
     fn log_info(&self, operation: &str, extra: Option<String>) {
         if self.config.log_level == SkillSqliteLogLevel::Info {
             match extra {
-                Some(extra) => log_info(format!(
-                    "[Sqlite:info] skill={} db={} op={} {}",
-                    self.skill_name, self.skill_dir_name, operation, extra
-                )),
-                None => log_info(format!(
-                    "[Sqlite:info] skill={} db={} op={}",
-                    self.skill_name, self.skill_dir_name, operation
-                )),
+                Some(extra) => log_info(format!("[Sqlite:info] skill={} db={} op={} {}", self.skill_name, self.skill_dir_name, operation, extra)),
+                None => log_info(format!("[Sqlite:info] skill={} db={} op={}", self.skill_name, self.skill_dir_name, operation)),
             }
         }
     }
 
-    /// 中文：按慢日志配置输出慢操作告警。
-    /// English: Emit slow-operation warnings according to the slow-log configuration.
+    /// Emit slow-operation warnings according to the slow-log configuration.
+    /// 按慢日志配置输出慢操作告警。
     fn log_if_slow(&self, operation: &str, started_at: Instant, extra: Option<String>) {
         if !self.config.slow_log_enabled {
             return;
@@ -1571,43 +1519,34 @@ impl SqliteSkillBinding {
             return;
         }
         match extra {
-            Some(extra) => log_info(format!(
-                "[Sqlite:slow] skill={} db={} op={} elapsed_ms={} {}",
-                self.skill_name, self.skill_dir_name, operation, elapsed_ms, extra
-            )),
-            None => log_info(format!(
-                "[Sqlite:slow] skill={} db={} op={} elapsed_ms={}",
-                self.skill_name, self.skill_dir_name, operation, elapsed_ms
-            )),
+            Some(extra) => log_info(format!("[Sqlite:slow] skill={} db={} op={} elapsed_ms={} {}", self.skill_name, self.skill_dir_name, operation, elapsed_ms, extra)),
+            None => log_info(format!("[Sqlite:slow] skill={} db={} op={} elapsed_ms={}", self.skill_name, self.skill_dir_name, operation, elapsed_ms)),
         }
     }
 
-    /// 中文：按配置输出告警级日志，通常用于 FFI 调用失败。
-    /// English: Emit warning-level logs according to configuration, usually for FFI call failures.
+    /// Emit warning-level logs according to configuration, usually for FFI call failures.
+    /// 按配置输出告警级日志，通常用于 FFI 调用失败。
     fn log_warning(&self, operation: &str, message: &str) {
         if matches!(
             self.config.log_level,
             SkillSqliteLogLevel::Info | SkillSqliteLogLevel::Warning
         ) {
-            log_warn(format!(
-                "[Sqlite:warn] skill={} db={} op={} message={}",
-                self.skill_name, self.skill_dir_name, operation, message
-            ));
+            log_warn(format!("[Sqlite:warn] skill={} db={} op={} message={}", self.skill_name, self.skill_dir_name, operation, message));
         }
     }
 
-    /// 中文：获取句柄锁，确保同一个 skill 的 SQLite FFI 调用按顺序串行执行。
-    /// English: Acquire the handle lock so SQLite FFI calls for the same skill execute serially.
+    /// Acquire the handle lock so SQLite FFI calls for the same skill execute serially.
+    /// 获取句柄锁，确保同一个 skill 的 SQLite FFI 调用按顺序串行执行。
     fn lock_handles(&self) -> Result<std::sync::MutexGuard<'_, SkillHandleState>, String> {
         self.handles.lock().map_err(|_| {
-            "failed to acquire SQLite handle lock / 获取 SQLite 句柄锁失败".to_string()
+            "failed to acquire SQLite handle lock".to_string()
         })
     }
 }
 
 impl Drop for SqliteSkillBinding {
-    /// 中文：在 skill 生命周期结束时统一释放数据库句柄与 runtime。
-    /// English: Release the database handle and runtime together when the skill binding is dropped.
+    /// Release the database handle and runtime together when the skill binding is dropped.
+    /// 在 skill 生命周期结束时统一释放数据库句柄与 runtime。
     fn drop(&mut self) {
         if let Ok(mut guard) = self.handles.lock() {
             unsafe {
@@ -1629,8 +1568,8 @@ impl Drop for SqliteSkillBinding {
     }
 }
 
-/// 中文：按 skill 维度维护 SQLite 绑定，负责启用后的自动创建与长期复用。
-/// English: Maintain SQLite bindings per skill, auto-creating and reusing them for enabled skills.
+/// Maintain SQLite bindings per skill, auto-creating and reusing them for enabled skills.
+/// 按 skill 维度维护 SQLite 绑定，负责启用后的自动创建与长期复用。
 pub struct SqliteSkillHost {
     api: Arc<LoadedSqliteApi>,
     skills: Mutex<HashMap<String, Arc<SqliteSkillBinding>>>,
@@ -1638,11 +1577,11 @@ pub struct SqliteSkillHost {
 }
 
 impl SqliteSkillHost {
-    /// 中文：创建宿主级 SQLite 技能管理器，并立即加载动态库。
-    /// English: Create the host-side SQLite skill manager and load the dynamic library immediately.
+    /// Create the host-side SQLite skill manager and load the dynamic library immediately.
+    /// 创建宿主级 SQLite 技能管理器，并立即加载动态库。
     pub fn new(host_options: LuaRuntimeHostOptions) -> Result<Self, String> {
         let library_path = host_options.sqlite_library_path.clone().ok_or_else(|| {
-            "SQLite host requires host_options.sqlite_library_path / SQLite 宿主需要显式提供 sqlite_library_path"
+            "SQLite host requires host_options.sqlite_library_path"
                 .to_string()
         })?;
         Ok(Self {
@@ -1652,8 +1591,8 @@ impl SqliteSkillHost {
         })
     }
 
-    /// 中文：为启用 SQLite 的 skill 注册固定数据库绑定；同一个 skill 只会创建一次。
-    /// English: Register a fixed database binding for an SQLite-enabled skill; each skill is created only once.
+    /// Register a fixed database binding for an SQLite-enabled skill; each skill is created only once.
+    /// 为启用 SQLite 的 skill 注册固定数据库绑定；同一个 skill 只会创建一次。
     pub fn register_skill(
         &self,
         skill_name: &str,
@@ -1661,7 +1600,7 @@ impl SqliteSkillHost {
         config: SkillSqliteMeta,
     ) -> Result<Arc<SqliteSkillBinding>, String> {
         let mut guard = self.skills.lock().map_err(|_| {
-            "failed to acquire SQLite skill registry lock / 获取 SQLite 技能注册表锁失败"
+            "failed to acquire SQLite skill registry lock"
                 .to_string()
         })?;
         if let Some(existing) = guard.get(skill_name) {
@@ -1672,19 +1611,11 @@ impl SqliteSkillHost {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| {
-                format!(
-                    "invalid skill directory name for {} / 无法解析 skill 目录名: {}",
-                    skill_name,
-                    skill_dir.display()
-                )
+                format!("invalid skill directory name for {}: {}", skill_name, skill_dir.display())
             })?
             .to_string();
         let skills_root = skill_dir.parent().ok_or_else(|| {
-            format!(
-                "invalid skill root for {} / 无法解析 skill 根目录: {}",
-                skill_name,
-                skill_dir.display()
-            )
+            format!("invalid skill root for {}: {}", skill_name, skill_dir.display())
         })?;
         let sidecar_root = skills_root
             .parent()
@@ -1694,17 +1625,12 @@ impl SqliteSkillHost {
             .join("sqlite")
             .join(skill_name);
         std::fs::create_dir_all(&db_dir).map_err(|error| {
-            format!(
-                "failed to create SQLite directory {}: {} / 创建 SQLite 目录失败: {}",
-                db_dir.display(),
-                error,
-                error
-            )
+            format!("failed to create SQLite directory {}: {}: {}", db_dir.display(), error, error)
         })?;
         let db_path = db_dir.join(format!("{}.sqlite3", skill_name));
         let database_path = db_path.to_string_lossy().to_string();
         let database_cstr = CString::new(database_path.clone()).map_err(|_| {
-            "database path contains interior NUL bytes / 数据库路径包含 NUL 字节".to_string()
+            "database path contains interior NUL bytes".to_string()
         })?;
 
         let runtime = unsafe { (self.api.runtime_create_default)() };
@@ -1743,8 +1669,8 @@ impl SqliteSkillHost {
         Ok(binding)
     }
 
-    /// 中文：按 skill 名称获取已注册绑定，供 Lua 注入与跨 skill 调用恢复上下文使用。
-    /// English: Fetch a registered binding by skill name so Lua injection and cross-skill calls can restore context.
+    /// Fetch a registered binding by skill name so Lua injection and cross-skill calls can restore context.
+    /// 按 skill 名称获取已注册绑定，供 Lua 注入与跨 skill 调用恢复上下文使用。
     pub fn binding_for_skill(&self, skill_name: &str) -> Option<Arc<SqliteSkillBinding>> {
         self.skills
             .lock()
@@ -1753,33 +1679,30 @@ impl SqliteSkillHost {
     }
 }
 
-/// 中文：为未启用 SQLite 的 skill 生成稳定状态对象，便于 Lua 侧先判断再调用。
-/// English: Build a stable status object for skills without SQLite enabled so Lua can check before calling.
+/// Build a stable status object for skills without SQLite enabled so Lua can check before calling.
+/// 为未启用 SQLite 的 skill 生成稳定状态对象，便于 Lua 侧先判断再调用。
 pub fn disabled_skill_status_json(skill_name: Option<&str>) -> Value {
     json!({
         "enabled": false,
         "initialized": false,
         "skill_name": skill_name.unwrap_or(""),
         "integration_mode": "dynamic_library",
-        "reason": "current skill has not enabled sqlite / 当前 skill 未启用 sqlite"
+        "reason": "current skill has not enabled sqlite"
     })
 }
 
-/// 中文：将文本分词模式字符串解析为 FFI 枚举。
-/// English: Parse a tokenizer-mode text label into the FFI enum.
+/// Parse a tokenizer-mode text label into the FFI enum.
+/// 将文本分词模式字符串解析为 FFI 枚举。
 fn parse_tokenizer_mode(text: &str) -> Result<VldbSqliteFfiTokenizerMode, String> {
     match text.trim().to_ascii_lowercase().as_str() {
         "" | "none" => Ok(VldbSqliteFfiTokenizerMode::None),
         "jieba" => Ok(VldbSqliteFfiTokenizerMode::Jieba),
-        other => Err(format!(
-            "unsupported sqlite tokenizer mode: {} / 不支持的 sqlite 分词模式: {}",
-            other, other
-        )),
+        other => Err(format!("unsupported sqlite tokenizer mode: {}", other)),
     }
 }
 
-/// 中文：将 FFI 分词模式转换成稳定字符串。
-/// English: Convert the FFI tokenizer mode into a stable string label.
+/// Convert the FFI tokenizer mode into a stable string label.
+/// 将 FFI 分词模式转换成稳定字符串。
 fn tokenizer_mode_name(mode: VldbSqliteFfiTokenizerMode) -> &'static str {
     match mode {
         VldbSqliteFfiTokenizerMode::None => "none",
@@ -1787,8 +1710,8 @@ fn tokenizer_mode_name(mode: VldbSqliteFfiTokenizerMode) -> &'static str {
     }
 }
 
-/// 中文：将 FFI 返回的分词模式数值转换成稳定字符串。
-/// English: Convert the tokenizer-mode integer returned by FFI into a stable string label.
+/// Convert the tokenizer-mode integer returned by FFI into a stable string label.
+/// 将 FFI 返回的分词模式数值转换成稳定字符串。
 fn tokenizer_mode_name_from_u32(mode: u32) -> &'static str {
     match mode {
         1 => "jieba",
@@ -1796,20 +1719,20 @@ fn tokenizer_mode_name_from_u32(mode: u32) -> &'static str {
     }
 }
 
-/// 中文：将布尔值编码为 FFI 所使用的 `u8`。
-/// English: Encode a boolean value as the `u8` representation used by the FFI.
+/// Encode a boolean value as the `u8` representation used by the FFI.
+/// 将布尔值编码为 FFI 所使用的 `u8`。
 fn bool_to_u8(value: bool) -> u8 {
     if value { 1 } else { 0 }
 }
 
-/// 中文：将 FFI `u8` 布尔值转换为 Rust 布尔值。
-/// English: Convert an FFI `u8` boolean into a Rust boolean.
+/// Convert an FFI `u8` boolean into a Rust boolean.
+/// 将 FFI `u8` 布尔值转换为 Rust 布尔值。
 fn u8_to_bool(value: u8) -> bool {
     value != 0
 }
 
-/// 中文：宿主内部使用的 SQLite 参数值表示，负责在 Lua/JSON 与 FFI ABI 之间做稳定过渡。
-/// English: Host-side SQLite parameter representation used as a stable bridge between Lua/JSON and the FFI ABI.
+/// Host-side SQLite parameter representation used as a stable bridge between Lua/JSON and the FFI ABI.
+/// 宿主内部使用的 SQLite 参数值表示，负责在 Lua/JSON 与 FFI ABI 之间做稳定过渡。
 enum HostSqliteParamValue {
     Null,
     Int64(i64),
@@ -1819,8 +1742,8 @@ enum HostSqliteParamValue {
     Bool(bool),
 }
 
-/// 中文：一组已拥有生命周期的 FFI 参数数组，确保字符串和字节缓冲在调用期间保持有效。
-/// English: One owned FFI parameter array that keeps strings and byte buffers alive for the entire call.
+/// One owned FFI parameter array that keeps strings and byte buffers alive for the entire call.
+/// 一组已拥有生命周期的 FFI 参数数组，确保字符串和字节缓冲在调用期间保持有效。
 struct OwnedSqliteFfiValues {
     values: Vec<VldbSqliteFfiValue>,
     _strings: Vec<CString>,
@@ -1828,42 +1751,42 @@ struct OwnedSqliteFfiValues {
 }
 
 impl OwnedSqliteFfiValues {
-    /// 中文：返回 FFI 参数数组首指针。
-    /// English: Return the pointer to the first FFI parameter value.
+    /// Return the pointer to the first FFI parameter value.
+    /// 返回 FFI 参数数组首指针。
     fn as_ptr(&self) -> *const VldbSqliteFfiValue {
         self.values.as_ptr()
     }
 
-    /// 中文：返回 FFI 参数数组长度。
-    /// English: Return the length of the FFI parameter array.
+    /// Return the length of the FFI parameter array.
+    /// 返回 FFI 参数数组长度。
     fn len_u64(&self) -> u64 {
         u64::try_from(self.values.len()).unwrap_or(u64::MAX)
     }
 }
 
-/// 中文：批量 SQL 所使用的已拥有生命周期的二维参数矩阵。
-/// English: Owned two-dimensional parameter matrix used by batch SQL execution.
+/// Owned two-dimensional parameter matrix used by batch SQL execution.
+/// 批量 SQL 所使用的已拥有生命周期的二维参数矩阵。
 struct OwnedSqliteFfiValueMatrix {
     _rows: Vec<OwnedSqliteFfiValues>,
     slices: Vec<VldbSqliteFfiValueSlice>,
 }
 
 impl OwnedSqliteFfiValueMatrix {
-    /// 中文：返回批量参数切片首指针。
-    /// English: Return the pointer to the first batch-parameter slice.
+    /// Return the pointer to the first batch-parameter slice.
+    /// 返回批量参数切片首指针。
     fn as_ptr(&self) -> *const VldbSqliteFfiValueSlice {
         self.slices.as_ptr()
     }
 
-    /// 中文：返回批量参数切片数量。
-    /// English: Return the number of batch-parameter slices.
+    /// Return the number of batch-parameter slices.
+    /// 返回批量参数切片数量。
     fn len_u64(&self) -> u64 {
         u64::try_from(self.slices.len()).unwrap_or(u64::MAX)
     }
 }
 
-/// 中文：把宿主参数值数组转换成拥有生命周期的 FFI 参数数组。
-/// English: Convert host parameter values into an owned FFI parameter array.
+/// Convert host parameter values into an owned FFI parameter array.
+/// 把宿主参数值数组转换成拥有生命周期的 FFI 参数数组。
 fn build_owned_ffi_values(values: &[HostSqliteParamValue]) -> Result<OwnedSqliteFfiValues, String> {
     let mut ffi_values = Vec::with_capacity(values.len());
     let mut strings = Vec::new();
@@ -1946,8 +1869,8 @@ fn build_owned_ffi_values(values: &[HostSqliteParamValue]) -> Result<OwnedSqlite
     })
 }
 
-/// 中文：把批量参数矩阵转换成拥有生命周期的 FFI 批量参数切片。
-/// English: Convert a batch parameter matrix into owned FFI batch-parameter slices.
+/// Convert a batch parameter matrix into owned FFI batch-parameter slices.
+/// 把批量参数矩阵转换成拥有生命周期的 FFI 批量参数切片。
 fn build_owned_ffi_value_matrix(
     rows: &[Vec<HostSqliteParamValue>],
 ) -> Result<OwnedSqliteFfiValueMatrix, String> {
@@ -1968,8 +1891,8 @@ fn build_owned_ffi_value_matrix(
     })
 }
 
-/// 中文：把 JSON/ Lua 标量参数转换为宿主内部 SQLite 参数值。
-/// English: Convert a JSON/Lua scalar parameter into the host-side SQLite parameter representation.
+/// Convert a JSON/Lua scalar parameter into the host-side SQLite parameter representation.
+/// 把 JSON/ Lua 标量参数转换为宿主内部 SQLite 参数值。
 fn parse_scalar_sqlite_param(
     value: &Value,
     field_name: &str,
@@ -1982,40 +1905,28 @@ fn parse_scalar_sqlite_param(
                 Ok(HostSqliteParamValue::Int64(int_value))
             } else if let Some(unsigned) = number.as_u64() {
                 let converted = i64::try_from(unsigned).map_err(|_| {
-                    format!(
-                        "{} contains an unsigned integer larger than i64 / {} 包含超过 i64 范围的无符号整数",
-                        field_name, field_name
-                    )
+                    format!("{} contains an unsigned integer larger than i64", field_name)
                 })?;
                 Ok(HostSqliteParamValue::Int64(converted))
             } else if let Some(float_value) = number.as_f64() {
                 Ok(HostSqliteParamValue::Float64(float_value))
             } else {
-                Err(format!(
-                    "{} contains an unsupported numeric value / {} 包含不支持的数值",
-                    field_name, field_name
-                ))
+                Err(format!("{} contains an unsupported numeric value", field_name))
             }
         }
         Value::String(text) => Ok(HostSqliteParamValue::String(text.clone())),
-        _ => Err(format!(
-            "{} must contain only scalar values / {} 只能包含标量值",
-            field_name, field_name
-        )),
+        _ => Err(format!("{} must contain only scalar values", field_name)),
     }
 }
 
-/// 中文：把 typed 参数对象转换为宿主内部 SQLite 参数值。
-/// English: Convert a typed parameter object into the host-side SQLite parameter representation.
+/// Convert a typed parameter object into the host-side SQLite parameter representation.
+/// 把 typed 参数对象转换为宿主内部 SQLite 参数值。
 fn parse_typed_sqlite_param(
     object: &serde_json::Map<String, Value>,
     field_name: &str,
 ) -> Result<HostSqliteParamValue, String> {
     let kind = object.get("kind").and_then(Value::as_str).ok_or_else(|| {
-        format!(
-            "{}.kind is required for typed parameters / typed 参数必须提供 {}.kind",
-            field_name, field_name
-        )
+        format!("{}.kind is required for typed parameters", field_name)
     })?;
     match kind.trim().to_ascii_lowercase().as_str() {
         "null" => Ok(HostSqliteParamValue::Null),
@@ -2024,48 +1935,33 @@ fn parse_typed_sqlite_param(
             .and_then(Value::as_bool)
             .map(HostSqliteParamValue::Bool)
             .ok_or_else(|| {
-                format!(
-                    "{}.value must be a bool / {}.value 必须是布尔值",
-                    field_name, field_name
-                )
+                format!("{}.value must be a bool", field_name)
             }),
         "int64" => object
             .get("value")
             .and_then(Value::as_i64)
             .map(HostSqliteParamValue::Int64)
             .ok_or_else(|| {
-                format!(
-                    "{}.value must be an int64 / {}.value 必须是 int64",
-                    field_name, field_name
-                )
+                format!("{}.value must be an int64", field_name)
             }),
         "float64" => object
             .get("value")
             .and_then(Value::as_f64)
             .map(HostSqliteParamValue::Float64)
             .ok_or_else(|| {
-                format!(
-                    "{}.value must be a float64 / {}.value 必须是 float64",
-                    field_name, field_name
-                )
+                format!("{}.value must be a float64", field_name)
             }),
         "string" => object
             .get("value")
             .and_then(Value::as_str)
             .map(|value| HostSqliteParamValue::String(value.to_string()))
             .ok_or_else(|| {
-                format!(
-                    "{}.value must be a string / {}.value 必须是字符串",
-                    field_name, field_name
-                )
+                format!("{}.value must be a string", field_name)
             }),
         "bytes" => {
             if let Some(base64_value) = object.get("base64").and_then(Value::as_str) {
                 let decoded = BASE64_STANDARD.decode(base64_value).map_err(|error| {
-                    format!(
-                        "{}.base64 is invalid: {} / {}.base64 非法: {}",
-                        field_name, error, field_name, error
-                    )
+                    format!("{}.base64 is invalid: {}", field_name, error)
                 })?;
                 return Ok(HostSqliteParamValue::Bytes(decoded));
             }
@@ -2073,38 +1969,26 @@ fn parse_typed_sqlite_param(
                 .get("value")
                 .and_then(Value::as_array)
                 .ok_or_else(|| {
-                    format!(
-                        "{}.value must be a byte array or provide base64 / {}.value 必须是字节数组或提供 base64",
-                        field_name, field_name
-                    )
+                    format!("{}.value must be a byte array or provide base64", field_name)
                 })?;
             let mut bytes = Vec::with_capacity(array.len());
             for (index, item) in array.iter().enumerate() {
                 let byte = item.as_u64().ok_or_else(|| {
-                    format!(
-                        "{}.value[{}] must be an unsigned integer / {}.value[{}] 必须是无符号整数",
-                        field_name, index, field_name, index
-                    )
+                    format!("{}.value[{}] must be an unsigned integer", field_name, index)
                 })?;
                 let converted = u8::try_from(byte).map_err(|_| {
-                    format!(
-                        "{}.value[{}] exceeds u8 / {}.value[{}] 超出 u8 范围",
-                        field_name, index, field_name, index
-                    )
+                    format!("{}.value[{}] exceeds u8", field_name, index)
                 })?;
                 bytes.push(converted);
             }
             Ok(HostSqliteParamValue::Bytes(bytes))
         }
-        other => Err(format!(
-            "{}.kind={} is unsupported / {}.kind={} 不受支持",
-            field_name, other, field_name, other
-        )),
+        other => Err(format!("{}.kind={} is unsupported", field_name, other)),
     }
 }
 
-/// 中文：把 JSON 参数值统一转换为宿主内部 SQLite 参数值。
-/// English: Normalize a JSON parameter value into the host-side SQLite parameter representation.
+/// Normalize a JSON parameter value into the host-side SQLite parameter representation.
+/// 把 JSON 参数值统一转换为宿主内部 SQLite 参数值。
 fn parse_sqlite_param(value: &Value, field_name: &str) -> Result<HostSqliteParamValue, String> {
     match value {
         Value::Object(object) if object.contains_key("kind") => {
@@ -2114,20 +1998,17 @@ fn parse_sqlite_param(value: &Value, field_name: &str) -> Result<HostSqliteParam
     }
 }
 
-/// 中文：解析 legacy `params_json` 字符串，只允许标量数组。
-/// English: Parse legacy `params_json` text, allowing scalar arrays only.
+/// Parse legacy `params_json` text, allowing scalar arrays only.
+/// 解析 legacy `params_json` 字符串，只允许标量数组。
 fn parse_legacy_params_json_text(params_json: &str) -> Result<Vec<HostSqliteParamValue>, String> {
     if params_json.trim().is_empty() {
         return Ok(Vec::new());
     }
     let parsed: Value = serde_json::from_str(params_json).map_err(|error| {
-        format!(
-            "params_json must be a JSON array of scalar values: {} / params_json 必须是标量数组: {}",
-            error, error
-        )
+        format!("params_json must be a JSON array of scalar values: {}", error)
     })?;
     let items = parsed.as_array().ok_or_else(|| {
-        "params_json must be a JSON array of scalar values / params_json 必须是标量数组".to_string()
+        "params_json must be a JSON array of scalar values".to_string()
     })?;
     items
         .iter()
@@ -2136,8 +2017,8 @@ fn parse_legacy_params_json_text(params_json: &str) -> Result<Vec<HostSqlitePara
         .collect()
 }
 
-/// 中文：从统一输入对象中解析单条 SQL 的参数列表。
-/// English: Parse the parameter list for a single SQL request from the unified input object.
+/// Parse the parameter list for a single SQL request from the unified input object.
+/// 从统一输入对象中解析单条 SQL 的参数列表。
 fn parse_single_sql_params(input: &Value) -> Result<Vec<HostSqliteParamValue>, String> {
     let params_json = input
         .get("params_json")
@@ -2146,13 +2027,13 @@ fn parse_single_sql_params(input: &Value) -> Result<Vec<HostSqliteParamValue>, S
     if let Some(params_value) = input.get("params") {
         if !params_json.trim().is_empty() {
             return Err(
-                "provide either params or params_json, but not both / 不能同时提供 params 与 params_json"
+                "provide either params or params_json, but not both"
                     .to_string(),
             );
         }
         let params_array = params_value
             .as_array()
-            .ok_or_else(|| "params must be an array / params 必须是数组".to_string())?;
+            .ok_or_else(|| "params must be an array".to_string())?;
         return params_array
             .iter()
             .enumerate()
@@ -2162,25 +2043,22 @@ fn parse_single_sql_params(input: &Value) -> Result<Vec<HostSqliteParamValue>, S
     parse_legacy_params_json_text(params_json)
 }
 
-/// 中文：从统一输入对象中解析批量 SQL 的参数矩阵。
-/// English: Parse the parameter matrix for batch SQL from the unified input object.
+/// Parse the parameter matrix for batch SQL from the unified input object.
+/// 从统一输入对象中解析批量 SQL 的参数矩阵。
 fn parse_batch_sql_params(input: &Value) -> Result<Vec<Vec<HostSqliteParamValue>>, String> {
     let items = input
         .get("items")
         .and_then(Value::as_array)
-        .ok_or_else(|| "items must be an array of arrays / items 必须是二维数组".to_string())?;
+        .ok_or_else(|| "items must be an array of arrays".to_string())?;
     if items.is_empty() {
-        return Err("items must not be empty / items 不能为空".to_string());
+        return Err("items must not be empty".to_string());
     }
     items
         .iter()
         .enumerate()
         .map(|(row_index, row)| {
             let row_items = row.as_array().ok_or_else(|| {
-                format!(
-                    "items[{}] must be an array / items[{}] 必须是数组",
-                    row_index, row_index
-                )
+                format!("items[{}] must be an array", row_index)
             })?;
             row_items
                 .iter()
@@ -2193,41 +2071,32 @@ fn parse_batch_sql_params(input: &Value) -> Result<Vec<Vec<HostSqliteParamValue>
         .collect()
 }
 
-/// 中文：确保 JSON 请求中存在指定字符串字段。
-/// English: Ensure that a required string field exists in the JSON request.
+/// Ensure that a required string field exists in the JSON request.
+/// 确保 JSON 请求中存在指定字符串字段。
 fn require_string_field<'a>(input: &'a Value, field_name: &str) -> Result<&'a str, String> {
     input
         .get(field_name)
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
-            format!(
-                "missing or empty field `{}` / 缺少或为空的字段 `{}`",
-                field_name, field_name
-            )
+            format!("missing or empty field `{}`", field_name)
         })
 }
 
-/// 中文：将 Rust 字符串转换为 C 字符串，统一校验 NUL 字节。
-/// English: Convert a Rust string into a C string while uniformly validating interior NUL bytes.
+/// Convert a Rust string into a C string while uniformly validating interior NUL bytes.
+/// 将 Rust 字符串转换为 C 字符串，统一校验 NUL 字节。
 fn to_cstring(text: &str, field_name: &str) -> Result<CString, String> {
     CString::new(text).map_err(|_| {
-        format!(
-            "field `{}` contains interior NUL bytes / 字段 `{}` 包含 NUL 字节",
-            field_name, field_name
-        )
+        format!("field `{}` contains interior NUL bytes", field_name)
     })
 }
 
-/// 中文：检查 FFI 返回状态码，并在失败时转换成宿主级错误文本。
-/// English: Check the FFI return status code and convert failures into a host-level error string.
+/// Check the FFI return status code and convert failures into a host-level error string.
+/// 检查 FFI 返回状态码，并在失败时转换成宿主级错误文本。
 fn ensure_status(api: &LoadedSqliteApi, status: i32, operation: &str) -> Result<(), String> {
     if status == VldbSqliteStatusCode::Success as i32 {
         return Ok(());
     }
     let error = api.take_last_error_message();
-    Err(format!(
-        "{} failed: {} / {} 失败: {}",
-        operation, error, operation, error
-    ))
+    Err(format!("{} failed: {}", operation, error))
 }

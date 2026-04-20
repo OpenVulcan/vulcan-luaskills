@@ -263,9 +263,7 @@ pub fn validate_luaskills_identifier(value: &str, label: &str) -> Result<(), Str
         return Ok(());
     }
 
-    Err(format!(
-        "{label} must match ^[a-z]([a-z0-9-]*[a-z0-9])?$ / {label} 必须匹配 ^[a-z]([a-z0-9-]*[a-z0-9])?$"
-    ))
+    Err(format!("{label} must match ^[a-z]([a-z0-9-]*[a-z0-9])?$"))
 }
 
 /// Return the default enabled flag for one skill manifest.

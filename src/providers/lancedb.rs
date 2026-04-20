@@ -11,34 +11,34 @@ use crate::lua_skill::{SkillLanceDbLogLevel, SkillLanceDbMeta};
 use crate::runtime_options::LuaRuntimeHostOptions;
 use crate::runtime_logging::{info as log_info, warn as log_warn};
 
-/// 中文：FFI 运行时句柄前置声明，仅用于跨动态库传递裸指针。
-/// English: Forward declaration of the FFI runtime handle used only for raw cross-library pointers.
+/// Forward declaration of the FFI runtime handle used only for raw cross-library pointers.
+/// FFI 运行时句柄前置声明，仅用于跨动态库传递裸指针。
 #[repr(C)]
 struct VldbLancedbRuntimeHandle {
     _private: [u8; 0],
 }
 
-/// 中文：FFI 引擎句柄前置声明，仅用于跨动态库传递裸指针。
-/// English: Forward declaration of the FFI engine handle used only for raw cross-library pointers.
+/// Forward declaration of the FFI engine handle used only for raw cross-library pointers.
+/// FFI 引擎句柄前置声明，仅用于跨动态库传递裸指针。
 #[repr(C)]
 struct VldbLancedbEngineHandle {
     _private: [u8; 0],
 }
 
-/// 中文：LanceDB FFI 原始字节缓冲区定义，需与动态库头文件保持一致。
-/// English: Raw LanceDB FFI byte-buffer definition kept identical to the exported dynamic-library header.
+/// Raw LanceDB FFI byte-buffer definition kept identical to the exported dynamic-library header.
+/// LanceDB FFI 原始字节缓冲区定义，需与动态库头文件保持一致。
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct VldbLancedbByteBuffer {
     data: *mut c_uchar,
     len: usize,
-    /// 原始分配容量，仅供动态库在释放时恢复 Vec 布局。
     /// Original allocation capacity used only by the dynamic library when reconstructing the Vec during free.
+    /// 原始分配容量，仅供动态库在释放时恢复 Vec 布局。
     cap: usize,
 }
 
-/// 中文：LanceDB FFI 运行时选项，需与导出的头文件严格对齐。
-/// English: LanceDB FFI runtime options that must stay ABI-compatible with the exported header.
+/// LanceDB FFI runtime options that must stay ABI-compatible with the exported header.
+/// LanceDB FFI 运行时选项，需与导出的头文件严格对齐。
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct VldbLancedbRuntimeOptions {
@@ -82,8 +82,8 @@ type StringFreeFn = unsafe extern "C" fn(*mut c_char);
 type LastErrorMessageFn = unsafe extern "C" fn() -> *const c_char;
 type ClearLastErrorFn = unsafe extern "C" fn();
 
-/// 中文：已加载的 LanceDB FFI API 表，负责持有动态库生命周期与导出函数指针。
-/// English: Loaded LanceDB FFI API table that owns the dynamic-library lifetime and exported function pointers.
+/// Loaded LanceDB FFI API table that owns the dynamic-library lifetime and exported function pointers.
+/// 已加载的 LanceDB FFI API 表，负责持有动态库生命周期与导出函数指针。
 struct LoadedLanceDbApi {
     _library: Library,
     library_path: PathBuf,
@@ -104,35 +104,27 @@ struct LoadedLanceDbApi {
     clear_last_error: ClearLastErrorFn,
 }
 
-/// 中文：动态库句柄与函数指针在初始化后只读，调用端通过外层互斥量串行化访问。
-/// English: The loaded library handle and copied function pointers stay immutable after initialization, while callers serialize use via outer mutexes.
+/// The loaded library handle and copied function pointers stay immutable after initialization, while callers serialize use via outer mutexes.
+/// 动态库句柄与函数指针在初始化后只读，调用端通过外层互斥量串行化访问。
 unsafe impl Send for LoadedLanceDbApi {}
 unsafe impl Sync for LoadedLanceDbApi {}
 
 impl LoadedLanceDbApi {
-    /// 中文：按宿主约定加载 LanceDB 动态库，优先查找显式环境变量与运行时 libs 目录。
-    /// English: Load the LanceDB dynamic library using host conventions, preferring an explicit environment variable and runtime libs directories.
+    /// Load the LanceDB dynamic library using host conventions, preferring an explicit environment variable and runtime libs directories.
+    /// 按宿主约定加载 LanceDB 动态库，优先查找显式环境变量与运行时 libs 目录。
     fn load(library_path: &Path) -> Result<Self, String> {
         if !library_path.exists() {
-            return Err(format!(
-                "LanceDB dynamic library path does not exist / LanceDB 动态库路径不存在: {}",
-                library_path.display()
-            ));
+            return Err(format!("LanceDB dynamic library path does not exist: {}", library_path.display()));
         }
 
         let library = unsafe { Library::new(library_path) }.map_err(|error| {
-            format!(
-                "failed to load {}: {} / 加载 LanceDB 动态库失败: {}",
-                library_path.display(),
-                error,
-                error
-            )
+            format!("failed to load {}: {}: {}", library_path.display(), error, error)
         })?;
         unsafe { Self::from_library(library_path.to_path_buf(), library) }
     }
 
-    /// 中文：从已打开的动态库中复制需要的函数指针，并保留库句柄防止提前卸载。
-    /// English: Copy all required exported function pointers from an opened dynamic library and keep the library handle alive.
+    /// Copy all required exported function pointers from an opened dynamic library and keep the library handle alive.
+    /// 从已打开的动态库中复制需要的函数指针，并保留库句柄防止提前卸载。
     unsafe fn from_library(library_path: PathBuf, library: Library) -> Result<Self, String> {
         macro_rules! load_symbol {
             ($name:literal, $ty:ty) => {{
@@ -140,12 +132,7 @@ impl LoadedLanceDbApi {
                     *library
                         .get::<$ty>(concat!($name, "\0").as_bytes())
                         .map_err(|error| {
-                            format!(
-                                "failed to load symbol {} from {}: {}",
-                                $name,
-                                library_path.display(),
-                                error
-                            )
+                            format!("failed to load symbol {} from {}: {}", $name, library_path.display(), error)
                         })?
                 }
             }};
@@ -193,13 +180,13 @@ impl LoadedLanceDbApi {
         })
     }
 
-    /// 中文：读取最近一次 FFI 调用错误文本，并返回稳定 Rust 字符串。
-    /// English: Read the latest FFI error text and return it as a stable Rust string.
+    /// Read the latest FFI error text and return it as a stable Rust string.
+    /// 读取最近一次 FFI 调用错误文本，并返回稳定 Rust 字符串。
     fn take_last_error_message(&self) -> String {
         unsafe {
             let ptr = (self.last_error_message)();
             let text = if ptr.is_null() {
-                "unknown LanceDB host error / 未知 LanceDB 宿主错误".to_string()
+                "unknown LanceDB host error".to_string()
             } else {
                 CStr::from_ptr(ptr).to_string_lossy().to_string()
             };
@@ -208,8 +195,8 @@ impl LoadedLanceDbApi {
         }
     }
 
-    /// 中文：释放由动态库分配的字符串并转成 Rust `String`。
-    /// English: Convert a dynamic-library allocated string into a Rust `String` and free the original allocation.
+    /// Convert a dynamic-library allocated string into a Rust `String` and free the original allocation.
+    /// 释放由动态库分配的字符串并转成 Rust `String`。
     fn take_owned_string(&self, ptr: *mut c_char) -> Result<String, String> {
         if ptr.is_null() {
             return Err(self.take_last_error_message());
@@ -222,8 +209,8 @@ impl LoadedLanceDbApi {
         }
     }
 
-    /// 中文：释放由动态库分配的字节缓冲区并转成 Rust `Vec<u8>`。
-    /// English: Convert a dynamic-library allocated byte buffer into a Rust `Vec<u8>` and free the original allocation.
+    /// Convert a dynamic-library allocated byte buffer into a Rust `Vec<u8>` and free the original allocation.
+    /// 释放由动态库分配的字节缓冲区并转成 Rust `Vec<u8>`。
     fn take_owned_bytes(&self, buffer: VldbLancedbByteBuffer) -> Vec<u8> {
         if buffer.data.is_null() || buffer.len == 0 {
             return Vec::new();
@@ -237,19 +224,19 @@ impl LoadedLanceDbApi {
     }
 }
 
-/// 中文：单个 skill 的 LanceDB 句柄集合，由宿主管理其生命周期。
-/// English: One skill-scoped LanceDB handle set whose lifetime is managed entirely by the host.
+/// One skill-scoped LanceDB handle set whose lifetime is managed entirely by the host.
+/// 单个 skill 的 LanceDB 句柄集合，由宿主管理其生命周期。
 struct SkillHandleState {
     runtime: *mut VldbLancedbRuntimeHandle,
     engine: *mut VldbLancedbEngineHandle,
 }
 
-/// 中文：FFI 句柄只通过宿主互斥量串行访问，跨线程共享由宿主统一控制。
-/// English: FFI handles are accessed only behind host-side mutexes, and cross-thread sharing is controlled centrally by the host.
+/// FFI handles are accessed only behind host-side mutexes, and cross-thread sharing is controlled centrally by the host.
+/// FFI 句柄只通过宿主互斥量串行访问，跨线程共享由宿主统一控制。
 unsafe impl Send for SkillHandleState {}
 
-/// 中文：某个启用 LanceDB 的 skill 所绑定的数据库上下文。
-/// English: Database context bound to one LanceDB-enabled skill.
+/// Database context bound to one LanceDB-enabled skill.
+/// 某个启用 LanceDB 的 skill 所绑定的数据库上下文。
 pub struct LanceDbSkillBinding {
     api: Arc<LoadedLanceDbApi>,
     skill_name: String,
@@ -260,8 +247,8 @@ pub struct LanceDbSkillBinding {
 }
 
 impl LanceDbSkillBinding {
-    /// 中文：返回当前 skill 的稳定 LanceDB 状态信息；无论启用与否，返回结构都应稳定。
-    /// English: Return the stable LanceDB status payload for the current skill; the shape stays stable whether enabled or disabled.
+    /// Return the stable LanceDB status payload for the current skill; the shape stays stable whether enabled or disabled.
+    /// 返回当前 skill 的稳定 LanceDB 状态信息；无论启用与否，返回结构都应稳定。
     pub fn status_json(&self) -> Value {
         json!({
             "enabled": true,
@@ -277,26 +264,26 @@ impl LanceDbSkillBinding {
         })
     }
 
-    /// 中文：返回当前 skill 所绑定 LanceDB 的基础信息，供 Lua 或诊断输出使用。
-    /// English: Return base information about the LanceDB instance bound to the current skill for Lua and diagnostics.
+    /// Return base information about the LanceDB instance bound to the current skill for Lua and diagnostics.
+    /// 返回当前 skill 所绑定 LanceDB 的基础信息，供 Lua 或诊断输出使用。
     pub fn info_json(&self) -> Value {
         self.status_json()
     }
 
-    /// 中文：执行建表操作，输入必须符合宿主约定的 JSON 结构。
-    /// English: Execute create-table using the host-defined JSON input shape.
+    /// Execute create-table using the host-defined JSON input shape.
+    /// 执行建表操作，输入必须符合宿主约定的 JSON 结构。
     pub fn create_table_json(&self, input: &Value) -> Result<Value, String> {
         self.call_json_string("create_table", input, |api, state, input_ptr| unsafe {
             (api.engine_create_table_json)(state.engine, input_ptr)
         })
     }
 
-    /// 中文：执行向量写入；调用方负责提供已经编码好的原始载荷。
-    /// English: Execute vector upsert; callers must provide an already encoded raw payload.
+    /// Execute vector upsert; callers must provide an already encoded raw payload.
+    /// 执行向量写入；调用方负责提供已经编码好的原始载荷。
     pub fn vector_upsert_json(&self, input: &Value, data: &[u8]) -> Result<Value, String> {
         let input_text = serde_json::to_string(input).map_err(|error| error.to_string())?;
         let input_cstr = CString::new(input_text).map_err(|_| {
-            "input json contains interior NUL bytes / 输入 JSON 含有 NUL 字节".to_string()
+            "input json contains interior NUL bytes".to_string()
         })?;
         self.log_info(
             "vector_upsert",
@@ -304,7 +291,7 @@ impl LanceDbSkillBinding {
         );
         let started_at = Instant::now();
         let guard = self.handles.lock().map_err(|_| {
-            "failed to acquire LanceDB handle lock / 获取 LanceDB 句柄锁失败".to_string()
+            "failed to acquire LanceDB handle lock".to_string()
         })?;
         unsafe {
             let response = (self.api.engine_vector_upsert)(
@@ -322,10 +309,7 @@ impl LanceDbSkillBinding {
                 }
             };
             let value = serde_json::from_str(&text).map_err(|error| {
-                format!(
-                    "failed to parse LanceDB upsert response JSON / 无法解析 LanceDB 写入返回 JSON: {}",
-                    error
-                )
+                format!("failed to parse LanceDB upsert response JSON: {}", error)
             })?;
             drop(guard);
             self.log_if_slow(
@@ -337,17 +321,17 @@ impl LanceDbSkillBinding {
         }
     }
 
-    /// 中文：执行向量检索并返回元信息 JSON 与原始结果字节。
-    /// English: Execute vector search and return both metadata JSON and raw result bytes.
+    /// Execute vector search and return both metadata JSON and raw result bytes.
+    /// 执行向量检索并返回元信息 JSON 与原始结果字节。
     pub fn vector_search_json(&self, input: &Value) -> Result<(Value, Vec<u8>), String> {
         let input_text = serde_json::to_string(input).map_err(|error| error.to_string())?;
         let input_cstr = CString::new(input_text).map_err(|_| {
-            "input json contains interior NUL bytes / 输入 JSON 含有 NUL 字节".to_string()
+            "input json contains interior NUL bytes".to_string()
         })?;
         self.log_info("vector_search", None);
         let started_at = Instant::now();
         let guard = self.handles.lock().map_err(|_| {
-            "failed to acquire LanceDB handle lock / 获取 LanceDB 句柄锁失败".to_string()
+            "failed to acquire LanceDB handle lock".to_string()
         })?;
         let mut buffer = VldbLancedbByteBuffer {
             data: ptr::null_mut(),
@@ -366,10 +350,7 @@ impl LanceDbSkillBinding {
                 }
             };
             let meta: Value = serde_json::from_str(&text).map_err(|error| {
-                format!(
-                    "failed to parse LanceDB search response JSON / 无法解析 LanceDB 检索返回 JSON: {}",
-                    error
-                )
+                format!("failed to parse LanceDB search response JSON: {}", error)
             })?;
             let bytes = self.api.take_owned_bytes(buffer);
             drop(guard);
@@ -382,24 +363,24 @@ impl LanceDbSkillBinding {
         }
     }
 
-    /// 中文：执行删除操作。
-    /// English: Execute delete.
+    /// Execute delete.
+    /// 执行删除操作。
     pub fn delete_json(&self, input: &Value) -> Result<Value, String> {
         self.call_json_string("delete", input, |api, state, input_ptr| unsafe {
             (api.engine_delete_json)(state.engine, input_ptr)
         })
     }
 
-    /// 中文：执行删表操作。
-    /// English: Execute drop-table.
+    /// Execute drop-table.
+    /// 执行删表操作。
     pub fn drop_table_json(&self, input: &Value) -> Result<Value, String> {
         self.call_json_string("drop_table", input, |api, state, input_ptr| unsafe {
             (api.engine_drop_table_json)(state.engine, input_ptr)
         })
     }
 
-    /// 中文：统一执行“输入 JSON -> 返回 JSON 字符串”的 FFI 调用。
-    /// English: Execute an FFI call that maps a JSON input into a JSON-string response.
+    /// Execute an FFI call that maps a JSON input into a JSON-string response.
+    /// 统一执行“输入 JSON -> 返回 JSON 字符串”的 FFI 调用。
     fn call_json_string<F>(
         &self,
         operation: &str,
@@ -411,12 +392,12 @@ impl LanceDbSkillBinding {
     {
         let input_text = serde_json::to_string(input).map_err(|error| error.to_string())?;
         let input_cstr = CString::new(input_text).map_err(|_| {
-            "input json contains interior NUL bytes / 输入 JSON 含有 NUL 字节".to_string()
+            "input json contains interior NUL bytes".to_string()
         })?;
         self.log_info(operation, None);
         let started_at = Instant::now();
         let guard = self.handles.lock().map_err(|_| {
-            "failed to acquire LanceDB handle lock / 获取 LanceDB 句柄锁失败".to_string()
+            "failed to acquire LanceDB handle lock".to_string()
         })?;
         let response = invoke(&self.api, &guard, input_cstr.as_ptr());
         let text = match self.api.take_owned_string(response) {
@@ -428,35 +409,26 @@ impl LanceDbSkillBinding {
             }
         };
         let value = serde_json::from_str(&text).map_err(|error| {
-            format!(
-                "failed to parse LanceDB response JSON / 无法解析 LanceDB 返回 JSON: {}",
-                error
-            )
+            format!("failed to parse LanceDB response JSON: {}", error)
         })?;
         drop(guard);
         self.log_if_slow(operation, started_at, None);
         Ok(value)
     }
 
-    /// 中文：按 skill 配置输出普通信息级日志。
-    /// English: Emit regular informational logs according to the skill-scoped log policy.
+    /// Emit regular informational logs according to the skill-scoped log policy.
+    /// 按 skill 配置输出普通信息级日志。
     fn log_info(&self, operation: &str, extra: Option<String>) {
         if self.config.log_level == SkillLanceDbLogLevel::Info {
             match extra {
-                Some(extra) => log_info(format!(
-                    "[LanceDb:info] skill={} db={} op={} {}",
-                    self.skill_name, self.skill_dir_name, operation, extra
-                )),
-                None => log_info(format!(
-                    "[LanceDb:info] skill={} db={} op={}",
-                    self.skill_name, self.skill_dir_name, operation
-                )),
+                Some(extra) => log_info(format!("[LanceDb:info] skill={} db={} op={} {}", self.skill_name, self.skill_dir_name, operation, extra)),
+                None => log_info(format!("[LanceDb:info] skill={} db={} op={}", self.skill_name, self.skill_dir_name, operation)),
             }
         }
     }
 
-    /// 中文：按慢日志配置输出耗时告警；该日志与普通日志开关独立。
-    /// English: Emit a slow-operation warning according to the slow-log policy; this is independent from regular log verbosity.
+    /// Emit a slow-operation warning according to the slow-log policy; this is independent from regular log verbosity.
+    /// 按慢日志配置输出耗时告警；该日志与普通日志开关独立。
     fn log_if_slow(&self, operation: &str, started_at: Instant, extra: Option<String>) {
         if !self.config.slow_log_enabled {
             return;
@@ -468,35 +440,26 @@ impl LanceDbSkillBinding {
         }
 
         match extra {
-            Some(extra) => log_info(format!(
-                "[LanceDb:slow] skill={} db={} op={} elapsed_ms={} {}",
-                self.skill_name, self.skill_dir_name, operation, elapsed_ms, extra
-            )),
-            None => log_info(format!(
-                "[LanceDb:slow] skill={} db={} op={} elapsed_ms={}",
-                self.skill_name, self.skill_dir_name, operation, elapsed_ms
-            )),
+            Some(extra) => log_info(format!("[LanceDb:slow] skill={} db={} op={} elapsed_ms={} {}", self.skill_name, self.skill_dir_name, operation, elapsed_ms, extra)),
+            None => log_info(format!("[LanceDb:slow] skill={} db={} op={} elapsed_ms={}", self.skill_name, self.skill_dir_name, operation, elapsed_ms)),
         }
     }
 
-    /// 中文：按 skill 配置输出告警级日志，通常用于 FFI 调用失败或宿主检测到的异常情况。
-    /// English: Emit warning-level logs according to the skill policy, usually for FFI call failures or host-detected anomalies.
+    /// Emit warning-level logs according to the skill policy, usually for FFI call failures or host-detected anomalies.
+    /// 按 skill 配置输出告警级日志，通常用于 FFI 调用失败或宿主检测到的异常情况。
     fn log_warning(&self, operation: &str, message: &str) {
         if matches!(
             self.config.log_level,
             SkillLanceDbLogLevel::Info | SkillLanceDbLogLevel::Warning
         ) {
-            log_warn(format!(
-                "[LanceDb:warn] skill={} db={} op={} message={}",
-                self.skill_name, self.skill_dir_name, operation, message
-            ));
+            log_warn(format!("[LanceDb:warn] skill={} db={} op={} message={}", self.skill_name, self.skill_dir_name, operation, message));
         }
     }
 }
 
 impl Drop for LanceDbSkillBinding {
-    /// 中文：由宿主在 skill 生命周期结束时统一释放引擎与运行时句柄。
-    /// English: The host releases engine and runtime handles together when the skill binding is dropped.
+    /// The host releases engine and runtime handles together when the skill binding is dropped.
+    /// 由宿主在 skill 生命周期结束时统一释放引擎与运行时句柄。
     fn drop(&mut self) {
         if let Ok(mut guard) = self.handles.lock() {
             unsafe {
@@ -513,8 +476,8 @@ impl Drop for LanceDbSkillBinding {
     }
 }
 
-/// 中文：按 skill 维度维护 LanceDB 绑定，负责技能启用后的自动创建与长期复用。
-/// English: Maintain skill-scoped LanceDB bindings, auto-creating and reusing them for enabled skills.
+/// Maintain skill-scoped LanceDB bindings, auto-creating and reusing them for enabled skills.
+/// 按 skill 维度维护 LanceDB 绑定，负责技能启用后的自动创建与长期复用。
 pub struct LanceDbSkillHost {
     api: Arc<LoadedLanceDbApi>,
     skills: Mutex<HashMap<String, Arc<LanceDbSkillBinding>>>,
@@ -522,11 +485,11 @@ pub struct LanceDbSkillHost {
 }
 
 impl LanceDbSkillHost {
-    /// 中文：创建宿主级 LanceDB 技能管理器，并立即加载动态库。
-    /// English: Create the host-side LanceDB skill manager and load the dynamic library immediately.
+    /// Create the host-side LanceDB skill manager and load the dynamic library immediately.
+    /// 创建宿主级 LanceDB 技能管理器，并立即加载动态库。
     pub fn new(host_options: LuaRuntimeHostOptions) -> Result<Self, String> {
         let library_path = host_options.lancedb_library_path.clone().ok_or_else(|| {
-            "LanceDB host requires host_options.lancedb_library_path / LanceDB 宿主需要显式提供 lancedb_library_path"
+            "LanceDB host requires host_options.lancedb_library_path"
                 .to_string()
         })?;
         Ok(Self {
@@ -536,8 +499,8 @@ impl LanceDbSkillHost {
         })
     }
 
-    /// 中文：为启用 LanceDB 的 skill 注册固定数据库绑定；同一个 skill 只会创建一次。
-    /// English: Register the fixed database binding for a LanceDB-enabled skill; each skill is created only once.
+    /// Register the fixed database binding for a LanceDB-enabled skill; each skill is created only once.
+    /// 为启用 LanceDB 的 skill 注册固定数据库绑定；同一个 skill 只会创建一次。
     pub fn register_skill(
         &self,
         skill_name: &str,
@@ -545,7 +508,7 @@ impl LanceDbSkillHost {
         config: SkillLanceDbMeta,
     ) -> Result<Arc<LanceDbSkillBinding>, String> {
         let mut guard = self.skills.lock().map_err(|_| {
-            "failed to acquire LanceDB skill registry lock / 获取 LanceDB 技能注册表锁失败"
+            "failed to acquire LanceDB skill registry lock"
                 .to_string()
         })?;
         if let Some(existing) = guard.get(skill_name) {
@@ -556,19 +519,11 @@ impl LanceDbSkillHost {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| {
-                format!(
-                    "invalid skill directory name for {} / 无法解析 skill 目录名: {}",
-                    skill_name,
-                    skill_dir.display()
-                )
+                format!("invalid skill directory name for {}: {}", skill_name, skill_dir.display())
             })?
             .to_string();
         let skills_root = skill_dir.parent().ok_or_else(|| {
-            format!(
-                "invalid skill root for {} / 无法解析 skill 根目录: {}",
-                skill_name,
-                skill_dir.display()
-            )
+            format!("invalid skill root for {}: {}", skill_name, skill_dir.display())
         })?;
         let sidecar_root = skills_root
             .parent()
@@ -578,17 +533,12 @@ impl LanceDbSkillHost {
             .join("lancedb")
             .join(skill_name);
         std::fs::create_dir_all(&db_path).map_err(|error| {
-            format!(
-                "failed to create LanceDB directory {}: {} / 创建 LanceDB 目录失败: {}",
-                db_path.display(),
-                error,
-                error
-            )
+            format!("failed to create LanceDB directory {}: {}: {}", db_path.display(), error, error)
         })?;
 
         let database_path = db_path.to_string_lossy().to_string();
         let default_path = CString::new(database_path.clone()).map_err(|_| {
-            "database path contains interior NUL bytes / 数据库路径包含 NUL 字节".to_string()
+            "database path contains interior NUL bytes".to_string()
         })?;
         let mut options = unsafe { (self.api.runtime_options_default)() };
         options.default_db_path = default_path.as_ptr();
@@ -627,8 +577,8 @@ impl LanceDbSkillHost {
         Ok(binding)
     }
 
-    /// 中文：按 skill 名称获取已注册绑定，供 Lua 注入与跨 skill 调用恢复上下文使用。
-    /// English: Fetch a registered binding by skill name so Lua injection and cross-skill calls can restore context.
+    /// Fetch a registered binding by skill name so Lua injection and cross-skill calls can restore context.
+    /// 按 skill 名称获取已注册绑定，供 Lua 注入与跨 skill 调用恢复上下文使用。
     pub fn binding_for_skill(&self, skill_name: &str) -> Option<Arc<LanceDbSkillBinding>> {
         self.skills
             .lock()
@@ -637,14 +587,14 @@ impl LanceDbSkillHost {
     }
 }
 
-/// 中文：为未启用 LanceDB 的 skill 生成稳定状态对象，便于 Lua 侧先判断再调用。
-/// English: Build a stable status object for skills that do not enable LanceDB so Lua can check before calling.
+/// Build a stable status object for skills that do not enable LanceDB so Lua can check before calling.
+/// 为未启用 LanceDB 的 skill 生成稳定状态对象，便于 Lua 侧先判断再调用。
 pub fn disabled_skill_status_json(skill_name: Option<&str>) -> Value {
     json!({
         "enabled": false,
         "initialized": false,
         "skill_name": skill_name.unwrap_or(""),
         "integration_mode": "dynamic_library",
-        "reason": "current skill has not enabled lancedb / 当前 skill 未启用 lancedb"
+        "reason": "current skill has not enabled lancedb"
     })
 }

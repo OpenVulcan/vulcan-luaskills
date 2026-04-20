@@ -1,4 +1,4 @@
-/// English: Build the normalized LuaSkills platform key for the current target runtime.
+/// Build the normalized LuaSkills platform key for the current target runtime.
 /// 构建当前目标运行时使用的标准 LuaSkills 平台键。
 pub fn current_platform_key() -> &'static str {
     if cfg!(all(target_os = "windows", target_arch = "x86_64")) {

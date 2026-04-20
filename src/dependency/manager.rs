@@ -17,43 +17,43 @@ use crate::skill::dependencies::{
 };
 use crate::runtime_options::RuntimeSkillRoot;
 
-/// English: Dependency-manager configuration shared by dependency resolution and installation phases.
+/// Dependency-manager configuration shared by dependency resolution and installation phases.
 /// 供依赖解析与安装阶段共享使用的依赖管理配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyManagerConfig {
-    /// English: Root directory used to install skill-local executable/tool dependencies.
+    /// Root directory used to install skill-local executable/tool dependencies.
     /// 用于安装技能本地可执行工具依赖的根目录。
     pub tool_root: PathBuf,
-    /// English: Root directory used to probe host-provided executable/tool dependencies.
+    /// Root directory used to probe host-provided executable/tool dependencies.
     /// 用于探测宿主提供可执行工具依赖的根目录。
     pub host_tool_root: PathBuf,
-    /// English: Root directory used to install Lua package dependencies.
+    /// Root directory used to install Lua package dependencies.
     /// 用于安装 Lua 包依赖的根目录。
     pub lua_root: PathBuf,
-    /// English: Root directory used to probe host-provided Lua package dependencies.
+    /// Root directory used to probe host-provided Lua package dependencies.
     /// 用于探测宿主提供 Lua 包依赖的根目录。
     pub host_lua_root: PathBuf,
-    /// English: Root directory used to install FFI/native library dependencies.
+    /// Root directory used to install FFI/native library dependencies.
     /// 用于安装 FFI/原生库依赖的根目录。
     pub ffi_root: PathBuf,
-    /// English: Root directory used to probe host-provided FFI/native dependencies.
+    /// Root directory used to probe host-provided FFI/native dependencies.
     /// 用于探测宿主提供 FFI/原生依赖的根目录。
     pub host_ffi_root: PathBuf,
-    /// English: Root directory used for cached downloads and fetched remote manifests.
+    /// Root directory used for cached downloads and fetched remote manifests.
     /// 用于缓存下载结果和远程清单的根目录。
     pub download_cache_root: PathBuf,
-    /// English: Whether network downloads are allowed during dependency resolution.
+    /// Whether network downloads are allowed during dependency resolution.
     /// 依赖解析过程中是否允许网络下载。
     pub allow_network_download: bool,
-    /// English: Optional GitHub browser base URL override.
+    /// Optional GitHub browser base URL override.
     /// 可选的 GitHub 浏览器下载基址覆盖。
     pub github_base_url: Option<String>,
-    /// English: Optional GitHub API base URL override.
+    /// Optional GitHub API base URL override.
     /// 可选的 GitHub API 基址覆盖。
     pub github_api_base_url: Option<String>,
 }
 
-/// English: High-level dependency manager owned by the LuaSkills runtime.
+/// High-level dependency manager owned by the LuaSkills runtime.
 /// 由 LuaSkills 运行时拥有的高层依赖管理器。
 pub struct DependencyManager {
     config: DependencyManagerConfig,
@@ -61,7 +61,7 @@ pub struct DependencyManager {
 }
 
 impl DependencyManager {
-    /// English: Create one dependency manager from a shared configuration object.
+    /// Create one dependency manager from a shared configuration object.
     /// 基于共享配置对象创建一个依赖管理器实例。
     pub fn new(config: DependencyManagerConfig) -> Self {
         let downloader = DownloadManager::new(DownloadManagerConfig {
@@ -73,7 +73,7 @@ impl DependencyManager {
         Self { config, downloader }
     }
 
-    /// English: Ensure all declared dependencies for one skill are installed and ready.
+    /// Ensure all declared dependencies for one skill are installed and ready.
     /// 确保单个 skill 声明的全部依赖已安装且可用。
     pub fn ensure_skill_dependencies(
         &self,
@@ -83,7 +83,7 @@ impl DependencyManager {
         let platform_key = current_platform_key();
         if platform_key == "unknown" {
             return Err(
-                "current platform is not supported by LuaSkills dependency manager / 当前平台不受 LuaSkills 依赖管理器支持"
+                "current platform is not supported by LuaSkills dependency manager"
                     .to_string(),
             );
         }
@@ -100,7 +100,7 @@ impl DependencyManager {
         Ok(())
     }
 
-    /// English: Ensure one tool dependency is installed for the current platform.
+    /// Ensure one tool dependency is installed for the current platform.
     /// 确保单个工具依赖在当前平台上已安装完成。
     fn ensure_tool_dependency(
         &self,
@@ -123,7 +123,7 @@ impl DependencyManager {
         )
     }
 
-    /// English: Ensure one Lua dependency is installed for the current platform.
+    /// Ensure one Lua dependency is installed for the current platform.
     /// 确保单个 Lua 依赖在当前平台上已安装完成。
     fn ensure_lua_dependency(
         &self,
@@ -146,7 +146,7 @@ impl DependencyManager {
         )
     }
 
-    /// English: Ensure one FFI dependency is installed for the current platform.
+    /// Ensure one FFI dependency is installed for the current platform.
     /// 确保单个 FFI 依赖在当前平台上已安装完成。
     fn ensure_ffi_dependency(
         &self,
@@ -169,7 +169,7 @@ impl DependencyManager {
         )
     }
 
-    /// English: Resolve the concrete install/probe root for one dependency kind and scope pair.
+    /// Resolve the concrete install/probe root for one dependency kind and scope pair.
     /// 根据依赖类型与作用域解析实际安装/探测根目录。
     fn install_root_for_kind(
         &self,
@@ -186,8 +186,10 @@ impl DependencyManager {
         }
     }
 
-    /// English: Shared dependency ensure pipeline used by tool/lua/ffi dependency kinds.
-    /// tool/lua/ffi 三类依赖共用的统一安装确保流程。
+    /// Shared dependency ensure pipeline used by tool/lua/ffi dependency kinds.
+    /// tool
+    /// lua
+    /// ffi 三类依赖共用的统一安装确保流程。
     #[allow(clippy::too_many_arguments)]
     fn ensure_dependency(
         &self,
@@ -218,50 +220,30 @@ impl DependencyManager {
 
         match self.detect_dependency(&resolved_request)? {
             DependencyDetectionStatus::Present => {
-                log_info(format!(
-                    "[LuaSkills:dependency] Skill '{}' reuses existing dependency '{}' on {}",
-                    skill_id, dependency_name, platform_key
-                ));
+                log_info(format!("[LuaSkills:dependency] Skill '{}' reuses existing dependency '{}' on {}", skill_id, dependency_name, platform_key));
                 Ok(())
             }
             DependencyDetectionStatus::Missing => {
                 if scope == DependencyScope::Host {
                     if required {
-                        return Err(format!(
-                            "required host dependency '{}' is missing / 必需的宿主依赖 '{}' 缺失",
-                            dependency_name, dependency_name
-                        ));
+                        return Err(format!("required host dependency '{}' is missing", dependency_name));
                     }
-                    log_warn(format!(
-                        "[LuaSkills:dependency] Optional host dependency '{}' is missing",
-                        dependency_name
-                    ));
+                    log_warn(format!("[LuaSkills:dependency] Optional host dependency '{}' is missing", dependency_name));
                     return Ok(());
                 }
                 if !self.config.allow_network_download {
                     if required {
-                        return Err(format!(
-                            "required dependency '{}' is missing and network download is disabled / 必需依赖 '{}' 缺失且当前禁止网络下载",
-                            dependency_name, dependency_name
-                        ));
+                        return Err(format!("required dependency '{}' is missing and network download is disabled", dependency_name));
                     }
-                    log_warn(format!(
-                        "[LuaSkills:dependency] Optional dependency '{}' is missing and download is disabled",
-                        dependency_name
-                    ));
+                    log_warn(format!("[LuaSkills:dependency] Optional dependency '{}' is missing and download is disabled", dependency_name));
                     return Ok(());
                 }
 
-                let cache_key = format!(
-                    "{}-{}-{}",
-                    match kind {
+                let cache_key = format!("{}-{}-{}", match kind {
                         SkillDependencyKind::Tool => "tool",
                         SkillDependencyKind::Lua => "lua",
                         SkillDependencyKind::Ffi => "ffi",
-                    },
-                    dependency_name,
-                    platform_key
-                );
+                    }, dependency_name, platform_key);
                 let download_path = self.downloader.download(&DownloadRequest {
                     source_type,
                     source_locator: resolved_request.download_url.clone(),
@@ -277,22 +259,16 @@ impl DependencyManager {
                     self.detect_dependency(&resolved_request)?,
                     DependencyDetectionStatus::Missing
                 ) {
-                    return Err(format!(
-                        "dependency '{}' was downloaded but exported files are still missing / 依赖 '{}' 已下载，但导出文件仍然缺失",
-                        dependency_name, dependency_name
-                    ));
+                    return Err(format!("dependency '{}' was downloaded but exported files are still missing", dependency_name));
                 }
 
-                log_info(format!(
-                    "[LuaSkills:dependency] Installed dependency '{}' for skill '{}' on {}",
-                    dependency_name, skill_id, platform_key
-                ));
+                log_info(format!("[LuaSkills:dependency] Installed dependency '{}' for skill '{}' on {}", dependency_name, skill_id, platform_key));
                 Ok(())
             }
         }
     }
 
-    /// English: Resolve one dependency declaration into a concrete install request.
+    /// Resolve one dependency declaration into a concrete install request.
     /// 把单个依赖声明解析成具体可执行的安装请求。
     #[allow(clippy::too_many_arguments)]
     fn resolve_dependency_request(
@@ -312,42 +288,25 @@ impl DependencyManager {
             DependencySourceType::GithubRelease | DependencySourceType::Url => package
                 .cloned()
                 .ok_or_else(|| {
-                    format!(
-                        "dependency '{}' does not declare package metadata for platform '{}' / 依赖 '{}' 没有为平台 '{}' 声明包元数据",
-                        dependency_name, platform_key, dependency_name, platform_key
-                    )
+                    format!("dependency '{}' does not declare package metadata for platform '{}'", dependency_name, platform_key)
                 })?,
             DependencySourceType::SkillList => {
                 let skilllist = source.skilllist.as_ref().ok_or_else(|| {
-                    format!(
-                        "dependency '{}' declares skilllist source but misses skilllist config / 依赖 '{}' 声明了 skilllist 来源但缺少配置",
-                        dependency_name, dependency_name
-                    )
+                    format!("dependency '{}' declares skilllist source but misses skilllist config", dependency_name)
                 })?;
                 let index_file = self.fetch_skilllist_index(&skilllist.url)?;
                 let package_manifest = index_file
                     .packages
                     .get(&skilllist.package)
                     .ok_or_else(|| {
-                        format!(
-                            "dependency '{}' cannot find package '{}' in skilllist / 依赖 '{}' 无法在 skilllist 中找到包 '{}'",
-                            dependency_name, skilllist.package, dependency_name, skilllist.package
-                        )
+                        format!("dependency '{}' cannot find package '{}' in skilllist", dependency_name, skilllist.package)
                     })?;
                 package_manifest
                     .packages
                     .get(platform_key)
                     .cloned()
                     .ok_or_else(|| {
-                        format!(
-                            "dependency '{}' skilllist package '{}' does not support platform '{}' / 依赖 '{}' 的 skilllist 包 '{}' 不支持平台 '{}'",
-                            dependency_name,
-                            skilllist.package,
-                            platform_key,
-                            dependency_name,
-                            skilllist.package,
-                            platform_key
-                        )
+                        format!("dependency '{}' skilllist package '{}' does not support platform '{}'", dependency_name, skilllist.package, platform_key)
                     })?
             }
         };
@@ -355,16 +314,10 @@ impl DependencyManager {
         let download_url = match source_type {
             DependencySourceType::GithubRelease => {
                 let github_source = source.github.as_ref().ok_or_else(|| {
-                    format!(
-                        "dependency '{}' declares github_release source but misses github config / 依赖 '{}' 声明了 github_release 来源但缺少 github 配置",
-                        dependency_name, dependency_name
-                    )
+                    format!("dependency '{}' declares github_release source but misses github config", dependency_name)
                 })?;
                 let asset_name = resolved_package.asset_name.as_ref().ok_or_else(|| {
-                    format!(
-                        "dependency '{}' github package for platform '{}' must declare asset_name / 依赖 '{}' 的 GitHub 平台包 '{}' 必须声明 asset_name",
-                        dependency_name, platform_key, dependency_name, platform_key
-                    )
+                    format!("dependency '{}' github package for platform '{}' must declare asset_name", dependency_name, platform_key)
                 })?;
                 self.downloader.resolve_github_release_asset_url(
                     github_source,
@@ -376,10 +329,7 @@ impl DependencyManager {
                 .url
                 .clone()
                 .ok_or_else(|| {
-                    format!(
-                        "dependency '{}' platform '{}' must declare url / 依赖 '{}' 的平台 '{}' 必须声明 url",
-                        dependency_name, platform_key, dependency_name, platform_key
-                    )
+                    format!("dependency '{}' platform '{}' must declare url", dependency_name, platform_key)
                 })?,
         };
 
@@ -403,7 +353,7 @@ impl DependencyManager {
         })
     }
 
-    /// English: Remove dependencies owned by one uninstalled skill.
+    /// Remove dependencies owned by one uninstalled skill.
     /// 清理一个已卸载技能拥有的依赖。
     pub fn cleanup_uninstalled_skill_dependencies(
         &self,
@@ -430,7 +380,7 @@ impl DependencyManager {
         )
     }
 
-    /// English: Remove all private dependency roots for one uninstalled skill using an ordered root chain.
+    /// Remove all private dependency roots for one uninstalled skill using an ordered root chain.
     /// 使用有序根目录链为单个已卸载技能清理全部私有依赖根。
     pub fn cleanup_uninstalled_skill_dependencies_from_roots(
         &self,
@@ -443,7 +393,7 @@ impl DependencyManager {
         Ok(())
     }
 
-    /// English: Remove all skill-private dependency roots of one skill identifier.
+    /// Remove all skill-private dependency roots of one skill identifier.
     /// 删除单个技能标识符对应的全部技能私有依赖根目录。
     fn remove_skill_private_dependency_roots(&self, skill_id: &str) -> Result<(), String> {
         for root in [
@@ -459,17 +409,14 @@ impl DependencyManager {
         Ok(())
     }
 
-    /// English: Detect whether one dependency is already installed by checking all declared exports.
+    /// Detect whether one dependency is already installed by checking all declared exports.
     /// 通过检查全部声明的导出文件来判断单个依赖是否已经安装。
     fn detect_dependency(
         &self,
         request: &ResolvedDependencyRequest,
     ) -> Result<DependencyDetectionStatus, String> {
         if request.exports.is_empty() {
-            return Err(format!(
-                "dependency '{}' must declare at least one export / 依赖 '{}' 必须至少声明一个导出文件",
-                request.name, request.name
-            ));
+            return Err(format!("dependency '{}' must declare at least one export", request.name));
         }
 
         let all_present = request.exports.iter().all(|export| {
@@ -485,31 +432,25 @@ impl DependencyManager {
         })
     }
 
-    /// English: Fetch and parse one remote skilllist index file.
+    /// Fetch and parse one remote skilllist index file.
     /// 获取并解析单个远程 skilllist 索引文件。
     fn fetch_skilllist_index(&self, url: &str) -> Result<SkillListIndexFile, String> {
-        let cache_key = format!(
-            "skilllist-{}",
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(url)
-        );
+        let cache_key = format!("skilllist-{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(url));
         let cached_text = self.downloader.fetch_text(url, &cache_key)?;
         serde_yaml::from_str::<SkillListIndexFile>(&cached_text).map_err(|error| {
-            format!(
-                "failed to parse skilllist index {}: {} / 解析 skilllist 索引 {} 失败: {}",
-                url, error, url, error
-            )
+            format!("failed to parse skilllist index {}: {}", url, error)
         })
     }
 }
 
-/// English: Ensure one root directory exists before it is used by the dependency manager.
+/// Ensure one root directory exists before it is used by the dependency manager.
 /// 在依赖管理器使用某个根目录前确保其已经存在。
 pub fn ensure_directory(root: &Path) -> Result<(), String> {
     fs::create_dir_all(root)
         .map_err(|error| format!("Failed to create {}: {}", root.display(), error))
 }
 
-/// English: Build the final install root of one dependency according to its scope, name, version, and platform.
+/// Build the final install root of one dependency according to its scope, name, version, and platform.
 /// 根据依赖的作用域、名称、版本和平台构造最终安装根目录。
 fn build_dependency_install_root(
     root: &Path,
@@ -535,7 +476,7 @@ fn build_dependency_install_root(
     }
 }
 
-/// English: Normalize one dependency path component for stable cross-platform directory generation.
+/// Normalize one dependency path component for stable cross-platform directory generation.
 /// 归一化单个依赖路径片段，以生成稳定的跨平台目录结构。
 fn normalize_dependency_path_component(raw: &str) -> String {
     let mut output = String::with_capacity(raw.len());
