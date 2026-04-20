@@ -629,18 +629,6 @@ pub fn cleanup_orphaned_shared_dependencies(
     }
 }
 
-/// English: Build one fallback host-provided tool root under the skill directory parent.
-/// 在 skill 目录上级下构造一个兜底宿主工具根目录。
-pub fn fallback_tool_root(skill_base_dir: &Path) -> PathBuf {
-    skill_base_dir.join("__tools")
-}
-
-/// English: Build one fallback download cache root under the skill directory parent.
-/// 在 skill 目录上级下构造一个兜底下载缓存根目录。
-pub fn fallback_download_cache_root(skill_base_dir: &Path) -> PathBuf {
-    skill_base_dir.join("__download_cache")
-}
-
 /// English: Ensure one root directory exists before it is used by the dependency manager.
 /// 在依赖管理器使用某个根目录前确保其已经存在。
 pub fn ensure_directory(root: &Path) -> Result<(), String> {

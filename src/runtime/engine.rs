@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::dependency::manager::{
-    DependencyManager, DependencyManagerConfig, ensure_directory, fallback_download_cache_root,
+    DependencyManager, DependencyManagerConfig, ensure_directory,
 };
 use crate::host::callbacks::{
     RuntimeEntryRegistryDelta, RuntimeSkillLifecycleEvent,
@@ -1471,20 +1471,25 @@ impl LuaEngine {
         &self,
         skill_root: &RuntimeSkillRoot,
     ) -> Result<DependencyManagerConfig, String> {
+        let runtime_root = skill_root
+            .skills_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| skill_root.skills_dir.clone());
         let dependency_root = self.dependency_root_for(skill_root);
         let tool_root = dependency_root.join("tools");
         let host_tool_root = self
             .host_options
             .host_provided_tool_root
             .clone()
-            .unwrap_or_else(|| skill_root.skills_dir.join("__host_tools"));
+            .unwrap_or_else(|| runtime_root.join("bin").join("tools"));
         let lua_root = dependency_root.join("lua");
         let host_lua_root = self
             .host_options
             .host_provided_lua_root
             .clone()
             .or_else(|| self.host_options.lua_packages_dir.clone())
-            .unwrap_or_else(|| skill_root.skills_dir.join("__host_lua"));
+            .unwrap_or_else(|| runtime_root.join("lua_packages"));
         let ffi_root = dependency_root.join("ffi");
         let host_ffi_root = self
             .host_options
@@ -1502,12 +1507,12 @@ impl LuaEngine {
                     .as_ref()
                     .and_then(|path| path.parent().map(Path::to_path_buf))
             })
-            .unwrap_or_else(|| skill_root.skills_dir.join("__host_ffi"));
+            .unwrap_or_else(|| runtime_root.join("libs"));
         let download_cache_root = self
             .host_options
             .download_cache_root
             .clone()
-            .unwrap_or_else(|| fallback_download_cache_root(&self.state_root_for(skill_root)));
+            .unwrap_or_else(|| runtime_root.join("temp").join("downloads"));
 
         ensure_directory(&tool_root)?;
         ensure_directory(&host_tool_root)?;
@@ -2530,11 +2535,12 @@ impl LuaEngine {
                 .clone();
 
             Some(
-                host.register_skill(&meta.name, dir, effective_lancedb)
+                host.register_skill(meta.effective_skill_id(), dir, effective_lancedb)
                     .map_err(|error| {
                         format!(
                             "Failed to register LanceDB for skill {} / 为 skill 注册 LanceDB 失败: {}",
-                            meta.name, error
+                            meta.effective_skill_id(),
+                            error
                         )
                     })?,
             )
@@ -2562,11 +2568,12 @@ impl LuaEngine {
                 .clone();
 
             Some(
-                host.register_skill(&meta.name, dir, effective_sqlite)
+                host.register_skill(meta.effective_skill_id(), dir, effective_sqlite)
                     .map_err(|error| {
                         format!(
                             "Failed to register SQLite for skill {} / 为 skill 注册 SQLite 失败: {}",
-                            meta.name, error
+                            meta.effective_skill_id(),
+                            error
                         )
                     })?,
             )
@@ -2575,7 +2582,7 @@ impl LuaEngine {
         };
 
         self.skills.insert(
-            meta.name.clone(),
+            meta.effective_skill_id().to_string(),
             LoadedSkill {
                 meta,
                 dir: dir.to_path_buf(),
