@@ -115,6 +115,30 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 - `vulcan.lancedb.*`
 - `vulcan.runtime.*`
 
+### Skill 依赖路径注入
+
+运行时还会为当前正在执行的 skill 注入标准依赖根路径：
+
+- `vulcan.deps.tools_path`
+- `vulcan.deps.lua_path`
+- `vulcan.deps.ffi_path`
+
+这些路径由宿主根据当前 skill 所在空间与依赖目录规则计算后注入。  
+skill 应该：
+
+- 使用 `vulcan.context.*` 查找自身代码、帮助和资源
+- 使用 `vulcan.deps.*` 查找当前 skill 的工具、Lua 依赖和 FFI 依赖
+
+skill **不应该**：
+
+- 通过 `..` 反推 runtime 根目录
+- 猜测宿主目录名是否叫 `dependencies`、`deps`、`bin/tools`
+- 自己拼接其他 skill 的依赖路径
+
+一句话说：
+
+**skill 只能依赖协议暴露的路径，不应该依赖宿主的物理目录实现细节。**
+
 ### System 侧能力
 
 当前已成形的 system 真相能力包括：

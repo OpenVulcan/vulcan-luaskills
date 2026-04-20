@@ -929,6 +929,77 @@ fn populate_vulcan_file_context(
     Ok(())
 }
 
+/// Populate the current skill dependency roots onto `vulcan.deps`.
+/// 将当前技能依赖根路径注入到 `vulcan.deps` 中。
+fn populate_vulcan_dependency_context(
+    lua: &Lua,
+    host_options: &LuaRuntimeHostOptions,
+    skill_dir: Option<&Path>,
+    skill_id: Option<&str>,
+) -> Result<(), String> {
+    let deps = get_vulcan_deps_table(lua)?;
+
+    let clear_paths = || -> Result<(), String> {
+        deps.set("tools_path", LuaValue::Nil)
+            .map_err(|error| format!("Failed to clear vulcan.deps.tools_path: {}", error))?;
+        deps.set("lua_path", LuaValue::Nil)
+            .map_err(|error| format!("Failed to clear vulcan.deps.lua_path: {}", error))?;
+        deps.set("ffi_path", LuaValue::Nil)
+            .map_err(|error| format!("Failed to clear vulcan.deps.ffi_path: {}", error))?;
+        Ok(())
+    };
+
+    let Some(skill_dir) = skill_dir else {
+        return clear_paths();
+    };
+    let Some(skill_id) = skill_id.filter(|value| !value.trim().is_empty()) else {
+        return clear_paths();
+    };
+
+    let skills_root = skill_dir.parent().ok_or_else(|| {
+        format!(
+            "Failed to derive skills root from skill directory {}",
+            skill_dir.display()
+        )
+    })?;
+    let runtime_root = skills_root.parent().ok_or_else(|| {
+        format!(
+            "Failed to derive runtime root from skill directory {}",
+            skill_dir.display()
+        )
+    })?;
+    let dependency_root = runtime_root.join(host_options.dependency_dir_name.as_str());
+
+    deps.set(
+        "tools_path",
+        dependency_root
+            .join("tools")
+            .join(skill_id)
+            .to_string_lossy()
+            .to_string(),
+    )
+    .map_err(|error| format!("Failed to set vulcan.deps.tools_path: {}", error))?;
+    deps.set(
+        "lua_path",
+        dependency_root
+            .join("lua")
+            .join(skill_id)
+            .to_string_lossy()
+            .to_string(),
+    )
+    .map_err(|error| format!("Failed to set vulcan.deps.lua_path: {}", error))?;
+    deps.set(
+        "ffi_path",
+        dependency_root
+            .join("ffi")
+            .join(skill_id)
+            .to_string_lossy()
+            .to_string(),
+    )
+    .map_err(|error| format!("Failed to set vulcan.deps.ffi_path: {}", error))?;
+    Ok(())
+}
+
 /// Capture the internal execution markers currently stored on `vulcan`.
 /// 捕获当前存放在 `vulcan` 上的内部执行标记。
 fn capture_vulcan_internal_execution_context(
@@ -1041,6 +1112,15 @@ fn get_vulcan_context_table(lua: &Lua) -> Result<Table, String> {
     vulcan
         .get("context")
         .map_err(|error| format!("Failed to get vulcan.context: {}", error))
+}
+
+/// Return the nested `vulcan.deps` Lua table.
+/// 返回嵌套的 `vulcan.deps` Lua 表。
+fn get_vulcan_deps_table(lua: &Lua) -> Result<Table, String> {
+    let vulcan = get_vulcan_table(lua)?;
+    vulcan
+        .get("deps")
+        .map_err(|error| format!("Failed to get vulcan.deps: {}", error))
 }
 
 /// Return the nested `vulcan.runtime` Lua table.
@@ -2402,6 +2482,7 @@ impl LuaEngine {
             &lua,
             &self.skills,
             &self.entry_registry,
+            self.host_options.clone(),
             self.lancedb_host.clone(),
             self.sqlite_host.clone(),
         )?;
@@ -3464,6 +3545,12 @@ impl LuaEngine {
         )?;
         let entry_path = tool_entry_path(&skill.dir, tool);
         populate_vulcan_file_context(lua, Some(&skill.dir), Some(&entry_path))?;
+        populate_vulcan_dependency_context(
+            lua,
+            self.host_options.as_ref(),
+            Some(&skill.dir),
+            Some(skill.meta.effective_skill_id()),
+        )?;
         Self::populate_vulcan_lancedb_context(
             lua,
             skill.lancedb_binding.clone(),
@@ -3503,6 +3590,7 @@ impl LuaEngine {
             &VulcanInternalExecutionContext::default(),
         )?;
         populate_vulcan_file_context(lua, None, None)?;
+        populate_vulcan_dependency_context(lua, self.host_options.as_ref(), None, None)?;
         Self::populate_vulcan_lancedb_context(lua, None, None)?;
         Self::populate_vulcan_sqlite_context(lua, None, None)?;
         call_result
@@ -3523,6 +3611,7 @@ impl LuaEngine {
             &VulcanInternalExecutionContext::default(),
         )?;
         populate_vulcan_file_context(lua, None, None)?;
+        populate_vulcan_dependency_context(lua, self.host_options.as_ref(), None, None)?;
         Self::populate_vulcan_lancedb_context(lua, None, None)?;
         Self::populate_vulcan_sqlite_context(lua, None, None)?;
 
@@ -3550,6 +3639,7 @@ impl LuaEngine {
             &VulcanInternalExecutionContext::default(),
         )?;
         populate_vulcan_file_context(lua, None, None)?;
+        populate_vulcan_dependency_context(lua, self.host_options.as_ref(), None, None)?;
         Self::populate_vulcan_lancedb_context(lua, None, None)?;
         Self::populate_vulcan_sqlite_context(lua, None, None)?;
         run_result
@@ -3662,6 +3752,7 @@ impl LuaEngine {
             &lua,
             &self.skills,
             &self.entry_registry,
+            self.host_options.clone(),
             self.lancedb_host.clone(),
             self.sqlite_host.clone(),
         )
@@ -4084,6 +4175,12 @@ end
             },
         )?;
         populate_vulcan_file_context(lua, Some(&skill.dir), Some(&helper_path))?;
+        populate_vulcan_dependency_context(
+            lua,
+            self.host_options.as_ref(),
+            Some(&skill.dir),
+            Some(skill.meta.effective_skill_id()),
+        )?;
         Self::populate_vulcan_lancedb_context(
             lua,
             skill.lancedb_binding.clone(),
@@ -4129,6 +4226,7 @@ end
         Self::populate_vulcan_request_context(lua, None)?;
         populate_vulcan_internal_execution_context(lua, &VulcanInternalExecutionContext::default())?;
         populate_vulcan_file_context(lua, None, None)?;
+        populate_vulcan_dependency_context(lua, self.host_options.as_ref(), None, None)?;
         Self::populate_vulcan_lancedb_context(lua, None, None)?;
         Self::populate_vulcan_sqlite_context(lua, None, None)?;
         rendered_result
@@ -4139,6 +4237,7 @@ end
         lua: &Lua,
         skills_map: &HashMap<String, LoadedSkill>,
         entry_registry: &BTreeMap<String, ResolvedEntryTarget>,
+        host_options: Arc<LuaRuntimeHostOptions>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
         sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<(), String> {
@@ -4295,6 +4394,13 @@ end
                     Some(Path::new(&dispatch_entry.entry_path)),
                 )
                 .map_err(mlua::Error::runtime)?;
+                populate_vulcan_dependency_context(
+                    lua,
+                    host_options.as_ref(),
+                    Some(Path::new(&dispatch_entry.owner_skill_dir)),
+                    Some(owner_skill_name.as_str()),
+                )
+                .map_err(mlua::Error::runtime)?;
                 Self::populate_vulcan_lancedb_context(
                     lua,
                     target_binding,
@@ -4363,6 +4469,13 @@ end
                     lua,
                     previous_file_context.0.as_deref().map(Path::new),
                     previous_file_context.2.as_deref().map(Path::new),
+                )
+                .map_err(mlua::Error::runtime)?;
+                populate_vulcan_dependency_context(
+                    lua,
+                    host_options.as_ref(),
+                    previous_file_context.0.as_deref().map(Path::new),
+                    previous_internal_context.skill_name.as_deref(),
                 )
                 .map_err(mlua::Error::runtime)?;
                 call_result
@@ -4466,6 +4579,7 @@ end
         let json = lua.create_table()?;
         let cache = lua.create_table()?;
         let context = lua.create_table()?;
+        let deps = lua.create_table()?;
 
         let runtime_log_fn = lua.create_function(|_, (level, msg): (LuaValue, LuaValue)| {
             let level = require_string_arg(level, "runtime.log", "level", false)?;
@@ -4665,6 +4779,9 @@ end
         context.set("skill_dir", LuaValue::Nil)?;
         context.set("entry_dir", LuaValue::Nil)?;
         context.set("entry_file", LuaValue::Nil)?;
+        deps.set("tools_path", LuaValue::Nil)?;
+        deps.set("lua_path", LuaValue::Nil)?;
+        deps.set("ffi_path", LuaValue::Nil)?;
 
         let overflow_type = lua.create_table()?;
         overflow_type.set("truncate", "truncate")?;
@@ -4690,6 +4807,7 @@ end
         vulcan.set("json", json)?;
         vulcan.set("cache", cache)?;
         vulcan.set("context", context)?;
+        vulcan.set("deps", deps)?;
 
         lua.globals().set("vulcan", vulcan)?;
         Ok(())
