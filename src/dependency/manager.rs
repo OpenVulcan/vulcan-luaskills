@@ -1,7 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::collections::BTreeSet;
-
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
@@ -445,131 +443,6 @@ impl DependencyManager {
         Ok(())
     }
 
-    /// English: Return all shared dependency install roots declared by one manifest for the current platform.
-    /// 返回当前平台下由单个依赖清单声明的全部共享依赖安装根目录。
-    pub fn shared_dependency_roots_for_manifest(
-        &self,
-        skill_id: &str,
-        manifest: &SkillDependencyManifest,
-    ) -> Result<Vec<PathBuf>, String> {
-        let platform_key = current_platform_key();
-        if platform_key == "unknown" {
-            return Ok(Vec::new());
-        }
-        let mut roots = BTreeSet::new();
-        for dependency in &manifest.tool_dependencies {
-            if dependency.scope != DependencyScope::Shared {
-                continue;
-            }
-            if dependency.package_for_platform(platform_key).is_none() {
-                continue;
-            }
-            roots.insert(build_dependency_install_root(
-                &self.config.tool_root,
-                dependency.scope,
-                skill_id,
-                dependency.name.as_str(),
-                dependency.version.as_deref(),
-                platform_key,
-            ));
-        }
-        for dependency in &manifest.lua_dependencies {
-            if dependency.scope != DependencyScope::Shared {
-                continue;
-            }
-            if dependency.package_for_platform(platform_key).is_none() {
-                continue;
-            }
-            roots.insert(build_dependency_install_root(
-                &self.config.lua_root,
-                dependency.scope,
-                skill_id,
-                dependency.name.as_str(),
-                dependency.version.as_deref(),
-                platform_key,
-            ));
-        }
-        for dependency in &manifest.ffi_dependencies {
-            if dependency.scope != DependencyScope::Shared {
-                continue;
-            }
-            if dependency.package_for_platform(platform_key).is_none() {
-                continue;
-            }
-            roots.insert(build_dependency_install_root(
-                &self.config.ffi_root,
-                dependency.scope,
-                skill_id,
-                dependency.name.as_str(),
-                dependency.version.as_deref(),
-                platform_key,
-            ));
-        }
-        Ok(roots.into_iter().collect())
-    }
-
-    /// English: Scan the current effective skill set and collect all shared dependency install roots.
-    /// 扫描当前生效技能集合，并收集全部共享依赖安装根目录。
-    pub fn collect_live_shared_dependency_roots(
-        &self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
-    ) -> Result<BTreeSet<PathBuf>, String> {
-        let mut roots = Vec::new();
-        if let Some(override_dir) = override_dir {
-            roots.push(RuntimeSkillRoot {
-                name: "OVERRIDE".to_string(),
-                skills_dir: override_dir.to_path_buf(),
-            });
-        }
-        roots.push(RuntimeSkillRoot {
-            name: "ROOT".to_string(),
-            skills_dir: base_dir.to_path_buf(),
-        });
-        self.collect_live_shared_dependency_roots_from_roots(&roots)
-    }
-
-    /// English: Scan the current effective skill set and collect all shared dependency install roots from an ordered root chain.
-    /// 从有序根目录链扫描当前生效技能集合，并收集全部共享依赖安装根目录。
-    pub fn collect_live_shared_dependency_roots_from_roots(
-        &self,
-        skill_roots: &[RuntimeSkillRoot],
-    ) -> Result<BTreeSet<PathBuf>, String> {
-        let _ = skill_roots;
-        Ok(BTreeSet::new())
-    }
-
-/// English: Compatibility no-op kept while shared dependency installation is retired from LuaSkills.
-/// 在 LuaSkills 彻底退出共享依赖安装期间保留的兼容空操作。
-pub fn cleanup_orphaned_shared_dependencies(
-        &self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
-    ) -> Result<(), String> {
-        let mut roots = Vec::new();
-        if let Some(override_dir) = override_dir {
-            roots.push(RuntimeSkillRoot {
-                name: "OVERRIDE".to_string(),
-                skills_dir: override_dir.to_path_buf(),
-            });
-        }
-        roots.push(RuntimeSkillRoot {
-            name: "ROOT".to_string(),
-            skills_dir: base_dir.to_path_buf(),
-        });
-        self.cleanup_orphaned_shared_dependencies_from_roots(&roots)
-    }
-
-    /// English: Compatibility no-op kept while shared dependency installation is retired from LuaSkills.
-    /// 在 LuaSkills 彻底退出共享依赖安装期间保留的兼容空操作。
-    pub fn cleanup_orphaned_shared_dependencies_from_roots(
-        &self,
-        skill_roots: &[RuntimeSkillRoot],
-    ) -> Result<(), String> {
-        let _ = skill_roots;
-        Ok(())
-    }
-
     /// English: Remove all skill-private dependency roots of one skill identifier.
     /// 删除单个技能标识符对应的全部技能私有依赖根目录。
     fn remove_skill_private_dependency_roots(&self, skill_id: &str) -> Result<(), String> {
@@ -654,7 +527,7 @@ fn build_dependency_install_root(
             .join(normalized_name)
             .join(normalized_version)
             .join(normalized_platform),
-        DependencyScope::Shared | DependencyScope::Skill => root
+        DependencyScope::Skill => root
             .join(skill_id)
             .join(normalized_name)
             .join(normalized_version)

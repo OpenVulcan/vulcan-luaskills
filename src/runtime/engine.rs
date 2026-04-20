@@ -1729,9 +1729,6 @@ impl LuaEngine {
             return Ok(());
         }
 
-        let reference_root = self
-            .reference_skill_root(skill_roots)
-            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         for resolved_instance in collect_effective_skill_instances_from_roots(skill_roots)
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
         {
@@ -1770,14 +1767,6 @@ impl LuaEngine {
                 log_error(format!("[LuaSkill] Failed to load {}: {}", skill_name, e));
             }
         }
-
-        let dependency_manager = DependencyManager::new(
-            self.dependency_manager_config_for(reference_root)
-                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
-        );
-        dependency_manager
-            .cleanup_orphaned_shared_dependencies_from_roots(skill_roots)
-            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
 
         self.rebuild_entry_registry()
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;

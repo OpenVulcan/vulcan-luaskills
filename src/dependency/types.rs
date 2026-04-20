@@ -12,12 +12,11 @@ pub enum SkillDependencyKind {
     Ffi,
 }
 
-/// English: Install scope that decides whether one dependency is shared, skill-private, or host-provided.
-/// 决定单个依赖是共享、技能私有还是宿主提供的安装作用域。
+/// English: Install scope that decides whether one dependency is skill-private or host-provided.
+/// 决定单个依赖是技能私有还是宿主提供的安装作用域。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DependencyScope {
-    Shared,
     Skill,
     Host,
 }
