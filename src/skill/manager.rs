@@ -163,6 +163,9 @@ pub struct PreparedSkillUpdate {
     /// Updated install record that should be persisted only after runtime reload succeeds.
     /// 只有运行时重载成功后才应持久化的更新后安装记录。
     pub install_record: InstalledSkillRecord,
+    /// Previous install record that should be restored if the update commit partially fails.
+    /// 如果更新提交发生部分失败则需要恢复的旧安装记录。
+    pub previous_install_record: InstalledSkillRecord,
 }
 
 /// Optional database cleanup switches accepted by skill uninstall operations.
@@ -746,11 +749,12 @@ impl SkillManager {
                 ),
                 version: Some(asset.version),
                 source_type: Some(SkillInstallSourceType::Github),
-                source_locator: Some(record.source.locator),
+                source_locator: Some(record.source.locator.clone()),
             },
             target_dir,
             backup_dir,
             install_record: updated_record,
+            previous_install_record: record,
         }))
     }
 
@@ -848,11 +852,21 @@ impl SkillManager {
                 self.persist_install_record(&prepared_update.install_record)?;
                 if prepared_update.backup_dir.exists() {
                     fs::remove_dir_all(&prepared_update.backup_dir).map_err(|error| {
-                        format!(
-                            "Failed to remove update backup {}: {}",
-                            prepared_update.backup_dir.display(),
-                            error
-                        )
+                        let restore_error =
+                            self.persist_install_record(&prepared_update.previous_install_record);
+                        match restore_error {
+                            Ok(()) => format!(
+                                "Failed to remove update backup {}: previous install record was restored: {}",
+                                prepared_update.backup_dir.display(),
+                                error
+                            ),
+                            Err(restore_error) => format!(
+                                "Failed to remove update backup {}: {}. Failed to restore previous install record: {}",
+                                prepared_update.backup_dir.display(),
+                                error,
+                                restore_error
+                            ),
+                        }
                     })?;
                 }
                 Ok(prepared_update.result.clone())
