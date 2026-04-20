@@ -4616,12 +4616,18 @@ end
                         return Err(mlua::Error::runtime(format!("vulcan.call cannot invoke '{}' inside luaexec", dispatch_entry.display_name)));
                     }
                 }
-                let target_binding = lancedb_host
-                    .as_ref()
-                    .and_then(|host| host.binding_for_skill(owner_skill_name));
-                let target_sqlite_binding = sqlite_host
-                    .as_ref()
-                    .and_then(|host| host.binding_for_skill(owner_skill_name));
+                let target_binding = match lancedb_host.as_ref() {
+                    Some(host) => host
+                        .binding_for_skill(owner_skill_name)
+                        .map_err(mlua::Error::runtime)?,
+                    None => None,
+                };
+                let target_sqlite_binding = match sqlite_host.as_ref() {
+                    Some(host) => host
+                        .binding_for_skill(owner_skill_name)
+                        .map_err(mlua::Error::runtime)?,
+                    None => None,
+                };
                 let nested_invocation_context = LuaInvocationContext::new(
                     current_request_context,
                     current_client_budget,
@@ -4675,14 +4681,20 @@ end
                 } else {
                     lancedb_host
                         .as_ref()
-                        .and_then(|host| host.binding_for_skill(&previous_skill_name))
+                        .map(|host| host.binding_for_skill(&previous_skill_name))
+                        .transpose()
+                        .map_err(mlua::Error::runtime)?
+                        .flatten()
                 };
                 let restore_sqlite_binding = if previous_sqlite_skill_name.trim().is_empty() {
                     None
                 } else {
                     sqlite_host
                         .as_ref()
-                        .and_then(|host| host.binding_for_skill(&previous_sqlite_skill_name))
+                        .map(|host| host.binding_for_skill(&previous_sqlite_skill_name))
+                        .transpose()
+                        .map_err(mlua::Error::runtime)?
+                        .flatten()
                 };
                 Self::populate_vulcan_lancedb_context(
                     lua,

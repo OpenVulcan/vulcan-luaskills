@@ -579,11 +579,12 @@ impl LanceDbSkillHost {
 
     /// Fetch a registered binding by skill name so Lua injection and cross-skill calls can restore context.
     /// 按 skill 名称获取已注册绑定，供 Lua 注入与跨 skill 调用恢复上下文使用。
-    pub fn binding_for_skill(&self, skill_name: &str) -> Option<Arc<LanceDbSkillBinding>> {
-        self.skills
+    pub fn binding_for_skill(&self, skill_name: &str) -> Result<Option<Arc<LanceDbSkillBinding>>, String> {
+        let skills = self
+            .skills
             .lock()
-            .ok()
-            .and_then(|skills| skills.get(skill_name).cloned())
+            .map_err(|_| "LanceDB skill binding registry lock poisoned".to_string())?;
+        Ok(skills.get(skill_name).cloned())
     }
 }
 
