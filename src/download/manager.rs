@@ -131,7 +131,15 @@ impl DownloadManager {
         let target_path = self.download(request)?;
         if let Err(error) = verify_file_sha256(&target_path, expected_sha256) {
             let _ = fs::remove_file(&target_path);
-            return Err(error);
+            let redownloaded_path = self.download(request)?;
+            if let Err(redownload_error) = verify_file_sha256(&redownloaded_path, expected_sha256) {
+                let _ = fs::remove_file(&redownloaded_path);
+                return Err(format!(
+                    "{}. Automatic redownload also failed checksum verification: {}",
+                    error, redownload_error
+                ));
+            }
+            return Ok(redownloaded_path);
         }
         Ok(target_path)
     }
