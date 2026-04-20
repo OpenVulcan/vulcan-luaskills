@@ -18,7 +18,7 @@ use crate::host::callbacks::{
 };
 use crate::entry_descriptor::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
 use crate::lancedb_host::{LanceDbSkillBinding, LanceDbSkillHost, disabled_skill_status_json};
-use crate::lua_skill::{SkillMeta, validate_luaskills_identifier};
+    use crate::lua_skill::{SkillMeta, validate_luaskills_identifier, validate_luaskills_version};
 use crate::runtime_context::{RuntimeClientInfo, RuntimeRequestContext};
 use crate::runtime_help::{RuntimeHelpDetail, RuntimeHelpNodeDescriptor, RuntimeSkillHelpDescriptor};
 use crate::runtime_options::{LuaInvocationContext, LuaRuntimeHostOptions, RuntimeSkillRoot};
@@ -2281,6 +2281,8 @@ impl LuaEngine {
         }
         validate_luaskills_identifier(meta.effective_skill_id(), "skill_id")
             .map_err(|error| format!("skill {}: {}", meta.name, error))?;
+        validate_luaskills_version(meta.version(), "version")
+            .map_err(|error| format!("skill {}: {}", meta.effective_skill_id(), error))?;
 
         if meta.entries.is_empty() {
             return Err(format!("skill {} must declare at least one entry", meta.name).into());
@@ -2534,6 +2536,7 @@ impl LuaEngine {
             .map(|skill| RuntimeSkillHelpDescriptor {
                 skill_id: skill.meta.effective_skill_id().to_string(),
                 skill_name: skill.meta.name.clone(),
+                skill_version: skill.meta.version().to_string(),
                 root_name: skill.root_name.clone(),
                 skill_dir: skill.dir.display().to_string(),
                 main: self.build_help_node_descriptor(skill, skill.meta.main_help(), true),
@@ -2588,6 +2591,7 @@ impl LuaEngine {
         Ok(Some(RuntimeHelpDetail {
             skill_id: skill.meta.effective_skill_id().to_string(),
             skill_name: skill.meta.name.clone(),
+            skill_version: skill.meta.version().to_string(),
             root_name: skill.root_name.clone(),
             skill_dir: skill.dir.display().to_string(),
             flow_name: descriptor.flow_name,
@@ -4810,8 +4814,8 @@ mod tests {
         local_entry_name: &str,
         lua_module: &str,
     ) -> LoadedSkill {
-        let mut meta: SkillMeta = serde_yaml::from_str(&format!("name: {skill_id}\nenable: true\ndebug: false\nentries:\n  - name: {local_entry_name}\n    lua_entry: runtime/test.lua\n    lua_module: {lua_module}\n"))
-        .expect("deserialize minimal skill meta");
+        let mut meta: SkillMeta = serde_yaml::from_str(&format!("name: {skill_id}\nversion: 0.1.0\nenable: true\ndebug: false\nentries:\n  - name: {local_entry_name}\n    lua_entry: runtime/test.lua\n    lua_module: {lua_module}\n"))
+            .expect("deserialize minimal skill meta");
         meta.bind_directory_skill_id(skill_id.to_string());
         LoadedSkill {
             meta,
@@ -4860,7 +4864,7 @@ mod tests {
         fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime dir");
         fs::write(
             skill_dir.join("skill.yaml"),
-            "name: vulcan-codekit\nskill_id: vulcan-codekit\nentries:\n  - name: ast-tree\n    lua_entry: runtime/test.lua\n    lua_module: vulcan-codekit.ast-tree\n",
+            "name: vulcan-codekit\nversion: 0.1.0\nskill_id: vulcan-codekit\nentries:\n  - name: ast-tree\n    lua_entry: runtime/test.lua\n    lua_module: vulcan-codekit.ast-tree\n",
         )
         .expect("write skill yaml");
         fs::write(skill_dir.join("runtime").join("test.lua"), "return 'ok'\n")

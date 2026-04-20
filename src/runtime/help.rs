@@ -28,6 +28,9 @@ pub struct RuntimeSkillHelpDescriptor {
     /// Human-readable internal skill name.
     /// 人类可读的内部 skill 名称。
     pub skill_name: String,
+    /// Semantic package version declared by the current skill.
+    /// 当前技能声明的语义化包版本。
+    pub skill_version: String,
     /// Named skill root that currently owns the effective help tree.
     /// 当前生效帮助树所属的命名技能根。
     pub root_name: String,
@@ -52,6 +55,9 @@ pub struct RuntimeHelpDetail {
     /// Human-readable internal skill name.
     /// 人类可读的内部 skill 名称。
     pub skill_name: String,
+    /// Semantic package version declared by the current skill.
+    /// 当前技能声明的语义化包版本。
+    pub skill_version: String,
     /// Named skill root that currently owns the resolved help node.
     /// 当前解析出的帮助节点所属的命名技能根。
     pub root_name: String,

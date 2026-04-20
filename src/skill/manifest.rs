@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use semver::Version;
 
 // ============================================================
 // Lua Skill metadata (loaded from skill.yaml only)
@@ -204,6 +205,9 @@ pub struct SkillMeta {
     /// Internal skill name, for example "vulcan-codekit".
     /// 内部 skill 名称，例如 "vulcan-codekit"。
     pub name: String,
+    /// Semantic package version declared by the current skill manifest.
+    /// 当前技能清单声明的语义化包版本。
+    pub version: String,
     /// Whether the current skill is allowed to load. Defaults to enabled when omitted.
     /// 当前 skill 是否允许被加载；省略时默认启用。
     #[serde(default = "default_skill_enable_flag")]
@@ -266,6 +270,18 @@ pub fn validate_luaskills_identifier(value: &str, label: &str) -> Result<(), Str
     Err(format!("{label} must match ^[a-z]([a-z0-9-]*[a-z0-9])?$"))
 }
 
+/// Validate one LuaSkills semantic version string and return an English error when it is invalid.
+/// 校验单个 LuaSkills 语义化版本字符串，并在非法时返回英文错误。
+pub fn validate_luaskills_version(value: &str, label: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} must not be empty"));
+    }
+    Version::parse(trimmed)
+        .map(|_| ())
+        .map_err(|error| format!("{label} must be a valid semantic version: {}", error))
+}
+
 /// Return the default enabled flag for one skill manifest.
 /// 返回单个技能清单的默认启用标记。
 fn default_skill_enable_flag() -> bool {
@@ -295,6 +311,12 @@ impl SkillMeta {
     /// 返回用于 canonical 入口名的生效 skill id。
     pub fn effective_skill_id(&self) -> &str {
         self.resolved_skill_id.trim()
+    }
+
+    /// Return the semantic package version declared by the current skill.
+    /// 返回当前技能声明的语义化包版本。
+    pub fn version(&self) -> &str {
+        self.version.trim()
     }
 
     /// Return whether the manifest itself allows the skill to load.
@@ -353,7 +375,9 @@ impl SkillMeta {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_luaskills_identifier, validate_luaskills_identifier};
+    use super::{
+        is_valid_luaskills_identifier, validate_luaskills_identifier, validate_luaskills_version,
+    };
 
     /// Verify that legal lowercase-hyphen identifiers are accepted.
     /// 验证合法的小写短横线标识符会被接受。
@@ -379,5 +403,16 @@ mod tests {
             assert!(!is_valid_luaskills_identifier(candidate));
             assert!(validate_luaskills_identifier(candidate, "skill_id").is_err());
         }
+    }
+
+    /// Verify that semantic package versions are accepted only when they parse cleanly.
+    /// 验证语义化包版本仅在可被正确解析时才会被接受。
+    #[test]
+    fn semantic_skill_versions_are_validated() {
+        assert!(validate_luaskills_version("0.1.0", "version").is_ok());
+        assert!(validate_luaskills_version("1.2.3-beta.1", "version").is_ok());
+        assert!(validate_luaskills_version("", "version").is_err());
+        assert!(validate_luaskills_version("v1.0.0", "version").is_err());
+        assert!(validate_luaskills_version("1", "version").is_err());
     }
 }
