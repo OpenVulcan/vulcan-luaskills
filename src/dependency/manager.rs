@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -16,15 +17,14 @@ use crate::skill::dependencies::{
     FfiDependencySpec, LuaDependencySpec, SkillDependencyManifest, SkillListIndexFile,
     ToolDependencySpec,
 };
-use crate::skill::manager::collect_effective_skill_instances_from_roots;
-use std::collections::BTreeSet;
+use crate::runtime_options::RuntimeSkillRoot;
 
 /// English: Dependency-manager configuration shared by dependency resolution and installation phases.
 /// 供依赖解析与安装阶段共享使用的依赖管理配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyManagerConfig {
-    /// English: Root directory used to install shared executable/tool dependencies.
-    /// 用于安装共享可执行工具依赖的根目录。
+    /// English: Root directory used to install skill-local executable/tool dependencies.
+    /// 用于安装技能本地可执行工具依赖的根目录。
     pub tool_root: PathBuf,
     /// English: Root directory used to probe host-provided executable/tool dependencies.
     /// 用于探测宿主提供可执行工具依赖的根目录。
@@ -405,8 +405,8 @@ impl DependencyManager {
         })
     }
 
-    /// English: Remove dependencies owned by one uninstalled skill and clean up unused shared dependencies using real-time manifest scans.
-    /// 清理一个已卸载技能拥有的依赖，并通过实时扫描清除不再使用的共享依赖。
+    /// English: Remove dependencies owned by one uninstalled skill.
+    /// 清理一个已卸载技能拥有的依赖。
     pub fn cleanup_uninstalled_skill_dependencies(
         &self,
         base_dir: &Path,
@@ -416,9 +416,15 @@ impl DependencyManager {
     ) -> Result<(), String> {
         let mut roots = Vec::new();
         if let Some(override_dir) = override_dir {
-            roots.push(override_dir.to_path_buf());
+            roots.push(RuntimeSkillRoot {
+                name: "OVERRIDE".to_string(),
+                skills_dir: override_dir.to_path_buf(),
+            });
         }
-        roots.push(base_dir.to_path_buf());
+        roots.push(RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: base_dir.to_path_buf(),
+        });
         self.cleanup_uninstalled_skill_dependencies_from_roots(
             &roots,
             removed_skill_id,
@@ -426,29 +432,16 @@ impl DependencyManager {
         )
     }
 
-    /// English: Remove all private dependency roots for one uninstalled skill and clean orphan shared roots using an ordered root chain.
-    /// 使用有序根目录链为单个已卸载技能清理全部私有依赖根，并清理孤立的共享依赖根。
+    /// English: Remove all private dependency roots for one uninstalled skill using an ordered root chain.
+    /// 使用有序根目录链为单个已卸载技能清理全部私有依赖根。
     pub fn cleanup_uninstalled_skill_dependencies_from_roots(
         &self,
-        skill_roots: &[PathBuf],
+        skill_roots: &[RuntimeSkillRoot],
         removed_skill_id: &str,
         removed_manifest: Option<&SkillDependencyManifest>,
     ) -> Result<(), String> {
         self.remove_skill_private_dependency_roots(removed_skill_id)?;
-        let Some(removed_manifest) = removed_manifest else {
-            return Ok(());
-        };
-        let remaining_shared_roots =
-            self.collect_live_shared_dependency_roots_from_roots(skill_roots)?;
-        for root in self.shared_dependency_roots_for_manifest(removed_skill_id, removed_manifest)? {
-            if remaining_shared_roots.contains(&root) {
-                continue;
-            }
-            if root.exists() {
-                fs::remove_dir_all(&root)
-                    .map_err(|error| format!("Failed to remove {}: {}", root.display(), error))?;
-            }
-        }
+        let _ = (skill_roots, removed_manifest);
         Ok(())
     }
 
@@ -524,9 +517,15 @@ impl DependencyManager {
     ) -> Result<BTreeSet<PathBuf>, String> {
         let mut roots = Vec::new();
         if let Some(override_dir) = override_dir {
-            roots.push(override_dir.to_path_buf());
+            roots.push(RuntimeSkillRoot {
+                name: "OVERRIDE".to_string(),
+                skills_dir: override_dir.to_path_buf(),
+            });
         }
-        roots.push(base_dir.to_path_buf());
+        roots.push(RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: base_dir.to_path_buf(),
+        });
         self.collect_live_shared_dependency_roots_from_roots(&roots)
     }
 
@@ -534,60 +533,40 @@ impl DependencyManager {
     /// 从有序根目录链扫描当前生效技能集合，并收集全部共享依赖安装根目录。
     pub fn collect_live_shared_dependency_roots_from_roots(
         &self,
-        skill_roots: &[PathBuf],
+        skill_roots: &[RuntimeSkillRoot],
     ) -> Result<BTreeSet<PathBuf>, String> {
-        let platform_key = current_platform_key();
-        if platform_key == "unknown" {
-            return Ok(BTreeSet::new());
-        }
-
-        let mut roots = BTreeSet::new();
-        for resolved_instance in collect_effective_skill_instances_from_roots(skill_roots)? {
-            let skill_id = resolved_instance.skill_id;
-            let skill_dir = resolved_instance.actual_dir;
-            let dependencies_path = skill_dir.join("dependencies.yaml");
-            if !dependencies_path.exists() {
-                continue;
-            }
-            let manifest = SkillDependencyManifest::load_from_path(&dependencies_path)?;
-            for root in self.shared_dependency_roots_for_manifest(&skill_id, &manifest)? {
-                roots.insert(root);
-            }
-        }
-        Ok(roots)
+        let _ = skill_roots;
+        Ok(BTreeSet::new())
     }
 
-    /// English: Remove orphan shared dependency directories by rescanning current live skills instead of trusting persisted state files.
-    /// 通过重新扫描当前生效技能删除孤立共享依赖目录，而不是依赖持久化状态文件。
-    pub fn cleanup_orphaned_shared_dependencies(
+/// English: Compatibility no-op kept while shared dependency installation is retired from LuaSkills.
+/// 在 LuaSkills 彻底退出共享依赖安装期间保留的兼容空操作。
+pub fn cleanup_orphaned_shared_dependencies(
         &self,
         base_dir: &Path,
         override_dir: Option<&Path>,
     ) -> Result<(), String> {
         let mut roots = Vec::new();
         if let Some(override_dir) = override_dir {
-            roots.push(override_dir.to_path_buf());
+            roots.push(RuntimeSkillRoot {
+                name: "OVERRIDE".to_string(),
+                skills_dir: override_dir.to_path_buf(),
+            });
         }
-        roots.push(base_dir.to_path_buf());
+        roots.push(RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: base_dir.to_path_buf(),
+        });
         self.cleanup_orphaned_shared_dependencies_from_roots(&roots)
     }
 
-    /// English: Remove orphan shared dependency directories by rescanning the current live root chain instead of trusting persisted state files.
-    /// 通过重新扫描当前生效根目录链删除孤立共享依赖目录，而不是依赖持久化状态文件。
+    /// English: Compatibility no-op kept while shared dependency installation is retired from LuaSkills.
+    /// 在 LuaSkills 彻底退出共享依赖安装期间保留的兼容空操作。
     pub fn cleanup_orphaned_shared_dependencies_from_roots(
         &self,
-        skill_roots: &[PathBuf],
+        skill_roots: &[RuntimeSkillRoot],
     ) -> Result<(), String> {
-        let live_shared_roots = self.collect_live_shared_dependency_roots_from_roots(skill_roots)?;
-        for root in self.enumerate_shared_dependency_install_roots()? {
-            if live_shared_roots.contains(&root) {
-                continue;
-            }
-            if root.exists() {
-                fs::remove_dir_all(&root)
-                    .map_err(|error| format!("Failed to remove {}: {}", root.display(), error))?;
-            }
-        }
+        let _ = skill_roots;
         Ok(())
     }
 
@@ -605,22 +584,6 @@ impl DependencyManager {
             }
         }
         Ok(())
-    }
-
-    /// English: Enumerate all currently installed shared dependency leaf directories across tool/lua/ffi roots.
-    /// 枚举当前在 tool/lua/ffi 根目录下已安装的全部共享依赖叶子目录。
-    fn enumerate_shared_dependency_install_roots(&self) -> Result<BTreeSet<PathBuf>, String> {
-        let mut roots = BTreeSet::new();
-        for shared_root in [&self.config.tool_root, &self.config.lua_root, &self.config.ffi_root] {
-            for dependency_dir in read_child_dirs(shared_root)? {
-                for version_dir in read_child_dirs(&dependency_dir)? {
-                    for platform_dir in read_child_dirs(&version_dir)? {
-                        roots.insert(platform_dir);
-                    }
-                }
-            }
-        }
-        Ok(roots)
     }
 
     /// English: Detect whether one dependency is already installed by checking all declared exports.
@@ -666,8 +629,8 @@ impl DependencyManager {
     }
 }
 
-/// English: Build one fallback shared tool root under the skill directory parent.
-/// 在 skill 目录上级下构造一个兜底共享工具根目录。
+/// English: Build one fallback host-provided tool root under the skill directory parent.
+/// 在 skill 目录上级下构造一个兜底宿主工具根目录。
 pub fn fallback_tool_root(skill_base_dir: &Path) -> PathBuf {
     skill_base_dir.join("__tools")
 }
@@ -699,11 +662,11 @@ fn build_dependency_install_root(
     let normalized_name = normalize_dependency_path_component(dependency_name);
     let normalized_platform = normalize_dependency_path_component(platform_key);
     match scope {
-        DependencyScope::Shared | DependencyScope::Host => root
+        DependencyScope::Host => root
             .join(normalized_name)
             .join(normalized_version)
             .join(normalized_platform),
-        DependencyScope::Skill => root
+        DependencyScope::Shared | DependencyScope::Skill => root
             .join(skill_id)
             .join(normalized_name)
             .join(normalized_version)
@@ -727,25 +690,4 @@ fn normalize_dependency_path_component(raw: &str) -> String {
     } else {
         output
     }
-}
-
-/// English: Read immediate child directories of one root path and skip files or missing roots.
-/// 读取单个根目录的直接子目录，并跳过文件或不存在的根目录。
-fn read_child_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut output = Vec::new();
-    for entry in fs::read_dir(root)
-        .map_err(|error| format!("Failed to read {}: {}", root.display(), error))?
-    {
-        let entry = entry.map_err(|error| format!("Failed to read child entry: {}", error))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("Failed to inspect child entry type: {}", error))?;
-        if file_type.is_dir() {
-            output.push(entry.path());
-        }
-    }
-    Ok(output)
 }

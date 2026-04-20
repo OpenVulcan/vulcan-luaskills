@@ -1679,17 +1679,21 @@ impl SqliteSkillHost {
                 )
             })?
             .to_string();
-        let db_root = self
-            .host_options
-            .sqlite_database_root
-            .as_ref()
-            .ok_or_else(|| {
-                format!(
-                    "SQLite root directory is not configured for skill {} / skill {} 缺少宿主注入的 SQLite 根目录",
-                    skill_name, skill_name
-                )
-            })?;
-        let db_dir = db_root.join(&skill_dir_name);
+        let skills_root = skill_dir.parent().ok_or_else(|| {
+            format!(
+                "invalid skill root for {} / 无法解析 skill 根目录: {}",
+                skill_name,
+                skill_dir.display()
+            )
+        })?;
+        let sidecar_root = skills_root
+            .parent()
+            .unwrap_or(skills_root)
+            .join(self.host_options.lifecycle_dir_name.as_str());
+        let db_dir = sidecar_root
+            .join("databases")
+            .join("sqlite")
+            .join(&skill_dir_name);
         std::fs::create_dir_all(&db_dir).map_err(|error| {
             format!(
                 "failed to create SQLite directory {}: {} / 创建 SQLite 目录失败: {}",

@@ -127,8 +127,8 @@ pub struct ToolDependencySpec {
     /// 当前依赖是否为技能加载所必需。
     #[serde(default = "default_required_dependency")]
     pub required: bool,
-    /// English: Install scope of the current dependency. Tool dependencies default to shared.
-    /// 当前依赖的安装作用域。工具依赖默认使用 shared。
+    /// English: Install scope of the current dependency. Tool dependencies default to skill-private.
+    /// 当前依赖的安装作用域。工具依赖默认使用 skill 私有作用域。
     #[serde(default = "default_tool_dependency_scope")]
     pub scope: DependencyScope,
     /// English: Dependency source specification.
@@ -247,7 +247,7 @@ fn default_required_dependency() -> bool {
 /// English: Return the default install scope used by tool dependencies.
 /// 返回工具依赖默认使用的安装作用域。
 fn default_tool_dependency_scope() -> DependencyScope {
-    DependencyScope::Shared
+    DependencyScope::Skill
 }
 
 /// English: Return the default install scope used by Lua and FFI runtime-library dependencies.
@@ -310,7 +310,7 @@ mod tests {
         let yaml_text = r#"
 tool_dependencies:
   - name: ast-grep
-    scope: shared
+    scope: skill
     source:
       type: github_release
       github:
@@ -351,7 +351,7 @@ ffi_dependencies:
         assert_eq!(manifest.ffi_dependencies.len(), 1);
         assert_eq!(
             manifest.tool_dependencies[0].scope,
-            crate::dependency::types::DependencyScope::Shared
+            crate::dependency::types::DependencyScope::Skill
         );
         assert_eq!(
             manifest.lua_dependencies[0].scope,
@@ -395,7 +395,7 @@ ffi_dependencies:
             serde_yaml::from_str(yaml_text).expect("manifest should parse");
         assert_eq!(
             manifest.tool_dependencies[0].scope,
-            crate::dependency::types::DependencyScope::Shared
+            crate::dependency::types::DependencyScope::Skill
         );
         assert_eq!(
             manifest.lua_dependencies[0].scope,

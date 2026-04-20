@@ -24,6 +24,12 @@ pub struct RuntimeSkillLifecycleEvent {
     /// English: Skill identifier targeted by the current lifecycle operation.
     /// 当前生命周期操作对应的技能标识符。
     pub skill_id: String,
+    /// English: Optional named skill root that owns the effective target skill instance.
+    /// 拥有当前生效目标技能实例的可选命名技能根。
+    pub root_name: Option<String>,
+    /// English: Optional physical skill directory of the effective target skill instance.
+    /// 当前生效目标技能实例的可选物理技能目录。
+    pub skill_dir: Option<String>,
     /// English: High-level event status such as completed, failed, or blocked.
     /// 当前事件的高层状态，例如 completed、failed 或 blocked。
     pub status: String,

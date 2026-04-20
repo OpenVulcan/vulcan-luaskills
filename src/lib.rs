@@ -29,9 +29,10 @@ pub use skill::manager::{
     DisabledSkillRecord, ResolvedSkillInstance, SkillApplyResult, SkillInstallRequest,
     SkillLifecycleAction, SkillManager, SkillManagerConfig, SkillOperationPlane,
     SkillProtectionConfig, SkillUninstallOptions, SkillUninstallResult,
-    collect_effective_skill_instances, resolve_effective_skill_instance,
+    collect_effective_skill_instances, resolve_declared_skill_instance_from_roots,
+    resolve_effective_skill_instance,
 };
-pub use host::options::{LuaInvocationContext, LuaRuntimeHostOptions};
+pub use host::options::{LuaInvocationContext, LuaRuntimeHostOptions, RuntimeSkillRoot};
 
 pub use runtime::engine as lua_engine;
 pub use runtime::context as runtime_context;

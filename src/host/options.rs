@@ -5,6 +5,18 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use std::path::PathBuf;
 
+/// English: One named skill root injected by the host, used to build ordered override environments.
+/// 由宿主注入的单个命名技能根，用于构建有序覆盖环境。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct RuntimeSkillRoot {
+    /// English: Stable root name such as ROOT, USER, or one project identifier.
+    /// 稳定根名称，例如 ROOT、USER 或某个项目标识符。
+    pub name: String,
+    /// English: Physical skills directory represented by the current named root.
+    /// 当前命名根所代表的物理 skills 目录。
+    pub skills_dir: PathBuf,
+}
+
 /// English: Host-provided filesystem and runtime paths consumed by the LuaSkills library.
 /// 宿主提供给 LuaSkills 库消费的文件系统与运行时路径集合。
 #[derive(Debug, Clone, Default)]
@@ -21,30 +33,24 @@ pub struct LuaRuntimeHostOptions {
     /// English: Optional external program path used by `vulcan.runtime.lua.exec` subprocess mode.
     /// `vulcan.runtime.lua.exec` 子进程模式使用的可选外部程序路径。
     pub luaexec_program: Option<PathBuf>,
-    /// English: Host-managed root directory used for shared tool dependencies such as rg or ast-grep.
-    /// 宿主管理的共享工具依赖根目录，用于 rg 或 ast-grep 一类工具。
-    pub tool_dependency_root: Option<PathBuf>,
     /// English: Host-managed root directory used only to probe host-provided tool dependencies.
     /// 仅用于探测宿主提供工具依赖的宿主管理根目录。
     pub host_provided_tool_root: Option<PathBuf>,
-    /// English: Host-managed root directory used for Lua package dependencies.
-    /// 宿主管理的 Lua 包依赖根目录。
-    pub lua_dependency_root: Option<PathBuf>,
     /// English: Host-managed root directory used only to probe host-provided Lua package dependencies.
     /// 仅用于探测宿主提供 Lua 包依赖的宿主管理根目录。
     pub host_provided_lua_root: Option<PathBuf>,
-    /// English: Host-managed root directory used for FFI/native library dependencies.
-    /// 宿主管理的 FFI/原生库依赖根目录。
-    pub ffi_dependency_root: Option<PathBuf>,
     /// English: Host-managed root directory used only to probe host-provided FFI/native dependencies.
     /// 仅用于探测宿主提供 FFI/原生依赖的宿主管理根目录。
     pub host_provided_ffi_root: Option<PathBuf>,
     /// English: Host-managed cache directory used for downloaded archives and remote manifests.
     /// 宿主管理的下载缓存目录，用于归档文件和远程清单缓存。
     pub download_cache_root: Option<PathBuf>,
-    /// English: Host-managed directory used to persist skill enabled/disabled state markers.
-    /// 宿主管理的技能启用/停用状态标记目录。
-    pub skill_state_root: Option<PathBuf>,
+    /// English: Fixed sibling directory name used under one skill-root parent to store dependencies.
+    /// 在单个技能根父目录下存放依赖时使用的固定兄弟目录名称。
+    pub dependency_dir_name: String,
+    /// English: Fixed sibling directory name used under one skill-root parent to store lifecycle state and databases.
+    /// 在单个技能根父目录下存放生命周期状态与数据库时使用的固定兄弟目录名称。
+    pub lifecycle_dir_name: String,
     /// English: Host-provided protected skill identifiers reserved for the system plane.
     /// 由宿主提供、保留给 system 平面的受保护技能标识符。
     pub protection: SkillProtectionConfig,
@@ -63,12 +69,6 @@ pub struct LuaRuntimeHostOptions {
     /// English: Explicit LanceDB dynamic-library path owned by the host.
     /// 由宿主显式提供的 LanceDB 动态库路径。
     pub lancedb_library_path: Option<PathBuf>,
-    /// English: Host-managed root directory used to allocate one SQLite database per skill package.
-    /// 宿主管理的 SQLite 根目录，用于为每个 skill 包分配单独数据库。
-    pub sqlite_database_root: Option<PathBuf>,
-    /// English: Host-managed root directory used to allocate one LanceDB directory per skill package.
-    /// 宿主管理的 LanceDB 根目录，用于为每个 skill 包分配单独数据目录。
-    pub lancedb_database_root: Option<PathBuf>,
     /// English: Host-provided transient cache policy consumed by `vulcan.cache`.
     /// 由宿主提供并供 `vulcan.cache` 消费的临时缓存策略。
     pub cache_config: Option<ToolCacheConfig>,

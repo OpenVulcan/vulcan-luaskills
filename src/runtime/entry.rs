@@ -31,6 +31,12 @@ pub struct RuntimeEntryDescriptor {
     /// English: Stable local entry name declared by the skill.
     /// 由 skill 声明的稳定局部入口名称。
     pub local_name: String,
+    /// English: Named skill root that currently owns the effective skill instance.
+    /// 当前生效技能实例所属的命名技能根。
+    pub root_name: String,
+    /// English: Physical skill directory of the current effective skill instance.
+    /// 当前生效技能实例对应的物理技能目录。
+    pub skill_dir: String,
     /// English: Human-readable entry description.
     /// 人类可读的入口描述。
     pub description: String,

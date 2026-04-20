@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::host::options::RuntimeSkillRoot;
 use crate::lua_skill::validate_luaskills_identifier;
 
 /// English: Lifecycle operations that the LuaSkills manager layer exposes for one skill.
@@ -41,12 +42,12 @@ pub struct SkillProtectionConfig {
 /// 定义已安装技能及其状态存放位置的高层管理配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillManagerConfig {
-    /// English: Root directory where installed skill packages live.
-    /// 已安装 skill 包所在的根目录。
-    pub skill_root: PathBuf,
-    /// English: Root directory where enabled/disabled state markers are persisted.
-    /// 保存启用/停用状态标记的根目录。
-    pub state_root: PathBuf,
+    /// English: Named skill root whose lifecycle state is managed by the current manager instance.
+    /// 当前管理器实例所管理的命名技能根。
+    pub skill_root: RuntimeSkillRoot,
+    /// English: Root directory where lifecycle sidecar state of the current named skill root is persisted.
+    /// 当前命名技能根生命周期旁路状态的持久化根目录。
+    pub lifecycle_root: PathBuf,
     /// English: Host-owned protection policy that reserves core skill identifiers.
     /// 宿主拥有的保护策略，用于保留核心技能标识符。
     #[serde(default)]
@@ -128,6 +129,12 @@ pub struct ResolvedSkillInstance {
     /// English: Stable skill identifier resolved from the directory name.
     /// 从目录名称解析出的稳定技能标识符。
     pub skill_id: String,
+    /// English: Named skill root that currently owns the effective skill instance.
+    /// 当前生效技能实例所属的命名技能根。
+    pub root_name: String,
+    /// English: Physical skills root directory that currently owns the effective skill instance.
+    /// 当前生效技能实例所属的物理 skills 根目录。
+    pub skills_root: PathBuf,
     /// English: Physical skill directory that is currently effective for the resolved skill id.
     /// 当前针对该技能标识符实际生效的物理技能目录。
     pub actual_dir: PathBuf,
@@ -289,7 +296,7 @@ impl SkillManager {
         plane: SkillOperationPlane,
         skill_id: &str,
     ) -> Result<SkillUninstallResult, String> {
-        let skill_dir = self.config.skill_root.join(skill_id);
+        let skill_dir = self.config.skill_root.skills_dir.join(skill_id);
         self.uninstall_skill_at_path_in_plane(plane, skill_id, &skill_dir)
     }
 
@@ -330,6 +337,7 @@ impl SkillManager {
     pub fn install_skill(
         &self,
         plane: SkillOperationPlane,
+        skill_roots: &[RuntimeSkillRoot],
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, String> {
         let skill_id = request
@@ -339,8 +347,7 @@ impl SkillManager {
             .trim()
             .to_string();
         self.guard_operation(plane, SkillLifecycleAction::Install, &skill_id)?;
-        let skill_dir = self.config.skill_root.join(&skill_id);
-        if skill_dir.exists() {
+        if resolve_declared_skill_instance_from_roots(skill_roots, &skill_id)?.is_some() {
             return Ok(SkillApplyResult {
                 skill_id,
                 status: "already_installed".to_string(),
@@ -359,6 +366,7 @@ impl SkillManager {
     pub fn update_skill(
         &self,
         plane: SkillOperationPlane,
+        skill_roots: &[RuntimeSkillRoot],
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, String> {
         let skill_id = request
@@ -368,8 +376,7 @@ impl SkillManager {
             .trim()
             .to_string();
         self.guard_operation(plane, SkillLifecycleAction::Update, &skill_id)?;
-        let skill_dir = self.config.skill_root.join(&skill_id);
-        if !skill_dir.exists() {
+        if resolve_declared_skill_instance_from_roots(skill_roots, &skill_id)?.is_none() {
             return Ok(SkillApplyResult {
                 skill_id,
                 status: "missing_skill".to_string(),
@@ -386,19 +393,23 @@ impl SkillManager {
     /// English: Return the configured installed skill root.
     /// 返回当前配置中的已安装技能根目录。
     pub fn skill_root(&self) -> &Path {
-        &self.config.skill_root
+        &self.config.skill_root.skills_dir
     }
 
     /// English: Return the configured skill-state root.
     /// 返回当前配置中的技能状态根目录。
     pub fn state_root(&self) -> &Path {
-        &self.config.state_root
+        self.config.lifecycle_root.as_path()
     }
 
     /// English: Return the root directory used to store disabled-state markers.
     /// 返回用于存放停用状态标记的根目录。
     fn disabled_root(&self) -> PathBuf {
-        self.config.state_root.join("disabled")
+        self.config
+            .lifecycle_root
+            .join("state")
+            .join("skills")
+            .join("disabled")
     }
 
     /// English: Return the JSON state file path used by one disabled skill.
@@ -416,28 +427,34 @@ pub fn collect_effective_skill_instances(
 ) -> Result<Vec<ResolvedSkillInstance>, String> {
     let mut roots = Vec::new();
     if let Some(override_dir) = override_dir {
-        roots.push(override_dir.to_path_buf());
+        roots.push(RuntimeSkillRoot {
+            name: "OVERRIDE".to_string(),
+            skills_dir: override_dir.to_path_buf(),
+        });
     }
-    roots.push(base_dir.to_path_buf());
+    roots.push(RuntimeSkillRoot {
+        name: "ROOT".to_string(),
+        skills_dir: base_dir.to_path_buf(),
+    });
     collect_effective_skill_instances_from_roots(&roots)
 }
 
 /// English: Resolve the currently effective skill directories after applying ordered root precedence rules.
 /// 在应用有序根目录优先级规则后解析当前实际生效的技能目录集合。
 pub fn collect_effective_skill_instances_from_roots(
-    roots: &[PathBuf],
+    roots: &[RuntimeSkillRoot],
 ) -> Result<Vec<ResolvedSkillInstance>, String> {
     let mut all_skill_ids = BTreeSet::new();
     let mut root_maps = Vec::new();
     for root in roots {
-        let root_map = collect_named_skill_dirs(root)?;
+        let root_map = collect_named_skill_dirs(&root.skills_dir)?;
         all_skill_ids.extend(root_map.keys().cloned());
-        root_maps.push(root_map);
+        root_maps.push((root.clone(), root_map));
     }
 
     let mut resolved = Vec::new();
     for skill_id in all_skill_ids {
-        for root_map in &root_maps {
+        for (root, root_map) in &root_maps {
             let Some(skill_dir) = root_map.get(&skill_id) else {
                 continue;
             };
@@ -449,6 +466,8 @@ pub fn collect_effective_skill_instances_from_roots(
             }
             resolved.push(ResolvedSkillInstance {
                 skill_id: skill_id.clone(),
+                root_name: root.name.clone(),
+                skills_root: root.skills_dir.clone(),
                 actual_dir: skill_dir.clone(),
             });
             break;
@@ -473,13 +492,34 @@ pub fn resolve_effective_skill_instance(
 /// English: Resolve one effective skill instance by skill id from an ordered root chain.
 /// 从有序根目录覆盖链中按技能标识符解析单个生效技能实例。
 pub fn resolve_effective_skill_instance_from_roots(
-    roots: &[PathBuf],
+    roots: &[RuntimeSkillRoot],
     skill_id: &str,
 ) -> Result<Option<ResolvedSkillInstance>, String> {
     validate_luaskills_identifier(skill_id, "skill_id")?;
     Ok(collect_effective_skill_instances_from_roots(roots)?
         .into_iter()
         .find(|instance| instance.skill_id == skill_id))
+}
+
+/// English: Resolve the highest-priority declared skill directory by skill id without applying enable-state filtering.
+/// 在不应用启用状态过滤的前提下，按技能标识符解析最高优先级的已声明技能目录。
+pub fn resolve_declared_skill_instance_from_roots(
+    roots: &[RuntimeSkillRoot],
+    skill_id: &str,
+) -> Result<Option<ResolvedSkillInstance>, String> {
+    validate_luaskills_identifier(skill_id, "skill_id")?;
+    for root in roots {
+        let root_map = collect_named_skill_dirs(&root.skills_dir)?;
+        if let Some(actual_dir) = root_map.get(skill_id) {
+            return Ok(Some(ResolvedSkillInstance {
+                skill_id: skill_id.to_string(),
+                root_name: root.name.clone(),
+                skills_root: root.skills_dir.clone(),
+                actual_dir: actual_dir.clone(),
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// English: Read one root directory into a validated skill-id -> path map.
@@ -553,6 +593,7 @@ mod tests {
         SkillOperationPlane, SkillProtectionConfig, collect_effective_skill_instances,
         resolve_effective_skill_instance,
     };
+    use crate::runtime_options::RuntimeSkillRoot;
 
     /// English: Verify that disable/enable operations persist and clear state markers correctly.
     /// 验证停用/启用操作会正确持久化并清理状态标记。
@@ -565,9 +606,13 @@ mod tests {
         if temp_root.exists() {
             let _ = std::fs::remove_dir_all(&temp_root);
         }
+        let skill_root = temp_root.join("skills");
         let manager = SkillManager::new(SkillManagerConfig {
-            skill_root: temp_root.join("skills"),
-            state_root: temp_root.join("state"),
+            skill_root: RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: skill_root,
+            },
+            lifecycle_root: temp_root.join("__").join("ROOT"),
             protection: SkillProtectionConfig::default(),
         });
 
@@ -602,9 +647,13 @@ mod tests {
             "vulcan_luaskills_protection_test_{}",
             std::process::id()
         ));
+        let skill_root = temp_root.join("skills");
         let manager = SkillManager::new(SkillManagerConfig {
-            skill_root: temp_root.join("skills"),
-            state_root: temp_root.join("state"),
+            skill_root: RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: skill_root,
+            },
+            lifecycle_root: temp_root.join("__").join("ROOT"),
             protection: SkillProtectionConfig {
                 protected_skill_ids: vec!["vulcan-runtime".to_string()],
             },
@@ -635,10 +684,14 @@ mod tests {
             std::process::id()
         ));
         let skill_root = temp_root.join("skills");
+        let skill_roots = vec![RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: skill_root.clone(),
+        }];
         let _ = std::fs::create_dir_all(&skill_root);
         let manager = SkillManager::new(SkillManagerConfig {
-            skill_root: skill_root.clone(),
-            state_root: temp_root.join("state"),
+            skill_root: skill_roots[0].clone(),
+            lifecycle_root: temp_root.join("__").join("ROOT"),
             protection: SkillProtectionConfig {
                 protected_skill_ids: vec!["vulcan-runtime".to_string()],
             },
@@ -647,6 +700,7 @@ mod tests {
         assert!(manager
             .install_skill(
                 SkillOperationPlane::Skills,
+                &skill_roots,
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-runtime".to_string()),
                     source: None,
@@ -657,6 +711,7 @@ mod tests {
         let install_result = manager
             .install_skill(
                 SkillOperationPlane::Skills,
+                &skill_roots,
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-codekit".to_string()),
                     source: None,
@@ -669,6 +724,7 @@ mod tests {
         let update_result = manager
             .update_skill(
                 SkillOperationPlane::Skills,
+                &skill_roots,
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-codekit".to_string()),
                     source: None,
@@ -693,8 +749,11 @@ mod tests {
         }
         let skill_root = temp_root.join("skills");
         let manager = SkillManager::new(SkillManagerConfig {
-            skill_root: skill_root.clone(),
-            state_root: temp_root.join("state"),
+            skill_root: RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: skill_root.clone(),
+            },
+            lifecycle_root: temp_root.join("__").join("ROOT"),
             protection: SkillProtectionConfig::default(),
         });
         let _ = std::fs::create_dir_all(skill_root.join("vulcan-codekit"));

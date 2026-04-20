@@ -28,6 +28,12 @@ pub struct RuntimeSkillHelpDescriptor {
     /// English: Human-readable internal skill name.
     /// 人类可读的内部 skill 名称。
     pub skill_name: String,
+    /// English: Named skill root that currently owns the effective help tree.
+    /// 当前生效帮助树所属的命名技能根。
+    pub root_name: String,
+    /// English: Physical skill directory that currently owns the effective help tree.
+    /// 当前生效帮助树所属的物理技能目录。
+    pub skill_dir: String,
     /// English: Main help node summary.
     /// 主帮助节点摘要。
     pub main: RuntimeHelpNodeDescriptor,
@@ -46,6 +52,12 @@ pub struct RuntimeHelpDetail {
     /// English: Human-readable internal skill name.
     /// 人类可读的内部 skill 名称。
     pub skill_name: String,
+    /// English: Named skill root that currently owns the resolved help node.
+    /// 当前解析出的帮助节点所属的命名技能根。
+    pub root_name: String,
+    /// English: Physical skill directory that currently owns the resolved help node.
+    /// 当前解析出的帮助节点所属的物理技能目录。
+    pub skill_dir: String,
     /// English: Stable flow name. The main node always uses `main`.
     /// 稳定流程名称，主节点固定使用 `main`。
     pub flow_name: String,
