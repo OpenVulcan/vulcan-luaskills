@@ -117,6 +117,54 @@ pub struct SkillApplyResult {
     pub source_locator: Option<String>,
 }
 
+/// One staged install/update mutation that is not committed until runtime reload succeeds.
+/// 单个尚未提交的安装/更新变更，只有运行时重载成功后才会最终提交。
+#[derive(Debug, Clone)]
+pub enum PreparedSkillApply {
+    /// One immediate result that does not mutate disk state.
+    /// 一个不会修改磁盘状态的即时结果。
+    Immediate(SkillApplyResult),
+    /// One staged install mutation waiting for commit or rollback.
+    /// 一个等待提交或回滚的已暂存安装变更。
+    Install(PreparedSkillInstall),
+    /// One staged update mutation waiting for commit or rollback.
+    /// 一个等待提交或回滚的已暂存更新变更。
+    Update(PreparedSkillUpdate),
+}
+
+/// One staged install mutation prepared before the runtime reload is attempted.
+/// 在尝试运行时重载之前准备好的单次安装暂存变更。
+#[derive(Debug, Clone)]
+pub struct PreparedSkillInstall {
+    /// Structured install result returned after the staged install succeeds.
+    /// 暂存安装成功后返回的结构化安装结果。
+    pub result: SkillApplyResult,
+    /// Final target directory where the installed skill has been staged.
+    /// 已暂存安装技能的最终目标目录。
+    pub target_dir: PathBuf,
+    /// Install record that should be persisted only after runtime reload succeeds.
+    /// 只有运行时重载成功后才应持久化的安装记录。
+    pub install_record: InstalledSkillRecord,
+}
+
+/// One staged update mutation prepared before the runtime reload is attempted.
+/// 在尝试运行时重载之前准备好的单次更新暂存变更。
+#[derive(Debug, Clone)]
+pub struct PreparedSkillUpdate {
+    /// Structured update result returned after the staged update succeeds.
+    /// 暂存更新成功后返回的结构化更新结果。
+    pub result: SkillApplyResult,
+    /// Final target directory currently holding the staged new skill package.
+    /// 当前持有已暂存新技能包的最终目标目录。
+    pub target_dir: PathBuf,
+    /// Backup directory that still contains the previous skill package until commit completes.
+    /// 在提交完成前仍保存旧技能包的备份目录。
+    pub backup_dir: PathBuf,
+    /// Updated install record that should be persisted only after runtime reload succeeds.
+    /// 只有运行时重载成功后才应持久化的更新后安装记录。
+    pub install_record: InstalledSkillRecord,
+}
+
 /// Optional database cleanup switches accepted by skill uninstall operations.
 /// 技能卸载操作接受的可选数据库清理开关集合。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,28 +421,28 @@ impl SkillManager {
         })
     }
 
-    /// Preflight one install request and return a structured placeholder result.
-    /// 对单个安装请求执行预检查并返回结构化占位结果。
-    pub fn install_skill(
+    /// Prepare one install request and stage filesystem changes without committing the install record yet.
+    /// 预处理单个安装请求并暂存文件系统变更，但暂不提交安装记录。
+    pub fn prepare_install_skill(
         &self,
         plane: SkillOperationPlane,
         skill_roots: &[RuntimeSkillRoot],
         request: &SkillInstallRequest,
-    ) -> Result<SkillApplyResult, String> {
+    ) -> Result<PreparedSkillApply, String> {
         let skill_id = resolve_requested_skill_id(request)?;
         self.guard_operation(plane, SkillLifecycleAction::Install, &skill_id)?;
         if resolve_declared_skill_instance_from_roots(skill_roots, &skill_id)?.is_some() {
-            return Ok(SkillApplyResult {
+            return Ok(PreparedSkillApply::Immediate(SkillApplyResult {
                 skill_id,
                 status: "already_installed".to_string(),
                 message: "skill already exists; use update to evaluate upgrade behavior".to_string(),
                 version: None,
                 source_type: None,
                 source_locator: None,
-            });
+            }));
         }
         match request.source_type {
-            SkillInstallSourceType::Github => self.install_skill_from_github(&skill_id, request),
+            SkillInstallSourceType::Github => self.prepare_install_skill_from_github(&skill_id, request),
             SkillInstallSourceType::Url => Err(
                 "managed URL install is not implemented yet; GitHub install is currently the only supported install source"
                     .to_string(),
@@ -402,36 +450,36 @@ impl SkillManager {
         }
     }
 
-    /// Preflight one update request and return a structured placeholder result.
-    /// 对单个更新请求执行预检查并返回结构化占位结果。
-    pub fn update_skill(
+    /// Prepare one update request and stage filesystem changes without committing the new install record yet.
+    /// 预处理单个更新请求并暂存文件系统变更，但暂不提交新的安装记录。
+    pub fn prepare_update_skill(
         &self,
         plane: SkillOperationPlane,
         skill_roots: &[RuntimeSkillRoot],
         request: &SkillInstallRequest,
-    ) -> Result<SkillApplyResult, String> {
+    ) -> Result<PreparedSkillApply, String> {
         let skill_id = resolve_requested_skill_id(request)?;
         self.guard_operation(plane, SkillLifecycleAction::Update, &skill_id)?;
         if resolve_declared_skill_instance_from_roots(skill_roots, &skill_id)?.is_none() {
-            return Ok(SkillApplyResult {
+            return Ok(PreparedSkillApply::Immediate(SkillApplyResult {
                 skill_id,
                 status: "missing_skill".to_string(),
                 message: "skill is not installed; use install first".to_string(),
                 version: None,
                 source_type: None,
                 source_locator: None,
-            });
+            }));
         }
-        self.update_github_managed_skill(&skill_id)
+        self.prepare_github_managed_skill_update(&skill_id)
     }
 
-    /// Install one skill package from the latest GitHub release of the declared repository.
-    /// 从声明仓库的最新 GitHub release 安装单个技能包。
-    fn install_skill_from_github(
+    /// Stage one skill package install from the latest GitHub release of the declared repository.
+    /// 从声明仓库的最新 GitHub release 暂存单个技能包安装。
+    fn prepare_install_skill_from_github(
         &self,
         skill_id: &str,
         request: &SkillInstallRequest,
-    ) -> Result<SkillApplyResult, String> {
+    ) -> Result<PreparedSkillApply, String> {
         let repo = normalize_github_repo_locator(
             request
                 .source
@@ -529,24 +577,26 @@ impl SkillManager {
             },
             installed_at_unix_ms: current_unix_millis(),
         };
-        self.persist_install_record(&record)?;
-
-        Ok(SkillApplyResult {
-            skill_id: skill_id.to_string(),
-            status: "installed".to_string(),
-            message: format!(
-                "skill '{}' version {} was installed from GitHub repository '{}'",
-                skill_id, asset.version, repo
-            ),
-            version: Some(asset.version),
-            source_type: Some(SkillInstallSourceType::Github),
-            source_locator: Some(repo),
-        })
+        Ok(PreparedSkillApply::Install(PreparedSkillInstall {
+            result: SkillApplyResult {
+                skill_id: skill_id.to_string(),
+                status: "installed".to_string(),
+                message: format!(
+                    "skill '{}' version {} was installed from GitHub repository '{}'",
+                    skill_id, asset.version, repo
+                ),
+                version: Some(asset.version),
+                source_type: Some(SkillInstallSourceType::Github),
+                source_locator: Some(repo),
+            },
+            target_dir,
+            install_record: record,
+        }))
     }
 
-    /// Update one managed GitHub-installed skill by comparing the latest release tag with the current installed version.
-    /// 通过比较最新 release 标签与当前已安装版本来更新单个 GitHub 受管技能。
-    fn update_github_managed_skill(&self, skill_id: &str) -> Result<SkillApplyResult, String> {
+    /// Stage one managed GitHub-installed skill update by comparing the latest release tag with the current installed version.
+    /// 通过比较最新 release 标签与当前已安装版本来暂存单个 GitHub 受管技能更新。
+    fn prepare_github_managed_skill_update(&self, skill_id: &str) -> Result<PreparedSkillApply, String> {
         let record = self
             .install_record(skill_id)?
             .ok_or_else(|| {
@@ -590,7 +640,7 @@ impl SkillManager {
             )
         })?;
         if latest_version <= current_version {
-            return Ok(SkillApplyResult {
+            return Ok(PreparedSkillApply::Immediate(SkillApplyResult {
                 skill_id: skill_id.to_string(),
                 status: "up_to_date".to_string(),
                 message: format!(
@@ -600,7 +650,7 @@ impl SkillManager {
                 version: Some(record.version),
                 source_type: Some(SkillInstallSourceType::Github),
                 source_locator: Some(record.source.locator),
-            });
+            }));
         }
 
         let archive_path = downloader.download(&crate::download::manager::DownloadRequest {
@@ -686,24 +736,22 @@ impl SkillManager {
             },
             installed_at_unix_ms: current_unix_millis(),
         };
-        if let Err(error) = self.persist_install_record(&updated_record) {
-            let _ = fs::remove_dir_all(&target_dir);
-            let _ = fs::rename(&backup_dir, &target_dir);
-            return Err(error);
-        }
-        let _ = fs::remove_dir_all(&backup_dir);
-
-        Ok(SkillApplyResult {
-            skill_id: skill_id.to_string(),
-            status: "updated".to_string(),
-            message: format!(
-                "skill '{}' was updated from version {} to {}",
-                skill_id, record.version, asset.version
-            ),
-            version: Some(asset.version),
-            source_type: Some(SkillInstallSourceType::Github),
-            source_locator: Some(record.source.locator),
-        })
+        Ok(PreparedSkillApply::Update(PreparedSkillUpdate {
+            result: SkillApplyResult {
+                skill_id: skill_id.to_string(),
+                status: "updated".to_string(),
+                message: format!(
+                    "skill '{}' was updated from version {} to {}",
+                    skill_id, record.version, asset.version
+                ),
+                version: Some(asset.version),
+                source_type: Some(SkillInstallSourceType::Github),
+                source_locator: Some(record.source.locator),
+            },
+            target_dir,
+            backup_dir,
+            install_record: updated_record,
+        }))
     }
 
     /// Return the configured installed skill root.
@@ -782,6 +830,76 @@ impl SkillManager {
         fs::remove_file(&path)
             .map_err(|error| format!("Failed to remove {}: {}", path.display(), error))?;
         Ok(true)
+    }
+
+    /// Persist the final install record and remove transitional backup data after runtime reload succeeds.
+    /// 在运行时重载成功后持久化最终安装记录，并移除过渡备份数据。
+    pub fn commit_prepared_skill_apply(
+        &self,
+        prepared: &PreparedSkillApply,
+    ) -> Result<SkillApplyResult, String> {
+        match prepared {
+            PreparedSkillApply::Immediate(result) => Ok(result.clone()),
+            PreparedSkillApply::Install(prepared_install) => {
+                self.persist_install_record(&prepared_install.install_record)?;
+                Ok(prepared_install.result.clone())
+            }
+            PreparedSkillApply::Update(prepared_update) => {
+                self.persist_install_record(&prepared_update.install_record)?;
+                if prepared_update.backup_dir.exists() {
+                    fs::remove_dir_all(&prepared_update.backup_dir).map_err(|error| {
+                        format!(
+                            "Failed to remove update backup {}: {}",
+                            prepared_update.backup_dir.display(),
+                            error
+                        )
+                    })?;
+                }
+                Ok(prepared_update.result.clone())
+            }
+        }
+    }
+
+    /// Roll back one staged install/update mutation after reload or commit fails.
+    /// 在重载或提交失败后回滚一次已暂存的安装或更新变更。
+    pub fn rollback_prepared_skill_apply(&self, prepared: &PreparedSkillApply) -> Result<(), String> {
+        match prepared {
+            PreparedSkillApply::Immediate(_) => Ok(()),
+            PreparedSkillApply::Install(prepared_install) => {
+                if prepared_install.target_dir.exists() {
+                    fs::remove_dir_all(&prepared_install.target_dir).map_err(|error| {
+                        format!(
+                            "Failed to roll back installed skill directory {}: {}",
+                            prepared_install.target_dir.display(),
+                            error
+                        )
+                    })?;
+                }
+                Ok(())
+            }
+            PreparedSkillApply::Update(prepared_update) => {
+                if prepared_update.target_dir.exists() {
+                    fs::remove_dir_all(&prepared_update.target_dir).map_err(|error| {
+                        format!(
+                            "Failed to remove staged updated skill directory {}: {}",
+                            prepared_update.target_dir.display(),
+                            error
+                        )
+                    })?;
+                }
+                if prepared_update.backup_dir.exists() {
+                    fs::rename(&prepared_update.backup_dir, &prepared_update.target_dir).map_err(|error| {
+                        format!(
+                            "Failed to restore backup {} into {}: {}",
+                            prepared_update.backup_dir.display(),
+                            prepared_update.target_dir.display(),
+                            error
+                        )
+                    })?;
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Build one downloader configured for managed install and update flows.
@@ -1206,7 +1324,7 @@ mod tests {
         });
 
         assert!(manager
-            .install_skill(
+            .prepare_install_skill(
                 SkillOperationPlane::Skills,
                 &skill_roots,
                 &SkillInstallRequest {
@@ -1218,7 +1336,7 @@ mod tests {
             .is_err());
 
         let install_result = manager
-            .install_skill(
+            .prepare_install_skill(
                 SkillOperationPlane::Skills,
                 &skill_roots,
                 &SkillInstallRequest {
@@ -1232,7 +1350,7 @@ mod tests {
 
         let _ = std::fs::create_dir_all(skill_root.join("vulcan-codekit"));
         let update_result = manager
-            .update_skill(
+            .prepare_update_skill(
                 SkillOperationPlane::Skills,
                 &skill_roots,
                 &SkillInstallRequest {

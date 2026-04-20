@@ -28,8 +28,9 @@ use crate::runtime_result::{
 };
 use crate::skill::dependencies::SkillDependencyManifest;
 use crate::skill::manager::{
-    SkillApplyResult, SkillInstallRequest, SkillManager, SkillManagerConfig, SkillOperationPlane,
-    SkillUninstallOptions, SkillUninstallResult, collect_effective_skill_instances_from_roots,
+    PreparedSkillApply, SkillApplyResult, SkillInstallRequest, SkillManager, SkillManagerConfig,
+    SkillOperationPlane, SkillUninstallOptions, SkillUninstallResult,
+    collect_effective_skill_instances_from_roots,
     resolve_declared_skill_instance_from_roots, resolve_effective_skill_instance_from_roots,
 };
 use crate::sqlite_host::{
@@ -2101,40 +2102,84 @@ impl LuaEngine {
         let manager = self
             .skill_manager_for(&target_root)
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-        let result = match action {
+        let prepared = match action {
             crate::skill::manager::SkillLifecycleAction::Install => manager
-                .install_skill(plane, skill_roots, request)
+                .prepare_install_skill(plane, skill_roots, request)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
             crate::skill::manager::SkillLifecycleAction::Update => manager
-                .update_skill(plane, skill_roots, request)
+                .prepare_update_skill(plane, skill_roots, request)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
             _ => unreachable!("unsupported apply action should have returned early"),
         };
-        if matches!(result.status.as_str(), "installed" | "updated") {
-            self.reload_from_roots(skill_roots)?;
-            if action == crate::skill::manager::SkillLifecycleAction::Update
-                && result.status == "updated"
-            {
-                let current_dependency_manifest =
-                    resolve_declared_skill_instance_from_roots(skill_roots, &result.skill_id)
-                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
-                        .and_then(|resolved| {
-                            self.load_skill_dependency_manifest(&resolved.actual_dir)
-                                .transpose()
-                        })
-                        .transpose()
-                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-                let dependency_manager = DependencyManager::new(
-                    self.dependency_manager_config_for(&target_root)
-                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
-                );
-                dependency_manager
-                    .cleanup_updated_skill_dependencies(
-                        &result.skill_id,
-                        previous_dependency_manifest.as_ref(),
-                        current_dependency_manifest.as_ref(),
+        let mut result = match &prepared {
+            PreparedSkillApply::Immediate(result) => result.clone(),
+            PreparedSkillApply::Install(_) | PreparedSkillApply::Update(_) => {
+                if let Err(reload_error) = self.reload_from_roots(skill_roots) {
+                    let rollback_error = manager.rollback_prepared_skill_apply(&prepared);
+                    let restore_error = self.reload_from_roots(skill_roots);
+                    let rollback_message = rollback_error
+                        .err()
+                        .map(|error| format!(" rollback failed: {}", error))
+                        .unwrap_or_default();
+                    let restore_message = restore_error
+                        .err()
+                        .map(|error| format!(" runtime restore failed: {}", error))
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "Failed to reload LuaSkills after {:?}: {}.{}{}",
+                        action, reload_error, rollback_message, restore_message
                     )
+                    .into());
+                }
+
+                let committed = manager
+                    .commit_prepared_skill_apply(&prepared)
+                    .map_err(|error| -> Box<dyn std::error::Error> {
+                        let rollback_error = manager.rollback_prepared_skill_apply(&prepared);
+                        let restore_error = self.reload_from_roots(skill_roots);
+                        let rollback_message = rollback_error
+                            .err()
+                            .map(|rollback| format!(" rollback failed: {}", rollback))
+                            .unwrap_or_default();
+                        let restore_message = restore_error
+                            .err()
+                            .map(|restore| format!(" runtime restore failed: {}", restore))
+                            .unwrap_or_default();
+                        format!(
+                            "Failed to finalize {:?}: {}.{}{}",
+                            action, error, rollback_message, restore_message
+                        )
+                        .into()
+                    })?;
+                committed
+            }
+        };
+        if action == crate::skill::manager::SkillLifecycleAction::Update
+            && result.status == "updated"
+        {
+            let current_dependency_manifest =
+                resolve_declared_skill_instance_from_roots(skill_roots, &result.skill_id)
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                    .and_then(|resolved| {
+                        self.load_skill_dependency_manifest(&resolved.actual_dir)
+                            .transpose()
+                    })
+                    .transpose()
                     .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            let dependency_manager = DependencyManager::new(
+                self.dependency_manager_config_for(&target_root)
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+            );
+            if let Err(error) = dependency_manager.cleanup_updated_skill_dependencies(
+                &result.skill_id,
+                previous_dependency_manifest.as_ref(),
+                current_dependency_manifest.as_ref(),
+            ) {
+                log_warn(format!(
+                    "[LuaSkills:update] Stale dependency cleanup warning for skill '{}': {}",
+                    result.skill_id, error
+                ));
+                result.message = format!("{} (warning: stale dependency cleanup failed: {})", result.message, error);
             }
         }
         let resolved_instance =
