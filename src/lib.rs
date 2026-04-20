@@ -32,6 +32,9 @@ pub use skill::manager::{
     collect_effective_skill_instances, resolve_declared_skill_instance_from_roots,
     resolve_effective_skill_instance,
 };
+pub use skill::source::{
+    InstalledSkillRecord, InstalledSkillSourceRecord, SkillInstallSourceType,
+};
 pub use host::options::{LuaInvocationContext, LuaRuntimeHostOptions, RuntimeSkillRoot};
 
 pub use runtime::engine as lua_engine;

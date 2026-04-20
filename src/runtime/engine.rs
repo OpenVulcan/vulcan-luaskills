@@ -1503,11 +1503,16 @@ impl LuaEngine {
     /// 为单个命名技能根构造技能管理器配置。
     fn skill_manager_for(&self, skill_root: &RuntimeSkillRoot) -> Result<SkillManager, String> {
         let state_root = self.state_root_for(skill_root);
+        let dependency_config = self.dependency_manager_config_for(skill_root)?;
         ensure_directory(&state_root)?;
         Ok(SkillManager::new(SkillManagerConfig {
             skill_root: skill_root.clone(),
             lifecycle_root: state_root,
             protection: self.host_options.protection.clone(),
+            download_cache_root: dependency_config.download_cache_root,
+            allow_network_download: dependency_config.allow_network_download,
+            github_base_url: dependency_config.github_base_url,
+            github_api_base_url: dependency_config.github_api_base_url,
         }))
     }
 
@@ -2012,9 +2017,44 @@ impl LuaEngine {
             return Err(format!("unsupported apply action {:?}", action)
             .into());
         }
-        let reference_root = self.reference_skill_root(skill_roots)?;
+        let target_root = match action {
+            crate::skill::manager::SkillLifecycleAction::Install => {
+                self.reference_skill_root(skill_roots)?.clone()
+            }
+            crate::skill::manager::SkillLifecycleAction::Update => {
+                let target_skill_id = request
+                    .skill_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .or_else(|| {
+                        request
+                            .source
+                            .as_deref()
+                            .and_then(|value| value.trim().rsplit('/').next())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned)
+                    })
+                    .ok_or_else(|| -> Box<dyn std::error::Error> {
+                        "update request requires skill_id or one derivable source".into()
+                    })?;
+                let resolved_instance =
+                    resolve_declared_skill_instance_from_roots(skill_roots, &target_skill_id)
+                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                        .ok_or_else(|| -> Box<dyn std::error::Error> {
+                            format!("skill '{}' is not installed", target_skill_id).into()
+                        })?;
+                RuntimeSkillRoot {
+                    name: resolved_instance.root_name,
+                    skills_dir: resolved_instance.skills_root,
+                }
+            }
+            _ => unreachable!("unsupported apply action should have returned early"),
+        };
         let manager = self
-            .skill_manager_for(reference_root)
+            .skill_manager_for(&target_root)
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         let result = match action {
             crate::skill::manager::SkillLifecycleAction::Install => manager
@@ -2025,6 +2065,9 @@ impl LuaEngine {
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
             _ => unreachable!("unsupported apply action should have returned early"),
         };
+        if matches!(result.status.as_str(), "installed" | "updated") {
+            self.reload_from_roots(skill_roots)?;
+        }
         let resolved_instance =
             resolve_declared_skill_instance_from_roots(skill_roots, &result.skill_id)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;

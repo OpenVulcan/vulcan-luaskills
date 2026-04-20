@@ -3,10 +3,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
+use crate::download::archive::extract_skill_package_zip;
+use crate::download::manager::{DownloadManager, DownloadManagerConfig};
 use crate::host::options::RuntimeSkillRoot;
-use crate::lua_skill::validate_luaskills_identifier;
+use crate::lua_skill::{SkillMeta, validate_luaskills_identifier, validate_luaskills_version};
+use crate::skill::source::{
+    InstalledSkillRecord, InstalledSkillSourceRecord, SkillInstallSourceType,
+};
 
 /// Lifecycle operations that the LuaSkills manager layer exposes for one skill.
 /// LuaSkills 管理层为单个技能公开的生命周期操作类型。
@@ -52,6 +58,20 @@ pub struct SkillManagerConfig {
     /// 宿主拥有的保护策略，用于保留核心技能标识符。
     #[serde(default)]
     pub protection: SkillProtectionConfig,
+    /// Root directory used to cache downloaded skill packages and remote manifests.
+    /// 用于缓存下载技能包与远程清单的根目录。
+    pub download_cache_root: PathBuf,
+    /// Whether managed skill install/update flows may access the network.
+    /// 受管技能安装/更新流程是否允许访问网络。
+    pub allow_network_download: bool,
+    /// Optional GitHub site base URL override used by managed GitHub installs.
+    /// 受管 GitHub 安装使用的可选 GitHub 站点基址覆盖。
+    #[serde(default)]
+    pub github_base_url: Option<String>,
+    /// Optional GitHub API base URL override used by managed GitHub installs.
+    /// 受管 GitHub 安装使用的可选 GitHub API 基址覆盖。
+    #[serde(default)]
+    pub github_api_base_url: Option<String>,
 }
 
 /// One install request accepted by the future LuaSkills manager entrypoints.
@@ -64,6 +84,10 @@ pub struct SkillInstallRequest {
     /// Optional raw source string such as URL or local directory.
     /// 例如 URL 或本地目录一类的可选原始来源字符串。
     pub source: Option<String>,
+    /// Source type used to interpret the source locator. Defaults to GitHub.
+    /// 用于解释来源定位值的来源类型，默认使用 GitHub。
+    #[serde(default)]
+    pub source_type: SkillInstallSourceType,
 }
 
 /// One install or update result returned by the skill manager.
@@ -79,6 +103,18 @@ pub struct SkillApplyResult {
     /// Human-readable explanation of the current result.
     /// 当前结果的人类可读解释文本。
     pub message: String,
+    /// Optional semantic version involved in the current install/update result.
+    /// 当前安装/更新结果涉及的可选语义化版本。
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Optional managed install source type involved in the current result.
+    /// 当前结果涉及的可选受管安装来源类型。
+    #[serde(default)]
+    pub source_type: Option<SkillInstallSourceType>,
+    /// Optional stable source locator involved in the current result.
+    /// 当前结果涉及的可选稳定来源定位值。
+    #[serde(default)]
+    pub source_locator: Option<String>,
 }
 
 /// Optional database cleanup switches accepted by skill uninstall operations.
@@ -172,7 +208,18 @@ impl SkillManager {
     /// 确保技能状态根目录及其子目录已经存在。
     pub fn ensure_state_layout(&self) -> Result<(), String> {
         fs::create_dir_all(self.disabled_root()).map_err(|error| {
-            format!("Failed to create disabled root {}: {}", self.disabled_root().display(), error)
+            format!(
+                "Failed to create disabled root {}: {}",
+                self.disabled_root().display(),
+                error
+            )
+        })?;
+        fs::create_dir_all(self.install_record_root()).map_err(|error| {
+            format!(
+                "Failed to create install-record root {}: {}",
+                self.install_record_root().display(),
+                error
+            )
         })
     }
 
@@ -310,6 +357,7 @@ impl SkillManager {
             false
         };
         self.enable_skill_in_plane(plane, skill_id)?;
+        let _ = self.remove_install_record(skill_id);
         Ok(SkillUninstallResult {
             skill_id: skill_id.to_string(),
             skill_removed,
@@ -333,25 +381,25 @@ impl SkillManager {
         skill_roots: &[RuntimeSkillRoot],
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, String> {
-        let skill_id = request
-            .skill_id
-            .as_deref()
-            .ok_or_else(|| "install request requires skill_id".to_string())?
-            .trim()
-            .to_string();
+        let skill_id = resolve_requested_skill_id(request)?;
         self.guard_operation(plane, SkillLifecycleAction::Install, &skill_id)?;
         if resolve_declared_skill_instance_from_roots(skill_roots, &skill_id)?.is_some() {
             return Ok(SkillApplyResult {
                 skill_id,
                 status: "already_installed".to_string(),
                 message: "skill already exists; use update to evaluate upgrade behavior".to_string(),
+                version: None,
+                source_type: None,
+                source_locator: None,
             });
         }
-        Ok(SkillApplyResult {
-            skill_id,
-            status: "not_implemented".to_string(),
-            message: "skill install flow is not implemented yet".to_string(),
-        })
+        match request.source_type {
+            SkillInstallSourceType::Github => self.install_skill_from_github(&skill_id, request),
+            SkillInstallSourceType::Url => Err(
+                "managed URL install is not implemented yet; GitHub install is currently the only supported install source"
+                    .to_string(),
+            ),
+        }
     }
 
     /// Preflight one update request and return a structured placeholder result.
@@ -362,24 +410,299 @@ impl SkillManager {
         skill_roots: &[RuntimeSkillRoot],
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, String> {
-        let skill_id = request
-            .skill_id
-            .as_deref()
-            .ok_or_else(|| "update request requires skill_id".to_string())?
-            .trim()
-            .to_string();
+        let skill_id = resolve_requested_skill_id(request)?;
         self.guard_operation(plane, SkillLifecycleAction::Update, &skill_id)?;
         if resolve_declared_skill_instance_from_roots(skill_roots, &skill_id)?.is_none() {
             return Ok(SkillApplyResult {
                 skill_id,
                 status: "missing_skill".to_string(),
                 message: "skill is not installed; use install first".to_string(),
+                version: None,
+                source_type: None,
+                source_locator: None,
             });
         }
+        self.update_github_managed_skill(&skill_id)
+    }
+
+    /// Install one skill package from the latest GitHub release of the declared repository.
+    /// 从声明仓库的最新 GitHub release 安装单个技能包。
+    fn install_skill_from_github(
+        &self,
+        skill_id: &str,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, String> {
+        let repo = normalize_github_repo_locator(
+            request
+                .source
+                .as_deref()
+                .ok_or_else(|| "github install requires source repository".to_string())?,
+        )?;
+        let repo_skill_id = github_repo_skill_id(&repo)?;
+        if repo_skill_id != skill_id {
+            return Err(format!(
+                "github repository '{}' resolves to skill_id '{}' but the request targets '{}'",
+                repo, repo_skill_id, skill_id
+            ));
+        }
+
+        let downloader = self.downloader();
+        let asset = downloader.resolve_github_release_asset(
+            &crate::skill::dependencies::GithubReleaseSourceSpec {
+                repo: repo.clone(),
+                tag_api: None,
+            },
+            &format!("{}-v{{version}}-skill.zip", skill_id),
+            None,
+        )?;
+        let archive_path = downloader.download(&crate::download::manager::DownloadRequest {
+            source_type: crate::dependency::types::DependencySourceType::GithubRelease,
+            source_locator: asset.download_url.clone(),
+            cache_key: managed_skill_cache_key(skill_id, asset.version.as_str()),
+        })?;
+
+        let install_temp_root = self
+            .config
+            .lifecycle_root
+            .join("install_tmp")
+            .join(format!("{}-{}", skill_id, current_unix_millis()));
+        if install_temp_root.exists() {
+            fs::remove_dir_all(&install_temp_root).map_err(|error| {
+                format!(
+                    "Failed to remove stale temp install root {}: {}",
+                    install_temp_root.display(),
+                    error
+                )
+            })?;
+        }
+        fs::create_dir_all(&install_temp_root).map_err(|error| {
+            format!(
+                "Failed to create temp install root {}: {}",
+                install_temp_root.display(),
+                error
+            )
+        })?;
+
+        let extracted_skill_dir =
+            extract_skill_package_zip(&archive_path, &install_temp_root, skill_id)?;
+        let installed_meta = read_skill_manifest_from_directory(&extracted_skill_dir)?;
+        if installed_meta.effective_skill_id() != skill_id {
+            return Err(format!(
+                "downloaded skill package resolves to skill_id '{}' instead of '{}'",
+                installed_meta.effective_skill_id(),
+                skill_id
+            ));
+        }
+        if installed_meta.version() != asset.version {
+            return Err(format!(
+                "downloaded skill package version '{}' does not match release version '{}'",
+                installed_meta.version(),
+                asset.version
+            ));
+        }
+
+        let target_dir = self.skill_root().join(skill_id);
+        if target_dir.exists() {
+            return Err(format!(
+                "target skill directory {} already exists",
+                target_dir.display()
+            ));
+        }
+        fs::rename(&extracted_skill_dir, &target_dir).map_err(|error| {
+            format!(
+                "Failed to move extracted skill {} into {}: {}",
+                extracted_skill_dir.display(),
+                target_dir.display(),
+                error
+            )
+        })?;
+        let _ = fs::remove_dir_all(&install_temp_root);
+
+        let record = InstalledSkillRecord {
+            skill_id: skill_id.to_string(),
+            version: asset.version.clone(),
+            managed: true,
+            source: InstalledSkillSourceRecord {
+                source_type: SkillInstallSourceType::Github,
+                locator: repo.clone(),
+                tag: Some(asset.tag_name.clone()),
+            },
+            installed_at_unix_ms: current_unix_millis(),
+        };
+        self.persist_install_record(&record)?;
+
         Ok(SkillApplyResult {
-            skill_id,
-            status: "not_implemented".to_string(),
-            message: "skill update flow is not implemented yet".to_string(),
+            skill_id: skill_id.to_string(),
+            status: "installed".to_string(),
+            message: format!(
+                "skill '{}' version {} was installed from GitHub repository '{}'",
+                skill_id, asset.version, repo
+            ),
+            version: Some(asset.version),
+            source_type: Some(SkillInstallSourceType::Github),
+            source_locator: Some(repo),
+        })
+    }
+
+    /// Update one managed GitHub-installed skill by comparing the latest release tag with the current installed version.
+    /// 通过比较最新 release 标签与当前已安装版本来更新单个 GitHub 受管技能。
+    fn update_github_managed_skill(&self, skill_id: &str) -> Result<SkillApplyResult, String> {
+        let record = self
+            .install_record(skill_id)?
+            .ok_or_else(|| {
+                format!(
+                    "skill '{}' is not managed by the install workflow; automatic update is unavailable",
+                    skill_id
+                )
+            })?;
+        if !record.managed {
+            return Err(format!(
+                "skill '{}' is not managed by the install workflow; automatic update is unavailable",
+                skill_id
+            ));
+        }
+        if record.source.source_type != SkillInstallSourceType::Github {
+            return Err(format!(
+                "skill '{}' uses source type '{:?}', but update currently supports only github",
+                skill_id, record.source.source_type
+            ));
+        }
+
+        let current_version = Version::parse(record.version.as_str()).map_err(|error| {
+            format!(
+                "installed version '{}' of skill '{}' is invalid: {}",
+                record.version, skill_id, error
+            )
+        })?;
+        let downloader = self.downloader();
+        let asset = downloader.resolve_github_release_asset(
+            &crate::skill::dependencies::GithubReleaseSourceSpec {
+                repo: record.source.locator.clone(),
+                tag_api: None,
+            },
+            &format!("{}-v{{version}}-skill.zip", skill_id),
+            None,
+        )?;
+        let latest_version = Version::parse(asset.version.as_str()).map_err(|error| {
+            format!(
+                "latest GitHub release version '{}' of skill '{}' is invalid: {}",
+                asset.version, skill_id, error
+            )
+        })?;
+        if latest_version <= current_version {
+            return Ok(SkillApplyResult {
+                skill_id: skill_id.to_string(),
+                status: "up_to_date".to_string(),
+                message: format!(
+                    "skill '{}' is already on version {}",
+                    skill_id, record.version
+                ),
+                version: Some(record.version),
+                source_type: Some(SkillInstallSourceType::Github),
+                source_locator: Some(record.source.locator),
+            });
+        }
+
+        let archive_path = downloader.download(&crate::download::manager::DownloadRequest {
+            source_type: crate::dependency::types::DependencySourceType::GithubRelease,
+            source_locator: asset.download_url.clone(),
+            cache_key: managed_skill_cache_key(skill_id, asset.version.as_str()),
+        })?;
+        let temp_root = self
+            .config
+            .lifecycle_root
+            .join("update_tmp")
+            .join(format!("{}-{}", skill_id, current_unix_millis()));
+        if temp_root.exists() {
+            fs::remove_dir_all(&temp_root).map_err(|error| {
+                format!(
+                    "Failed to remove stale temp update root {}: {}",
+                    temp_root.display(),
+                    error
+                )
+            })?;
+        }
+        fs::create_dir_all(&temp_root).map_err(|error| {
+            format!(
+                "Failed to create temp update root {}: {}",
+                temp_root.display(),
+                error
+            )
+        })?;
+        let extracted_skill_dir = extract_skill_package_zip(&archive_path, &temp_root, skill_id)?;
+        let updated_meta = read_skill_manifest_from_directory(&extracted_skill_dir)?;
+        if updated_meta.version() != asset.version {
+            return Err(format!(
+                "downloaded update package version '{}' does not match release version '{}'",
+                updated_meta.version(),
+                asset.version
+            ));
+        }
+
+        let target_dir = self.skill_root().join(skill_id);
+        if !target_dir.exists() {
+            return Err(format!(
+                "installed skill directory {} does not exist",
+                target_dir.display()
+            ));
+        }
+        let backup_dir = self
+            .config
+            .lifecycle_root
+            .join("update_backup")
+            .join(format!("{}-{}", skill_id, current_unix_millis()));
+        if let Some(parent) = backup_dir.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("Failed to create {}: {}", parent.display(), error)
+            })?;
+        }
+        fs::rename(&target_dir, &backup_dir).map_err(|error| {
+            format!(
+                "Failed to move current skill {} into backup {}: {}",
+                target_dir.display(),
+                backup_dir.display(),
+                error
+            )
+        })?;
+        if let Err(error) = fs::rename(&extracted_skill_dir, &target_dir) {
+            let _ = fs::rename(&backup_dir, &target_dir);
+            return Err(format!(
+                "Failed to move updated skill {} into {}: {}",
+                extracted_skill_dir.display(),
+                target_dir.display(),
+                error
+            ));
+        }
+        let _ = fs::remove_dir_all(&temp_root);
+
+        let updated_record = InstalledSkillRecord {
+            skill_id: skill_id.to_string(),
+            version: asset.version.clone(),
+            managed: true,
+            source: InstalledSkillSourceRecord {
+                source_type: SkillInstallSourceType::Github,
+                locator: record.source.locator.clone(),
+                tag: Some(asset.tag_name.clone()),
+            },
+            installed_at_unix_ms: current_unix_millis(),
+        };
+        if let Err(error) = self.persist_install_record(&updated_record) {
+            let _ = fs::remove_dir_all(&target_dir);
+            let _ = fs::rename(&backup_dir, &target_dir);
+            return Err(error);
+        }
+        let _ = fs::remove_dir_all(&backup_dir);
+
+        Ok(SkillApplyResult {
+            skill_id: skill_id.to_string(),
+            status: "updated".to_string(),
+            message: format!(
+                "skill '{}' was updated from version {} to {}",
+                skill_id, record.version, asset.version
+            ),
+            version: Some(asset.version),
+            source_type: Some(SkillInstallSourceType::Github),
+            source_locator: Some(record.source.locator),
         })
     }
 
@@ -393,6 +716,12 @@ impl SkillManager {
     /// 返回当前配置中的技能状态根目录。
     pub fn state_root(&self) -> &Path {
         self.config.lifecycle_root.as_path()
+    }
+
+    /// Return the root directory used to store managed install records.
+    /// 返回用于存放受管安装记录的根目录。
+    fn install_record_root(&self) -> PathBuf {
+        self.config.lifecycle_root.join("installs")
     }
 
     /// Return the root directory used to store disabled-state markers.
@@ -409,6 +738,177 @@ impl SkillManager {
     fn disabled_record_path(&self, skill_id: &str) -> PathBuf {
         self.disabled_root().join(format!("{}.json", skill_id))
     }
+
+    /// Return the YAML install-record path used by one managed skill.
+    /// 返回单个受管技能使用的 YAML 安装记录路径。
+    fn install_record_path(&self, skill_id: &str) -> PathBuf {
+        self.install_record_root().join(format!("{}.yaml", skill_id))
+    }
+
+    /// Read one managed install record from disk when it exists.
+    /// 在受管安装记录存在时从磁盘读取该记录。
+    pub fn install_record(&self, skill_id: &str) -> Result<Option<InstalledSkillRecord>, String> {
+        validate_luaskills_identifier(skill_id, "skill_id")?;
+        let path = self.install_record_path(skill_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let yaml = fs::read_to_string(&path)
+            .map_err(|error| format!("Failed to read {}: {}", path.display(), error))?;
+        let record: InstalledSkillRecord = serde_yaml::from_str(&yaml)
+            .map_err(|error| format!("Failed to parse {}: {}", path.display(), error))?;
+        Ok(Some(record))
+    }
+
+    /// Persist one managed install record to disk.
+    /// 将单个受管安装记录持久化到磁盘。
+    fn persist_install_record(&self, record: &InstalledSkillRecord) -> Result<(), String> {
+        self.ensure_state_layout()?;
+        let path = self.install_record_path(&record.skill_id);
+        let yaml = serde_yaml::to_string(record)
+            .map_err(|error| format!("Failed to serialize install record: {}", error))?;
+        fs::write(&path, yaml)
+            .map_err(|error| format!("Failed to write {}: {}", path.display(), error))
+    }
+
+    /// Remove one managed install record from disk and report whether it existed.
+    /// 从磁盘删除单个受管安装记录，并返回它是否存在。
+    fn remove_install_record(&self, skill_id: &str) -> Result<bool, String> {
+        validate_luaskills_identifier(skill_id, "skill_id")?;
+        let path = self.install_record_path(skill_id);
+        if !path.exists() {
+            return Ok(false);
+        }
+        fs::remove_file(&path)
+            .map_err(|error| format!("Failed to remove {}: {}", path.display(), error))?;
+        Ok(true)
+    }
+
+    /// Build one downloader configured for managed install and update flows.
+    /// 为受管安装与更新流程构造单个下载器。
+    fn downloader(&self) -> DownloadManager {
+        DownloadManager::new(DownloadManagerConfig {
+            cache_root: self.config.download_cache_root.clone(),
+            allow_network_download: self.config.allow_network_download,
+            github_base_url: self.config.github_base_url.clone(),
+            github_api_base_url: self.config.github_api_base_url.clone(),
+        })
+    }
+}
+
+/// Resolve the effective request skill id, deriving it from the source locator when needed.
+/// 解析当前请求的生效技能标识符，并在需要时从来源定位值派生。
+fn resolve_requested_skill_id(request: &SkillInstallRequest) -> Result<String, String> {
+    let explicit_skill_id = request
+        .skill_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let derived_skill_id = match request.source_type {
+        SkillInstallSourceType::Github => request
+            .source
+            .as_deref()
+            .map(normalize_github_repo_locator)
+            .transpose()?
+            .map(|repo| github_repo_skill_id(&repo))
+            .transpose()?,
+        SkillInstallSourceType::Url => None,
+    };
+    let skill_id = explicit_skill_id
+        .or(derived_skill_id)
+        .ok_or_else(|| "install/update request requires skill_id or one source that can derive it".to_string())?;
+    validate_luaskills_identifier(&skill_id, "skill_id")?;
+    Ok(skill_id)
+}
+
+/// Normalize one GitHub repository locator into `owner/repo` form.
+/// 将单个 GitHub 仓库定位值规范化为 `owner/repo` 形式。
+fn normalize_github_repo_locator(source: &str) -> Result<String, String> {
+    let normalized = source
+        .trim()
+        .trim_start_matches("https://github.com/")
+        .trim_start_matches("http://github.com/")
+        .trim_matches('/')
+        .to_string();
+    let mut segments = normalized.split('/');
+    let owner = segments.next().unwrap_or_default().trim();
+    let repo = segments.next().unwrap_or_default().trim();
+    if owner.is_empty() || repo.is_empty() || segments.next().is_some() {
+        return Err(format!(
+            "github source '{}' must be one repository locator in owner/repo form",
+            source
+        ));
+    }
+    Ok(format!("{}/{}", owner, repo))
+}
+
+/// Derive one skill id from the repository segment of a GitHub locator.
+/// 从 GitHub 定位值的仓库段派生单个技能标识符。
+fn github_repo_skill_id(repo: &str) -> Result<String, String> {
+    let skill_id = repo
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    validate_luaskills_identifier(&skill_id, "derived github skill_id")?;
+    Ok(skill_id)
+}
+
+/// Build one stable download-cache key for a managed skill package.
+/// 为受管技能包构造单个稳定的下载缓存键。
+fn managed_skill_cache_key(skill_id: &str, version: &str) -> String {
+    format!("skill-{}-{}", skill_id, version)
+}
+
+/// Return the current Unix timestamp in milliseconds.
+/// 返回当前 Unix 毫秒时间戳。
+fn current_unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+/// Read one extracted skill manifest from disk and bind the directory-derived skill id.
+/// 从磁盘读取单个已解包技能清单，并绑定从目录派生的技能标识符。
+fn read_skill_manifest_from_directory(skill_dir: &Path) -> Result<SkillMeta, String> {
+    let skill_id = skill_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("Failed to resolve skill id from directory {}", skill_dir.display()))?
+        .trim()
+        .to_string();
+    validate_luaskills_identifier(&skill_id, "skill_id")?;
+    let skill_yaml_path = skill_dir.join("skill.yaml");
+    let yaml_text = fs::read_to_string(&skill_yaml_path)
+        .map_err(|error| format!("Failed to read {}: {}", skill_yaml_path.display(), error))?;
+    let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_text)
+        .map_err(|error| format!("Failed to parse {}: {}", skill_yaml_path.display(), error))?;
+    if yaml_value
+        .as_mapping()
+        .and_then(|mapping| mapping.get(serde_yaml::Value::String("skill_id".to_string())))
+        .is_some()
+    {
+        return Err(format!(
+            "skill {} must not declare skill_id in skill.yaml; directory name is the only skill_id",
+            skill_dir.display()
+        ));
+    }
+    let mut meta: SkillMeta = serde_yaml::from_value(yaml_value)
+        .map_err(|error| format!("Failed to decode {}: {}", skill_yaml_path.display(), error))?;
+    meta.bind_directory_skill_id(skill_id.clone());
+    validate_luaskills_version(meta.version(), "skill.yaml version")?;
+    if meta.effective_skill_id() != skill_id {
+        return Err(format!(
+            "skill manifest in {} resolved to skill_id '{}' instead of '{}'",
+            skill_yaml_path.display(),
+            meta.effective_skill_id(),
+            skill_id
+        ));
+    }
+    Ok(meta)
 }
 
 /// Resolve the currently effective skill directories after applying override precedence and empty-directory disable semantics.
@@ -589,11 +1089,25 @@ fn is_skill_manifest_enabled(skill_dir: &Path) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        SkillInstallRequest, SkillLifecycleAction, SkillManager, SkillManagerConfig,
-        SkillOperationPlane, SkillProtectionConfig, collect_effective_skill_instances,
-        resolve_effective_skill_instance,
+        SkillInstallRequest, SkillInstallSourceType, SkillLifecycleAction, SkillManager,
+        SkillManagerConfig, SkillOperationPlane, SkillProtectionConfig,
+        collect_effective_skill_instances, resolve_effective_skill_instance,
     };
     use crate::runtime_options::RuntimeSkillRoot;
+
+    /// Build one test skill-manager configuration rooted under the provided temporary directory.
+    /// 基于给定临时目录构造单个测试用技能管理器配置。
+    fn test_manager_config(temp_root: &std::path::Path, skill_root: RuntimeSkillRoot) -> SkillManagerConfig {
+        SkillManagerConfig {
+            skill_root,
+            lifecycle_root: temp_root.join("state"),
+            protection: SkillProtectionConfig::default(),
+            download_cache_root: temp_root.join("downloads"),
+            allow_network_download: false,
+            github_base_url: None,
+            github_api_base_url: None,
+        }
+    }
 
     /// Verify that disable/enable operations persist and clear state markers correctly.
     /// 验证停用/启用操作会正确持久化并清理状态标记。
@@ -605,12 +1119,14 @@ mod tests {
         }
         let skill_root = temp_root.join("skills");
         let manager = SkillManager::new(SkillManagerConfig {
-            skill_root: RuntimeSkillRoot {
-                name: "ROOT".to_string(),
-                skills_dir: skill_root,
-            },
-            lifecycle_root: temp_root.join("state"),
             protection: SkillProtectionConfig::default(),
+            ..test_manager_config(
+                &temp_root,
+                RuntimeSkillRoot {
+                    name: "ROOT".to_string(),
+                    skills_dir: skill_root,
+                },
+            )
         });
 
         assert!(manager.is_skill_enabled("vulcan-codekit").unwrap());
@@ -643,14 +1159,16 @@ mod tests {
         let temp_root = std::env::temp_dir().join(format!("vulcan_luaskills_protection_test_{}", std::process::id()));
         let skill_root = temp_root.join("skills");
         let manager = SkillManager::new(SkillManagerConfig {
-            skill_root: RuntimeSkillRoot {
-                name: "ROOT".to_string(),
-                skills_dir: skill_root,
-            },
-            lifecycle_root: temp_root.join("state"),
             protection: SkillProtectionConfig {
                 protected_skill_ids: vec!["vulcan-runtime".to_string()],
             },
+            ..test_manager_config(
+                &temp_root,
+                RuntimeSkillRoot {
+                    name: "ROOT".to_string(),
+                    skills_dir: skill_root,
+                },
+            )
         });
 
         assert!(manager
@@ -669,10 +1187,10 @@ mod tests {
             .is_ok());
     }
 
-    /// Verify that install/update placeholders enforce protection and return structured states.
-    /// 验证 install/update 占位入口会执行保护判断并返回结构化状态。
+    /// Verify that install/update entrypoints still enforce protection and return strict structured states before networking succeeds.
+    /// 验证 install/update 入口在真正下载前依旧会执行保护判断，并返回严格的结构化状态。
     #[test]
-    fn install_update_placeholders_return_structured_results() {
+    fn install_update_entrypoints_return_strict_structured_results() {
         let temp_root = std::env::temp_dir().join(format!("vulcan_luaskills_install_update_test_{}", std::process::id()));
         let skill_root = temp_root.join("skills");
         let skill_roots = vec![RuntimeSkillRoot {
@@ -681,11 +1199,10 @@ mod tests {
         }];
         let _ = std::fs::create_dir_all(&skill_root);
         let manager = SkillManager::new(SkillManagerConfig {
-            skill_root: skill_roots[0].clone(),
-            lifecycle_root: temp_root.join("state"),
             protection: SkillProtectionConfig {
                 protected_skill_ids: vec!["vulcan-runtime".to_string()],
             },
+            ..test_manager_config(&temp_root, skill_roots[0].clone())
         });
 
         assert!(manager
@@ -695,6 +1212,7 @@ mod tests {
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-runtime".to_string()),
                     source: None,
+                    source_type: SkillInstallSourceType::Github,
                 }
             )
             .is_err());
@@ -706,10 +1224,11 @@ mod tests {
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-codekit".to_string()),
                     source: None,
+                    source_type: SkillInstallSourceType::Github,
                 },
             )
-            .expect("install placeholder should return one structured result");
-        assert_eq!(install_result.status, "not_implemented");
+            .expect_err("install without source should fail strictly");
+        assert!(install_result.contains("github install requires source repository"));
 
         let _ = std::fs::create_dir_all(skill_root.join("vulcan-codekit"));
         let update_result = manager
@@ -719,10 +1238,11 @@ mod tests {
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-codekit".to_string()),
                     source: None,
+                    source_type: SkillInstallSourceType::Github,
                 },
             )
-            .expect("update placeholder should return one structured result");
-        assert_eq!(update_result.status, "not_implemented");
+            .expect_err("update without install record should fail strictly");
+        assert!(update_result.contains("is not managed by the install workflow"));
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }
@@ -737,12 +1257,14 @@ mod tests {
         }
         let skill_root = temp_root.join("skills");
         let manager = SkillManager::new(SkillManagerConfig {
-            skill_root: RuntimeSkillRoot {
-                name: "ROOT".to_string(),
-                skills_dir: skill_root.clone(),
-            },
-            lifecycle_root: temp_root.join("state"),
             protection: SkillProtectionConfig::default(),
+            ..test_manager_config(
+                &temp_root,
+                RuntimeSkillRoot {
+                    name: "ROOT".to_string(),
+                    skills_dir: skill_root.clone(),
+                },
+            )
         });
         let _ = std::fs::create_dir_all(skill_root.join("vulcan-codekit"));
 
