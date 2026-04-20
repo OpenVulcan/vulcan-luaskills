@@ -1,10 +1,12 @@
+use serde::{Deserialize, Serialize};
+
 /// Unified English error message returned when a tool emits a non-string result.
 /// 当工具返回非字符串结果时，统一返回的英文错误提示。
 pub const NON_STRING_TOOL_RESULT_ERROR: &str = "Tool results must be returned as plain strings. Structured JSON or table results are not supported.";
 
 /// Stable overflow-mode enum returned from the Lua runtime to the host.
 /// Lua runtime 返回给宿主的稳定超限模式枚举。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolOverflowMode {
     /// Suggest that the host handles overflow in truncate mode.
     /// 超限时建议宿主按截断模式处理。
@@ -28,7 +30,7 @@ impl ToolOverflowMode {
 
 /// Unified intermediate result object returned from the Lua runtime to the host.
 /// Lua runtime 返回给宿主的统一中间结果对象。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeInvocationResult {
     /// Tool body content, which must always be a string.
     /// 工具正文内容，必须始终为字符串。

@@ -1,0 +1,24 @@
+# Ignore generated runtime files while keeping the empty runtime layout tracked.
+# 忽略运行生成文件，同时保留空运行时目录结构。
+*
+!.gitignore
+!skills/
+!dependencies/
+!state/
+!databases/
+!temp/
+!resources/
+!lua_packages/
+!bin/
+!bin/tools/
+!libs/
+!skills/.gitkeep
+!dependencies/.gitkeep
+!state/.gitkeep
+!databases/.gitkeep
+!temp/.gitkeep
+!resources/.gitkeep
+!lua_packages/.gitkeep
+!bin/.gitkeep
+!bin/tools/.gitkeep
+!libs/.gitkeep

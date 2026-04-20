@@ -1,7 +1,7 @@
 use crate::runtime_context::RuntimeRequestContext;
 use crate::skill::manager::SkillProtectionConfig;
 use crate::tool_cache::ToolCacheConfig;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
 
@@ -19,7 +19,7 @@ pub struct RuntimeSkillRoot {
 
 /// Host-provided filesystem and runtime paths consumed by the LuaSkills library.
 /// 宿主提供给 LuaSkills 库消费的文件系统与运行时路径集合。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LuaRuntimeHostOptions {
     /// Host-managed temporary directory used by luaexec spill files and similar transient artifacts.
     /// 宿主管理的临时目录，供 luaexec 请求文件等短生命周期产物使用。
@@ -82,7 +82,7 @@ pub struct LuaRuntimeHostOptions {
 
 /// Host-injected invocation context delivered alongside one skill or runlua call.
 /// 宿主在单次 skill 或 runlua 调用时一并注入的调用上下文。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LuaInvocationContext {
     /// Optional transport/request metadata preserved for Lua consumption.
     /// 供 Lua 消费的可选传输层/请求层元数据。
@@ -97,7 +97,7 @@ pub struct LuaInvocationContext {
 
 /// Host-resolved effective budget scope used by host-side render logic.
 /// 供宿主侧渲染逻辑使用的宿主已解析生效预算场景结构。
-#[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct EffectiveBudgetScope {
     /// Effective byte limit for the current scope.
     /// 当前场景的生效字节上限。
@@ -109,7 +109,7 @@ pub struct EffectiveBudgetScope {
 
 /// Host-resolved client budget snapshot consumed by host-side overflow rendering.
 /// 供宿主侧超限渲染消费的宿主已解析客户端预算快照。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientBudgetSnapshot {
     /// Optional client name of the active caller.
     /// 当前调用方的可选客户端名称。

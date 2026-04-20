@@ -1,8 +1,8 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// One structured help node descriptor returned to host-side system tool wrappers.
 /// 返回给宿主侧 system tool 包装层的单个结构化帮助节点描述。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeHelpNodeDescriptor {
     /// Stable node name. The main node always uses `main`.
     /// 稳定节点名称，主节点固定使用 `main`。
@@ -20,7 +20,7 @@ pub struct RuntimeHelpNodeDescriptor {
 
 /// Structured help tree summary of one skill returned by the runtime core.
 /// 由运行时核心返回的单个 skill 结构化帮助树摘要。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeSkillHelpDescriptor {
     /// Stable skill identifier of the current help tree.
     /// 当前帮助树所属的稳定 skill 标识符。
@@ -47,7 +47,7 @@ pub struct RuntimeSkillHelpDescriptor {
 
 /// Structured help detail payload returned by the runtime core for one node.
 /// 运行时核心为单个帮助节点返回的结构化详情载荷。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeHelpDetail {
     /// Stable skill identifier that owns the current help node.
     /// 拥有当前帮助节点的稳定 skill 标识符。

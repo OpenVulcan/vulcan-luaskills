@@ -52,7 +52,7 @@ struct LoadedSkill {
 
 /// Pool sizing configuration for Lua virtual machines.
 /// Lua 虚拟机池的容量配置。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct LuaVmPoolConfig {
     /// Minimum number of VMs that should stay warm.
     /// 需要常驻保温的最小虚拟机数量。
@@ -135,7 +135,7 @@ struct ResolvedEntryTarget {
 
 /// Construction options used by the host to create one LuaSkills runtime engine.
 /// 宿主创建单个 LuaSkills 运行时引擎时使用的构造选项。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LuaEngineOptions {
     /// Pool sizing configuration for reusable Lua virtual machines.
     /// 可复用 Lua 虚拟机池的容量配置。

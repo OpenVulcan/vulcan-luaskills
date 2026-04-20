@@ -242,6 +242,76 @@ vulcan-luaskills = { path = "../vulcan-luaskills" }
 
 但 FFI 只是另一种产物形态，不是另一套实现。
 
+#### FFI C ABI
+
+当前库已经提供两套并存的稳定 C ABI，用于让非 Rust 宿主通过：
+
+- `cdylib`
+- `staticlib`
+
+直接接入同一套 LuaSkills 核运行时。
+
+FFI 设计规则如下：
+
+- 所有直接集成的核心引擎接口都同时提供：
+  - 标准结构化接口
+  - `_json` 结尾的 JSON 通用接口
+- 结构明确、性能敏感的接入方应优先使用标准接口
+- 动态语言或快速集成场景可以使用 `_json` 接口
+- `_json` 接口统一使用 JSON 包络：
+  - 成功：`{"ok":true,"result":...}`
+  - 失败：`{"ok":false,"error":"..."}`
+- 返回的字符串必须通过：
+  - `vulcan_luaskills_ffi_string_free`
+  释放
+
+标准接口当前采用：
+
+- 原生 C ABI 参数
+- `error_out` 输出英文错误文本
+- 复杂列表/结果结构通过专用 free 函数释放
+
+说明：
+
+- 对于真正动态的值，例如 `run_lua` 的任意 JSON 返回值、`client_budget/tool_config` 一类上下文对象，
+  标准接口仍会使用 JSON 字符串承载内容
+- 这是为了避免把任意 JSON 树硬编码成脆弱的固定 C 结构
+
+头文件位置：
+
+- [include/vulcan_luaskills_ffi.h](D:/projects/vulcan-luaskills/include/vulcan_luaskills_ffi.h)
+
+当前已导出的核心 FFI 能力包括：
+
+- 引擎创建与释放
+- `load/reload`
+- `list_entries`
+- `list_skill_help`
+- `render_skill_help_detail`
+- `prompt_argument_completions`
+- `call_skill`
+- `run_lua`
+- `enable/disable`
+- `install/update/uninstall`
+
+完整对接文档：
+
+- [docs/FFI_INTEGRATION_GUIDE.md](D:/projects/vulcan-luaskills/docs/FFI_INTEGRATION_GUIDE.md)
+
+语言示例：
+
+- [examples/ffi/python/demo.py](D:/projects/vulcan-luaskills/examples/ffi/python/demo.py)
+- [examples/ffi/go/demo.go](D:/projects/vulcan-luaskills/examples/ffi/go/demo.go)
+- [examples/ffi/typescript/demo.ts](D:/projects/vulcan-luaskills/examples/ffi/typescript/demo.ts)
+- [examples/ffi/demo_runtime/README.md](D:/projects/vulcan-luaskills/examples/ffi/demo_runtime/README.md)
+
+这些示例当前都采用同一规则：
+
+- 通过环境变量 `VULCAN_LUASKILLS_LIB` 指向动态库文件
+- 标准示例优先演示 `version / engine_new / engine_free`
+- `demo_runtime` 目录额外提供一条真实的安装与调用烟测链
+- 动态安装与调用部分通过 `_json` 接口完成
+
 ## 开发
 
 ### 检查
