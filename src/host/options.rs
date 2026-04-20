@@ -48,9 +48,12 @@ pub struct LuaRuntimeHostOptions {
     /// English: Fixed sibling directory name used under one skill-root parent to store dependencies.
     /// 在单个技能根父目录下存放依赖时使用的固定兄弟目录名称。
     pub dependency_dir_name: String,
-    /// English: Fixed sibling directory name used under one skill-root parent to store lifecycle state and databases.
-    /// 在单个技能根父目录下存放生命周期状态与数据库时使用的固定兄弟目录名称。
-    pub lifecycle_dir_name: String,
+    /// English: Fixed sibling directory name used under one skill-root parent to store skill state.
+    /// 在单个技能根父目录下存放技能状态时使用的固定兄弟目录名称。
+    pub state_dir_name: String,
+    /// English: Fixed sibling directory name used under one skill-root parent to store skill databases.
+    /// 在单个技能根父目录下存放技能数据库时使用的固定兄弟目录名称。
+    pub database_dir_name: String,
     /// English: Host-provided protected skill identifiers reserved for the system plane.
     /// 由宿主提供、保留给 system 平面的受保护技能标识符。
     pub protection: SkillProtectionConfig,

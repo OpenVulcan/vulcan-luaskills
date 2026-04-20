@@ -1429,15 +1429,16 @@ impl LuaEngine {
         })
     }
 
-    /// English: Build the sibling lifecycle root for one named skill root.
-    /// 为单个命名技能根构造同级生命周期根目录。
-    fn lifecycle_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
+    /// English: Build the sibling state root for one named skill root.
+    /// 为单个命名技能根构造同级状态根目录。
+    fn state_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
         let parent = skill_root
             .skills_dir
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| skill_root.skills_dir.clone());
-        parent.join(self.host_options.lifecycle_dir_name.as_str())
+        parent
+            .join(self.host_options.state_dir_name.as_str())
     }
 
     /// English: Build the sibling dependency root for one named skill root.
@@ -1448,7 +1449,20 @@ impl LuaEngine {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| skill_root.skills_dir.clone());
-        parent.join(self.host_options.dependency_dir_name.as_str())
+        parent
+            .join(self.host_options.dependency_dir_name.as_str())
+    }
+
+    /// English: Build the sibling database root for one named skill root.
+    /// 为单个命名技能根构造同级数据库根目录。
+    fn database_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
+        let parent = skill_root
+            .skills_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| skill_root.skills_dir.clone());
+        parent
+            .join(self.host_options.database_dir_name.as_str())
     }
 
     /// English: Build the dependency-manager configuration for one named skill root.
@@ -1493,7 +1507,7 @@ impl LuaEngine {
             .host_options
             .download_cache_root
             .clone()
-            .unwrap_or_else(|| fallback_download_cache_root(&self.lifecycle_root_for(skill_root)));
+            .unwrap_or_else(|| fallback_download_cache_root(&self.state_root_for(skill_root)));
 
         ensure_directory(&tool_root)?;
         ensure_directory(&host_tool_root)?;
@@ -1520,11 +1534,11 @@ impl LuaEngine {
     /// English: Build the skill-manager configuration for one named skill root.
     /// 为单个命名技能根构造技能管理器配置。
     fn skill_manager_for(&self, skill_root: &RuntimeSkillRoot) -> Result<SkillManager, String> {
-        let lifecycle_root = self.lifecycle_root_for(skill_root);
-        ensure_directory(&lifecycle_root)?;
+        let state_root = self.state_root_for(skill_root);
+        ensure_directory(&state_root)?;
         Ok(SkillManager::new(SkillManagerConfig {
             skill_root: skill_root.clone(),
-            lifecycle_root,
+            lifecycle_root: state_root,
             protection: self.host_options.protection.clone(),
         }))
     }
@@ -1920,7 +1934,7 @@ impl LuaEngine {
     /// 调用方显式请求时删除单个技能拥有的可选数据库目录。
     fn remove_skill_database_dir(
         &self,
-        lifecycle_root: &Path,
+        database_root: &Path,
         skill_id: &str,
         remove_requested: bool,
         database_label: &str,
@@ -1928,7 +1942,7 @@ impl LuaEngine {
         if !remove_requested {
             return Ok((false, true));
         }
-        let database_dir = lifecycle_root.join("databases").join(database_label).join(skill_id);
+        let database_dir = database_root.join(database_label).join(skill_id);
         if !database_dir.exists() {
             return Ok((false, false));
         }
@@ -2028,13 +2042,13 @@ impl LuaEngine {
             )
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         let (sqlite_removed, sqlite_retained) = self.remove_skill_database_dir(
-            &self.lifecycle_root_for(&resolved_root),
+            &self.database_root_for(&resolved_root),
             skill_id,
             options.remove_sqlite,
             "sqlite",
         )?;
         let (lancedb_removed, lancedb_retained) = self.remove_skill_database_dir(
-            &self.lifecycle_root_for(&resolved_root),
+            &self.database_root_for(&resolved_root),
             skill_id,
             options.remove_lancedb,
             "lancedb",
@@ -2413,7 +2427,28 @@ impl LuaEngine {
         }
 
         let yaml_str = std::fs::read_to_string(&skill_yaml)?;
-        let meta: SkillMeta = serde_yaml::from_str(&yaml_str)?;
+        let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_str)?;
+        if yaml_value
+            .as_mapping()
+            .is_some_and(|mapping| mapping.contains_key(serde_yaml::Value::String("skill_id".to_string())))
+        {
+            return Err(format!(
+                "skill {} must not declare skill_id in skill.yaml; directory name is the only skill_id / 技能 {} 不允许在 skill.yaml 中声明 skill_id，目录名才是唯一 skill_id",
+                dir.display(),
+                dir.display()
+            )
+            .into());
+        }
+        let mut meta: SkillMeta = serde_yaml::from_value(yaml_value)?;
+        let directory_skill_id = dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| format!("invalid skill directory name: {}", dir.display()))?
+            .trim()
+            .to_string();
+        validate_luaskills_identifier(&directory_skill_id, "skill directory name")
+            .map_err(|error| format!("skill {}: {}", dir.display(), error))?;
+        meta.bind_directory_skill_id(directory_skill_id.clone());
 
         if !meta.is_enabled() {
             log_info(format!(
@@ -2421,10 +2456,6 @@ impl LuaEngine {
                 meta.effective_skill_id()
             ));
             return Ok(());
-        }
-
-        if meta.skill_id.trim().is_empty() {
-            return Err(format!("skill {} must declare non-empty skill_id", meta.name).into());
         }
         validate_luaskills_identifier(meta.effective_skill_id(), "skill_id")
             .map_err(|error| format!("skill {}: {}", meta.name, error))?;
@@ -5094,9 +5125,10 @@ fn lua_table_to_object(t: &Table) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::{LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState};
-    use crate::lua_skill::{SkillHelpMeta, SkillLanceDbMeta, SkillMeta, SkillSqliteMeta, SkillToolMeta};
-    use crate::runtime_options::LuaRuntimeHostOptions;
+    use crate::lua_skill::SkillMeta;
+    use crate::{LuaEngineOptions, LuaRuntimeHostOptions};
     use std::collections::HashMap;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::{Arc, Condvar, Mutex};
 
@@ -5108,24 +5140,13 @@ mod tests {
         local_entry_name: &str,
         lua_module: &str,
     ) -> LoadedSkill {
+        let mut meta: SkillMeta = serde_yaml::from_str(&format!(
+            "name: {skill_id}\nenable: true\ndebug: false\nentries:\n  - name: {local_entry_name}\n    lua_entry: runtime/test.lua\n    lua_module: {lua_module}\n"
+        ))
+        .expect("deserialize minimal skill meta");
+        meta.bind_directory_skill_id(skill_id.to_string());
         LoadedSkill {
-            meta: SkillMeta {
-                name: skill_id.to_string(),
-                skill_id: skill_id.to_string(),
-                enable: true,
-                debug: false,
-                lancedb: SkillLanceDbMeta::default(),
-                sqlite: SkillSqliteMeta::default(),
-                entries: vec![SkillToolMeta {
-                    name: local_entry_name.to_string(),
-                    description: String::new(),
-                    lua_entry: "runtime/test.lua".to_string(),
-                    lua_module: lua_module.to_string(),
-                    parameters: Vec::new(),
-                    help: String::new(),
-                }],
-                help: SkillHelpMeta::default(),
-            },
+            meta,
             dir: PathBuf::from(format!("D:/tests/{directory_name}")),
             root_name: "ROOT".to_string(),
             lancedb_binding: None,
@@ -5156,6 +5177,50 @@ mod tests {
             sqlite_host: None,
             host_options: Arc::new(LuaRuntimeHostOptions::default()),
         }
+    }
+
+    /// English: Verify that skill manifests must not declare skill_id explicitly.
+    /// 验证 skill 清单不允许再显式声明 skill_id 字段。
+    #[test]
+    fn load_from_roots_rejects_explicit_skill_id_field() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_reject_skill_id_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = fs::remove_dir_all(&temp_root);
+        }
+        let skill_root = temp_root.join("skills");
+        let skill_dir = skill_root.join("vulcan-codekit");
+        fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime dir");
+        fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: vulcan-codekit\nskill_id: vulcan-codekit\nentries:\n  - name: ast-tree\n    lua_entry: runtime/test.lua\n    lua_module: vulcan-codekit.ast-tree\n",
+        )
+        .expect("write skill yaml");
+        fs::write(skill_dir.join("runtime").join("test.lua"), "return 'ok'\n")
+            .expect("write runtime entry");
+
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create engine");
+
+        let error = engine
+            .load_from_roots(&[crate::host::options::RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: skill_root,
+            }])
+            .expect_err("explicit skill_id should be rejected");
+        let rendered = error.to_string();
+        assert!(rendered.contains("must not declare skill_id"));
+
+        let _ = fs::remove_dir_all(&temp_root);
     }
 
     /// Verify that colliding `skill-entry` names receive deterministic numeric suffixes.

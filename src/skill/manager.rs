@@ -407,7 +407,6 @@ impl SkillManager {
     fn disabled_root(&self) -> PathBuf {
         self.config
             .lifecycle_root
-            .join("state")
             .join("skills")
             .join("disabled")
     }
@@ -569,6 +568,18 @@ fn is_skill_manifest_enabled(skill_dir: &Path) -> Result<bool, String> {
     }
     let yaml_text = fs::read_to_string(&skill_yaml)
         .map_err(|error| format!("Failed to read {}: {}", skill_yaml.display(), error))?;
+    let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_text)
+        .map_err(|error| format!("Failed to parse {}: {}", skill_yaml.display(), error))?;
+    if yaml_value
+        .as_mapping()
+        .is_some_and(|mapping| mapping.contains_key(serde_yaml::Value::String("skill_id".to_string())))
+    {
+        return Err(format!(
+            "skill manifest {} must not declare skill_id; directory name is the only skill_id / 技能清单 {} 不允许声明 skill_id，目录名才是唯一 skill_id",
+            skill_yaml.display(),
+            skill_yaml.display()
+        ));
+    }
     #[derive(Debug, Deserialize)]
     struct SkillEnableProbe {
         /// English: When omitted the skill is treated as enabled.
@@ -581,7 +592,7 @@ fn is_skill_manifest_enabled(skill_dir: &Path) -> Result<bool, String> {
     fn default_skill_enable() -> bool {
         true
     }
-    let probe: SkillEnableProbe = serde_yaml::from_str(&yaml_text)
+    let probe: SkillEnableProbe = serde_yaml::from_value(yaml_value)
         .map_err(|error| format!("Failed to parse {}: {}", skill_yaml.display(), error))?;
     Ok(probe.enable)
 }
@@ -612,7 +623,7 @@ mod tests {
                 name: "ROOT".to_string(),
                 skills_dir: skill_root,
             },
-            lifecycle_root: temp_root.join("__").join("ROOT"),
+            lifecycle_root: temp_root.join("state"),
             protection: SkillProtectionConfig::default(),
         });
 
@@ -653,7 +664,7 @@ mod tests {
                 name: "ROOT".to_string(),
                 skills_dir: skill_root,
             },
-            lifecycle_root: temp_root.join("__").join("ROOT"),
+            lifecycle_root: temp_root.join("state"),
             protection: SkillProtectionConfig {
                 protected_skill_ids: vec!["vulcan-runtime".to_string()],
             },
@@ -691,7 +702,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&skill_root);
         let manager = SkillManager::new(SkillManagerConfig {
             skill_root: skill_roots[0].clone(),
-            lifecycle_root: temp_root.join("__").join("ROOT"),
+            lifecycle_root: temp_root.join("state"),
             protection: SkillProtectionConfig {
                 protected_skill_ids: vec!["vulcan-runtime".to_string()],
             },
@@ -753,7 +764,7 @@ mod tests {
                 name: "ROOT".to_string(),
                 skills_dir: skill_root.clone(),
             },
-            lifecycle_root: temp_root.join("__").join("ROOT"),
+            lifecycle_root: temp_root.join("state"),
             protection: SkillProtectionConfig::default(),
         });
         let _ = std::fs::create_dir_all(skill_root.join("vulcan-codekit"));

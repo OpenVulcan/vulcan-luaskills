@@ -573,11 +573,10 @@ impl LanceDbSkillHost {
         let sidecar_root = skills_root
             .parent()
             .unwrap_or(skills_root)
-            .join(self.host_options.lifecycle_dir_name.as_str());
+            .join(self.host_options.database_dir_name.as_str());
         let db_path = sidecar_root
-            .join("databases")
             .join("lancedb")
-            .join(&skill_dir_name);
+            .join(skill_name);
         std::fs::create_dir_all(&db_path).map_err(|error| {
             format!(
                 "failed to create LanceDB directory {}: {} / 创建 LanceDB 目录失败: {}",

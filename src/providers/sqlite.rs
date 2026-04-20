@@ -1689,11 +1689,10 @@ impl SqliteSkillHost {
         let sidecar_root = skills_root
             .parent()
             .unwrap_or(skills_root)
-            .join(self.host_options.lifecycle_dir_name.as_str());
+            .join(self.host_options.database_dir_name.as_str());
         let db_dir = sidecar_root
-            .join("databases")
             .join("sqlite")
-            .join(&skill_dir_name);
+            .join(skill_name);
         std::fs::create_dir_all(&db_dir).map_err(|error| {
             format!(
                 "failed to create SQLite directory {}: {} / 创建 SQLite 目录失败: {}",
@@ -1702,7 +1701,7 @@ impl SqliteSkillHost {
                 error
             )
         })?;
-        let db_path = db_dir.join(format!("{}.sqlite3", skill_dir_name));
+        let db_path = db_dir.join(format!("{}.sqlite3", skill_name));
         let database_path = db_path.to_string_lossy().to_string();
         let database_cstr = CString::new(database_path.clone()).map_err(|_| {
             "database path contains interior NUL bytes / 数据库路径包含 NUL 字节".to_string()

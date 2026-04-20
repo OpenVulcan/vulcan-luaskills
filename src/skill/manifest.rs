@@ -204,9 +204,6 @@ pub struct SkillMeta {
     /// Internal skill name, for example "vulcan-codekit".
     /// 内部 skill 名称，例如 "vulcan-codekit"。
     pub name: String,
-    /// Stable skill namespace used to build canonical entry ids.
-    /// 用于生成 canonical 入口 id 的稳定 skill 命名空间。
-    pub skill_id: String,
     /// Whether the current skill is allowed to load. Defaults to enabled when omitted.
     /// 当前 skill 是否允许被加载；省略时默认启用。
     #[serde(default = "default_skill_enable_flag")]
@@ -231,6 +228,10 @@ pub struct SkillMeta {
     /// 用于替代 prompt 说明的新 help 元数据。
     #[serde(default)]
     pub help: SkillHelpMeta,
+    /// Stable runtime skill identifier derived from the physical directory name.
+    /// 从物理目录名称派生出的稳定运行时技能标识符。
+    #[serde(skip)]
+    resolved_skill_id: String,
 }
 
 /// Return whether one LuaSkills identifier follows the strict lowercase-hyphen rule.
@@ -286,10 +287,16 @@ impl SkillMeta {
         self.sqlite.clone()
     }
 
+    /// Bind the stable runtime skill identifier derived from the physical directory name.
+    /// 绑定从物理目录名称派生出的稳定运行时技能标识符。
+    pub fn bind_directory_skill_id(&mut self, skill_id: String) {
+        self.resolved_skill_id = skill_id;
+    }
+
     /// Return the effective skill id used by canonical entry names.
     /// 返回用于 canonical 入口名的生效 skill id。
     pub fn effective_skill_id(&self) -> &str {
-        self.skill_id.trim()
+        self.resolved_skill_id.trim()
     }
 
     /// Return whether the manifest itself allows the skill to load.
