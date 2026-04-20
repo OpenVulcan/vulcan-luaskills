@@ -1953,12 +1953,12 @@ impl LuaEngine {
             );
             return Err(error.into());
         }
-        let mut result = match manager.uninstall_skill_at_path_in_plane(
+        let prepared_uninstall = match manager.prepare_uninstall_skill_at_path_in_plane(
             plane,
             skill_id,
             &resolved_instance.actual_dir,
         ) {
-            Ok(result) => result,
+            Ok(prepared) => prepared,
             Err(error) => {
                 let message = error.to_string();
                 self.emit_skill_lifecycle_event(
@@ -1973,35 +1973,134 @@ impl LuaEngine {
                 return Err(error.into());
             }
         };
+        if let Err(reload_error) = self.reload_from_roots(skill_roots) {
+            let rollback_error = manager.rollback_prepared_skill_uninstall(&prepared_uninstall);
+            let restore_error = self.reload_from_roots(skill_roots);
+            let rollback_message = rollback_error
+                .err()
+                .map(|error| format!(" rollback failed: {}", error))
+                .unwrap_or_default();
+            let restore_message = restore_error
+                .err()
+                .map(|error| format!(" runtime restore failed: {}", error))
+                .unwrap_or_default();
+            let message = format!(
+                "Failed to reload LuaSkills after uninstall: {}.{}{}",
+                reload_error, rollback_message, restore_message
+            );
+            self.emit_skill_lifecycle_event(
+                plane,
+                crate::skill::manager::SkillLifecycleAction::Uninstall,
+                skill_id,
+                Some(resolved_instance.root_name.clone()),
+                Some(resolved_instance.actual_dir.display().to_string()),
+                "failed",
+                Some(message.clone()),
+            );
+            return Err(message.into());
+        }
+        let mut result = match manager.commit_prepared_skill_uninstall(&prepared_uninstall) {
+            Ok(result) => result,
+            Err(error) => {
+                let rollback_error = manager.rollback_prepared_skill_uninstall(&prepared_uninstall);
+                let restore_error = self.reload_from_roots(skill_roots);
+                let rollback_message = rollback_error
+                    .err()
+                    .map(|rollback| format!(" rollback failed: {}", rollback))
+                    .unwrap_or_default();
+                let restore_message = restore_error
+                    .err()
+                    .map(|restore| format!(" runtime restore failed: {}", restore))
+                    .unwrap_or_default();
+                let message = format!(
+                    "Failed to finalize uninstall: {}.{}{}",
+                    error, rollback_message, restore_message
+                );
+                self.emit_skill_lifecycle_event(
+                    plane,
+                    crate::skill::manager::SkillLifecycleAction::Uninstall,
+                    skill_id,
+                    Some(resolved_instance.root_name.clone()),
+                    Some(resolved_instance.actual_dir.display().to_string()),
+                    "failed",
+                    Some(message.clone()),
+                );
+                return Err(message.into());
+            }
+        };
         let dependency_manager = DependencyManager::new(
             self.dependency_manager_config_for(&resolved_root)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
         );
-        dependency_manager
-            .cleanup_uninstalled_skill_dependencies_from_roots(
-                skill_roots,
-                skill_id,
-                removed_dependency_manifest.as_ref(),
-            )
-            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-        let (sqlite_removed, sqlite_retained) = self.remove_skill_database_dir(
+        if let Err(error) = dependency_manager.cleanup_uninstalled_skill_dependencies_from_roots(
+            skill_roots,
+            skill_id,
+            removed_dependency_manifest.as_ref(),
+        ) {
+            log_warn(format!(
+                "[LuaSkills:uninstall] Stale dependency cleanup warning for skill '{}': {}",
+                skill_id, error
+            ));
+            result.message = format!(
+                "{} (warning: stale dependency cleanup failed: {})",
+                result.message, error
+            );
+        }
+        let (sqlite_removed, sqlite_retained) = match self.remove_skill_database_dir(
             &self.database_root_for(&resolved_root),
             skill_id,
             options.remove_sqlite,
             "sqlite",
-        )?;
-        let (lancedb_removed, lancedb_retained) = self.remove_skill_database_dir(
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                log_warn(format!(
+                    "[LuaSkills:uninstall] SQLite cleanup warning for skill '{}': {}",
+                    skill_id, error
+                ));
+                result.message = format!(
+                    "{} (warning: sqlite cleanup failed: {})",
+                    result.message, error
+                );
+                (false, false)
+            }
+        };
+        let (lancedb_removed, lancedb_retained) = match self.remove_skill_database_dir(
             &self.database_root_for(&resolved_root),
             skill_id,
             options.remove_lancedb,
             "lancedb",
-        )?;
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                log_warn(format!(
+                    "[LuaSkills:uninstall] LanceDB cleanup warning for skill '{}': {}",
+                    skill_id, error
+                ));
+                result.message = format!(
+                    "{} (warning: lancedb cleanup failed: {})",
+                    result.message, error
+                );
+                (false, false)
+            }
+        };
         result.sqlite_removed = sqlite_removed;
         result.sqlite_retained = sqlite_retained;
         result.lancedb_removed = lancedb_removed;
         result.lancedb_retained = lancedb_retained;
-        result.message = format!("skill package removed={} sqlite_removed={} sqlite_retained={} lancedb_removed={} lancedb_retained={}", result.skill_removed, result.sqlite_removed, result.sqlite_retained, result.lancedb_removed, result.lancedb_retained);
-        self.reload_from_roots(skill_roots)?;
+        let summary = format!(
+            "skill package removed={} sqlite_removed={} sqlite_retained={} lancedb_removed={} lancedb_retained={}",
+            result.skill_removed,
+            result.sqlite_removed,
+            result.sqlite_retained,
+            result.lancedb_removed,
+            result.lancedb_retained
+        );
+        result.message = if result.message.is_empty() {
+            summary
+        } else {
+            format!("{}; {}", summary, result.message)
+        };
         self.emit_skill_lifecycle_event(
             plane,
             crate::skill::manager::SkillLifecycleAction::Uninstall,

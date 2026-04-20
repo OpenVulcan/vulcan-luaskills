@@ -168,6 +168,27 @@ pub struct PreparedSkillUpdate {
     pub previous_install_record: InstalledSkillRecord,
 }
 
+/// One staged uninstall mutation prepared before the runtime reload is attempted.
+/// 在尝试运行时重载之前准备好的单次卸载暂存变更。
+#[derive(Debug, Clone)]
+pub struct PreparedSkillUninstall {
+    /// Structured uninstall result returned after the staged uninstall succeeds.
+    /// 暂存卸载成功后返回的结构化卸载结果。
+    pub result: SkillUninstallResult,
+    /// Final target directory currently reserved for the installed skill.
+    /// 当前为已安装技能保留的最终目标目录。
+    pub target_dir: PathBuf,
+    /// Backup directory that still contains the previous skill package until commit completes.
+    /// 在提交完成前仍保存旧技能包的备份目录。
+    pub backup_dir: Option<PathBuf>,
+    /// Previous disabled-state record that should be restored if uninstall rollback is needed.
+    /// 如果需要回滚卸载则应恢复的旧停用状态记录。
+    pub previous_disabled_record: Option<DisabledSkillRecord>,
+    /// Previous managed install record that should be restored if uninstall rollback is needed.
+    /// 如果需要回滚卸载则应恢复的旧受管安装记录。
+    pub previous_install_record: Option<InstalledSkillRecord>,
+}
+
 /// Optional database cleanup switches accepted by skill uninstall operations.
 /// 技能卸载操作接受的可选数据库清理开关集合。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -388,7 +409,15 @@ impl SkillManager {
         skill_id: &str,
     ) -> Result<SkillUninstallResult, String> {
         let skill_dir = self.config.skill_root.skills_dir.join(skill_id);
-        self.uninstall_skill_at_path_in_plane(plane, skill_id, &skill_dir)
+        let prepared = self.prepare_uninstall_skill_at_path_in_plane(plane, skill_id, &skill_dir)?;
+        self.commit_prepared_skill_uninstall(&prepared).map_err(|error| {
+            let rollback_error = self.rollback_prepared_skill_uninstall(&prepared);
+            let rollback_message = rollback_error
+                .err()
+                .map(|rollback| format!(" rollback failed: {}", rollback))
+                .unwrap_or_default();
+            format!("Failed to finalize uninstall: {}.{}", error, rollback_message)
+        })
     }
 
     /// Remove one installed skill directory at an explicitly resolved path and clear its disabled marker.
@@ -399,28 +428,69 @@ impl SkillManager {
         skill_id: &str,
         skill_dir: &Path,
     ) -> Result<SkillUninstallResult, String> {
+        let prepared = self.prepare_uninstall_skill_at_path_in_plane(plane, skill_id, skill_dir)?;
+        self.commit_prepared_skill_uninstall(&prepared).map_err(|error| {
+            let rollback_error = self.rollback_prepared_skill_uninstall(&prepared);
+            let rollback_message = rollback_error
+                .err()
+                .map(|rollback| format!(" rollback failed: {}", rollback))
+                .unwrap_or_default();
+            format!("Failed to finalize uninstall: {}.{}", error, rollback_message)
+        })
+    }
+
+    /// Prepare one uninstall request and stage filesystem changes without committing state deletions yet.
+    /// 预处理单个卸载请求并暂存文件系统变更，但暂不提交状态删除。
+    pub fn prepare_uninstall_skill_at_path_in_plane(
+        &self,
+        plane: SkillOperationPlane,
+        skill_id: &str,
+        skill_dir: &Path,
+    ) -> Result<PreparedSkillUninstall, String> {
         self.guard_operation(plane, SkillLifecycleAction::Uninstall, skill_id)?;
-        let skill_removed = if skill_dir.exists() {
-            fs::remove_dir_all(&skill_dir)
-                .map_err(|error| format!("Failed to remove {}: {}", skill_dir.display(), error))?;
-            true
+        self.ensure_state_layout()?;
+        let previous_disabled_record = self.disabled_record(skill_id)?;
+        let previous_install_record = self.install_record(skill_id)?;
+        let (skill_removed, backup_dir) = if skill_dir.exists() {
+            let backup_dir = self
+                .config
+                .lifecycle_root
+                .join("uninstall_backup")
+                .join(format!("{}-{}", skill_id, current_unix_millis()));
+            if let Some(parent) = backup_dir.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| format!("Failed to create {}: {}", parent.display(), error))?;
+            }
+            fs::rename(skill_dir, &backup_dir).map_err(|error| {
+                format!(
+                    "Failed to move current skill {} into uninstall backup {}: {}",
+                    skill_dir.display(),
+                    backup_dir.display(),
+                    error
+                )
+            })?;
+            (true, Some(backup_dir))
         } else {
-            false
+            (false, None)
         };
-        self.enable_skill_in_plane(plane, skill_id)?;
-        let _ = self.remove_install_record(skill_id);
-        Ok(SkillUninstallResult {
-            skill_id: skill_id.to_string(),
-            skill_removed,
-            sqlite_removed: false,
-            lancedb_removed: false,
-            sqlite_retained: false,
-            lancedb_retained: false,
-            message: if skill_removed {
-                "skill package removed".to_string()
-            } else {
-                "skill package directory not found".to_string()
+        Ok(PreparedSkillUninstall {
+            result: SkillUninstallResult {
+                skill_id: skill_id.to_string(),
+                skill_removed,
+                sqlite_removed: false,
+                lancedb_removed: false,
+                sqlite_retained: false,
+                lancedb_retained: false,
+                message: if skill_removed {
+                    "skill package removed".to_string()
+                } else {
+                    "skill package directory not found".to_string()
+                },
             },
+            target_dir: skill_dir.to_path_buf(),
+            backup_dir,
+            previous_disabled_record,
+            previous_install_record,
         })
     }
 
@@ -836,6 +906,63 @@ impl SkillManager {
         Ok(true)
     }
 
+    /// Persist one disabled-state record exactly as captured before a staged mutation.
+    /// 按暂存变更前捕获的原样持久化单个停用状态记录。
+    fn persist_disabled_record(&self, record: &DisabledSkillRecord) -> Result<(), String> {
+        self.ensure_state_layout()?;
+        let path = self.disabled_record_path(&record.skill_id);
+        let content = serde_json::to_string_pretty(record)
+            .map_err(|error| format!("Failed to serialize disabled record: {}", error))?;
+        fs::write(&path, content)
+            .map_err(|error| format!("Failed to write {}: {}", path.display(), error))
+    }
+
+    /// Remove one disabled-state record from disk and report whether it existed.
+    /// 从磁盘删除单个停用状态记录，并返回它是否存在。
+    fn remove_disabled_record(&self, skill_id: &str) -> Result<bool, String> {
+        validate_luaskills_identifier(skill_id, "skill_id")?;
+        self.ensure_state_layout()?;
+        let path = self.disabled_record_path(skill_id);
+        if !path.exists() {
+            return Ok(false);
+        }
+        fs::remove_file(&path)
+            .map_err(|error| format!("Failed to remove {}: {}", path.display(), error))?;
+        Ok(true)
+    }
+
+    /// Restore one previous disabled-state snapshot or remove the current record when no snapshot existed.
+    /// 恢复单个旧停用状态快照，若原先不存在快照则删除当前记录。
+    fn restore_disabled_record(
+        &self,
+        skill_id: &str,
+        record: Option<&DisabledSkillRecord>,
+    ) -> Result<(), String> {
+        match record {
+            Some(record) => self.persist_disabled_record(record),
+            None => {
+                self.remove_disabled_record(skill_id)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Restore one previous install-record snapshot or remove the current record when no snapshot existed.
+    /// 恢复单个旧安装记录快照，若原先不存在快照则删除当前记录。
+    fn restore_install_record(
+        &self,
+        skill_id: &str,
+        record: Option<&InstalledSkillRecord>,
+    ) -> Result<(), String> {
+        match record {
+            Some(record) => self.persist_install_record(record),
+            None => {
+                self.remove_install_record(skill_id)?;
+                Ok(())
+            }
+        }
+    }
+
     /// Persist the final install record and remove transitional backup data after runtime reload succeeds.
     /// 在运行时重载成功后持久化最终安装记录，并移除过渡备份数据。
     pub fn commit_prepared_skill_apply(
@@ -914,6 +1041,89 @@ impl SkillManager {
                 Ok(())
             }
         }
+    }
+
+    /// Persist the final uninstall state and remove transitional backup data after runtime reload succeeds.
+    /// 在运行时重载成功后持久化最终卸载状态，并移除过渡备份数据。
+    pub fn commit_prepared_skill_uninstall(
+        &self,
+        prepared: &PreparedSkillUninstall,
+    ) -> Result<SkillUninstallResult, String> {
+        if prepared.previous_disabled_record.is_some() {
+            self.remove_disabled_record(&prepared.result.skill_id)?;
+        }
+        if prepared.previous_install_record.is_some() {
+            self.remove_install_record(&prepared.result.skill_id)?;
+        }
+        if let Some(backup_dir) = &prepared.backup_dir {
+            fs::remove_dir_all(backup_dir).map_err(|error| {
+                let disabled_restore_error = self.restore_disabled_record(
+                    &prepared.result.skill_id,
+                    prepared.previous_disabled_record.as_ref(),
+                );
+                let install_restore_error = self.restore_install_record(
+                    &prepared.result.skill_id,
+                    prepared.previous_install_record.as_ref(),
+                );
+                let mut message = format!(
+                    "Failed to remove uninstall backup {}: {}",
+                    backup_dir.display(),
+                    error
+                );
+                if let Err(restore_error) = disabled_restore_error {
+                    message.push_str(&format!(
+                        ". Failed to restore previous disabled record: {}",
+                        restore_error
+                    ));
+                }
+                if let Err(restore_error) = install_restore_error {
+                    message.push_str(&format!(
+                        ". Failed to restore previous install record: {}",
+                        restore_error
+                    ));
+                }
+                message
+            })?;
+        }
+        Ok(prepared.result.clone())
+    }
+
+    /// Roll back one staged uninstall mutation after reload or commit fails.
+    /// 在重载或提交失败后回滚一次已暂存的卸载变更。
+    pub fn rollback_prepared_skill_uninstall(
+        &self,
+        prepared: &PreparedSkillUninstall,
+    ) -> Result<(), String> {
+        if let Some(backup_dir) = &prepared.backup_dir {
+            if prepared.target_dir.exists() {
+                fs::remove_dir_all(&prepared.target_dir).map_err(|error| {
+                    format!(
+                        "Failed to remove staged uninstall target directory {}: {}",
+                        prepared.target_dir.display(),
+                        error
+                    )
+                })?;
+            }
+            if backup_dir.exists() {
+                fs::rename(backup_dir, &prepared.target_dir).map_err(|error| {
+                    format!(
+                        "Failed to restore uninstall backup {} into {}: {}",
+                        backup_dir.display(),
+                        prepared.target_dir.display(),
+                        error
+                    )
+                })?;
+            }
+        }
+        self.restore_disabled_record(
+            &prepared.result.skill_id,
+            prepared.previous_disabled_record.as_ref(),
+        )?;
+        self.restore_install_record(
+            &prepared.result.skill_id,
+            prepared.previous_install_record.as_ref(),
+        )?;
+        Ok(())
     }
 
     /// Build one downloader configured for managed install and update flows.
