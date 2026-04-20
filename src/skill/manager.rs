@@ -79,6 +79,47 @@ pub struct SkillApplyResult {
     pub message: String,
 }
 
+/// English: Optional database cleanup switches accepted by skill uninstall operations.
+/// 技能卸载操作接受的可选数据库清理开关集合。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillUninstallOptions {
+    /// English: Remove the SQLite database directory owned by the target skill when true.
+    /// 为 true 时删除目标技能拥有的 SQLite 数据目录。
+    #[serde(default)]
+    pub remove_sqlite: bool,
+    /// English: Remove the LanceDB database directory owned by the target skill when true.
+    /// 为 true 时删除目标技能拥有的 LanceDB 数据目录。
+    #[serde(default)]
+    pub remove_lancedb: bool,
+}
+
+/// English: Structured uninstall result that reports whether code and databases were removed or retained.
+/// 结构化卸载结果，用于报告代码与数据库是被删除还是被保留。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillUninstallResult {
+    /// English: Stable skill identifier targeted by the current uninstall action.
+    /// 当前卸载动作目标的稳定技能标识符。
+    pub skill_id: String,
+    /// English: Whether the skill package directory itself was removed.
+    /// skill 包目录本身是否已经被删除。
+    pub skill_removed: bool,
+    /// English: Whether the SQLite database directory was removed explicitly.
+    /// SQLite 数据目录是否已被显式删除。
+    pub sqlite_removed: bool,
+    /// English: Whether the LanceDB database directory was removed explicitly.
+    /// LanceDB 数据目录是否已被显式删除。
+    pub lancedb_removed: bool,
+    /// English: Whether the SQLite database directory was intentionally retained.
+    /// SQLite 数据目录是否被有意保留。
+    pub sqlite_retained: bool,
+    /// English: Whether the LanceDB database directory was intentionally retained.
+    /// LanceDB 数据目录是否被有意保留。
+    pub lancedb_retained: bool,
+    /// English: Human-readable explanation of the uninstall result.
+    /// 当前卸载结果的人类可读说明文本。
+    pub message: String,
+}
+
 /// English: Persistent record written when one skill is explicitly disabled.
 /// 显式停用某个技能时写入的持久化记录。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,7 +265,7 @@ impl SkillManager {
 
     /// English: Remove one installed skill directory and clear its disabled marker.
     /// 删除单个已安装 skill 目录，并清理其停用标记。
-    pub fn uninstall_skill(&self, skill_id: &str) -> Result<(), String> {
+    pub fn uninstall_skill(&self, skill_id: &str) -> Result<SkillUninstallResult, String> {
         self.uninstall_skill_in_plane(SkillOperationPlane::Skills, skill_id)
     }
 
@@ -234,14 +275,30 @@ impl SkillManager {
         &self,
         plane: SkillOperationPlane,
         skill_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<SkillUninstallResult, String> {
         self.guard_operation(plane, SkillLifecycleAction::Uninstall, skill_id)?;
         let skill_dir = self.config.skill_root.join(skill_id);
-        if skill_dir.exists() {
+        let skill_removed = if skill_dir.exists() {
             fs::remove_dir_all(&skill_dir)
                 .map_err(|error| format!("Failed to remove {}: {}", skill_dir.display(), error))?;
-        }
-        self.enable_skill_in_plane(plane, skill_id)
+            true
+        } else {
+            false
+        };
+        self.enable_skill_in_plane(plane, skill_id)?;
+        Ok(SkillUninstallResult {
+            skill_id: skill_id.to_string(),
+            skill_removed,
+            sqlite_removed: false,
+            lancedb_removed: false,
+            sqlite_retained: false,
+            lancedb_retained: false,
+            message: if skill_removed {
+                "skill package removed / 技能包目录已删除".to_string()
+            } else {
+                "skill package directory not found / 未找到技能包目录".to_string()
+            },
+        })
     }
 
     /// English: Preflight one install request and return a structured placeholder result.
@@ -456,6 +513,36 @@ mod tests {
             )
             .expect("update placeholder should return one structured result");
         assert_eq!(update_result.status, "not_implemented");
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    /// English: Verify that uninstall removes the skill directory but keeps database flags unset by default.
+    /// 验证卸载会删除技能目录，同时默认不声明数据库已删除。
+    #[test]
+    fn uninstall_returns_safe_default_database_flags() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_uninstall_result_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+        let skill_root = temp_root.join("skills");
+        let manager = SkillManager::new(SkillManagerConfig {
+            skill_root: skill_root.clone(),
+            state_root: temp_root.join("state"),
+            protection: SkillProtectionConfig::default(),
+        });
+        let _ = std::fs::create_dir_all(skill_root.join("vulcan-codekit"));
+
+        let result = manager
+            .uninstall_skill("vulcan-codekit")
+            .expect("uninstall should succeed");
+        assert!(result.skill_removed);
+        assert!(!result.sqlite_removed);
+        assert!(!result.lancedb_removed);
+        assert!(!skill_root.join("vulcan-codekit").exists());
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }

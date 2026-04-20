@@ -72,6 +72,9 @@ pub struct LuaRuntimeHostOptions {
     /// English: Host-provided transient cache policy consumed by `vulcan.cache`.
     /// 由宿主提供并供 `vulcan.cache` 消费的临时缓存策略。
     pub cache_config: Option<ToolCacheConfig>,
+    /// English: Host-reserved public entry names that LuaSkills canonical name generation must never occupy directly.
+    /// 宿主保留的公开入口名称集合，LuaSkills 在生成 canonical 名称时必须直接避开这些名称。
+    pub reserved_entry_names: Vec<String>,
 }
 
 /// English: Host-injected invocation context delivered alongside one skill or runlua call.

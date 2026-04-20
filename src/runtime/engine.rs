@@ -1,7 +1,8 @@
 use mlua::{Function, HookTriggers, Lua, MultiValue, Table, Value as LuaValue, VmState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -29,6 +30,7 @@ use crate::runtime_result::{
 use crate::skill::dependencies::SkillDependencyManifest;
 use crate::skill::manager::{
     SkillApplyResult, SkillInstallRequest, SkillManager, SkillManagerConfig, SkillOperationPlane,
+    SkillUninstallOptions, SkillUninstallResult,
 };
 use crate::sqlite_host::{
     SqliteSkillBinding, SqliteSkillHost,
@@ -1643,16 +1645,27 @@ impl LuaEngine {
 
         let mut registry = BTreeMap::new();
         let mut base_name_counters = HashMap::<String, usize>::new();
+        let mut occupied_names = self
+            .host_options
+            .reserved_entry_names
+            .iter()
+            .cloned()
+            .collect::<HashSet<String>>();
         for seed in seeds {
-            let duplicate_index = base_name_counters
-                .entry(seed.base_name.clone())
-                .and_modify(|value| *value += 1)
-                .or_insert(1usize);
-            let canonical_name = if *duplicate_index == 1 {
-                seed.base_name.clone()
-            } else {
-                format!("{}-{}", seed.base_name, duplicate_index)
+            let mut duplicate_index = *base_name_counters.get(&seed.base_name).unwrap_or(&0usize);
+            let canonical_name = loop {
+                duplicate_index += 1;
+                let candidate_name = if duplicate_index == 1 {
+                    seed.base_name.clone()
+                } else {
+                    format!("{}-{}", seed.base_name, duplicate_index)
+                };
+                if !occupied_names.contains(&candidate_name) {
+                    break candidate_name;
+                }
             };
+            base_name_counters.insert(seed.base_name.clone(), duplicate_index);
+            occupied_names.insert(canonical_name.clone());
 
             let resolved_target = ResolvedEntryTarget {
                 canonical_name: canonical_name.clone(),
@@ -1852,6 +1865,7 @@ impl LuaEngine {
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() }),
             crate::skill::manager::SkillLifecycleAction::Uninstall => manager
                 .uninstall_skill_in_plane(plane, skill_id)
+                .map(|_| ())
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() }),
             _ => {
                 return Err(format!(
@@ -1883,6 +1897,141 @@ impl LuaEngine {
         self.reload_from_dirs(base_dir, override_dir)?;
         self.emit_skill_lifecycle_event(plane, action, skill_id, "completed", None);
         Ok(())
+    }
+
+    /// English: Remove one optional skill-owned database directory when the caller explicitly requests it.
+    /// 调用方显式请求时删除单个技能拥有的可选数据库目录。
+    fn remove_skill_database_dir(
+        &self,
+        root: &Option<PathBuf>,
+        skill_id: &str,
+        remove_requested: bool,
+        database_label: &str,
+    ) -> Result<(bool, bool), Box<dyn std::error::Error>> {
+        if !remove_requested {
+            return Ok((false, true));
+        }
+        let Some(root_dir) = root.as_ref() else {
+            return Ok((false, false));
+        };
+        let database_dir = root_dir.join(skill_id);
+        if !database_dir.exists() {
+            return Ok((false, false));
+        }
+        fs::remove_dir_all(&database_dir).map_err(|error| {
+            format!(
+                "failed to remove {database_label} directory {}: {} / 删除 {database_label} 目录 {} 失败: {}",
+                database_dir.display(),
+                error,
+                database_dir.display(),
+                error
+            )
+        })?;
+        Ok((true, false))
+    }
+
+    /// English: Execute one uninstall action with explicit database-retention semantics and then reload the runtime view.
+    /// 以显式数据库保留语义执行一次卸载动作，并在完成后重载运行时视图。
+    fn uninstall_skill_and_reload(
+        &mut self,
+        plane: SkillOperationPlane,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+        skill_id: &str,
+        options: &SkillUninstallOptions,
+    ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
+        validate_luaskills_identifier(skill_id, "skill_id")
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let manager = self
+            .skill_manager_for(base_dir)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let dependencies_path = manager.skill_root().join(skill_id).join("dependencies.yaml");
+        let removed_dependency_manifest = if dependencies_path.exists() {
+            Some(
+                SkillDependencyManifest::load_from_path(&dependencies_path)
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+            )
+        } else {
+            None
+        };
+        if let Err(error) = manager.guard_operation(
+            plane,
+            crate::skill::manager::SkillLifecycleAction::Uninstall,
+            skill_id,
+        ) {
+            self.emit_skill_lifecycle_event(
+                plane,
+                crate::skill::manager::SkillLifecycleAction::Uninstall,
+                skill_id,
+                "blocked",
+                Some(error.clone()),
+            );
+            return Err(error.into());
+        }
+        let mut result = match manager.uninstall_skill_in_plane(plane, skill_id) {
+            Ok(result) => result,
+            Err(error) => {
+                let message = error.to_string();
+                self.emit_skill_lifecycle_event(
+                    plane,
+                    crate::skill::manager::SkillLifecycleAction::Uninstall,
+                    skill_id,
+                    "failed",
+                    Some(message),
+                );
+                return Err(error.into());
+            }
+        };
+        let dependency_manager = DependencyManager::new(
+            self.dependency_manager_config_for(base_dir)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+        );
+        dependency_manager
+            .cleanup_uninstalled_skill_dependencies(
+                base_dir,
+                override_dir,
+                skill_id,
+                removed_dependency_manifest.as_ref(),
+            )
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let (sqlite_removed, sqlite_retained) = self.remove_skill_database_dir(
+            &self.host_options.sqlite_database_root,
+            skill_id,
+            options.remove_sqlite,
+            "sqlite",
+        )?;
+        let (lancedb_removed, lancedb_retained) = self.remove_skill_database_dir(
+            &self.host_options.lancedb_database_root,
+            skill_id,
+            options.remove_lancedb,
+            "lancedb",
+        )?;
+        result.sqlite_removed = sqlite_removed;
+        result.sqlite_retained = sqlite_retained;
+        result.lancedb_removed = lancedb_removed;
+        result.lancedb_retained = lancedb_retained;
+        result.message = format!(
+            "skill package removed={} sqlite_removed={} sqlite_retained={} lancedb_removed={} lancedb_retained={} / 技能包删除={} SQLite 删除={} SQLite 保留={} LanceDB 删除={} LanceDB 保留={}",
+            result.skill_removed,
+            result.sqlite_removed,
+            result.sqlite_retained,
+            result.lancedb_removed,
+            result.lancedb_retained,
+            result.skill_removed,
+            result.sqlite_removed,
+            result.sqlite_retained,
+            result.lancedb_removed,
+            result.lancedb_retained
+        );
+        self.reload_from_dirs(base_dir, override_dir)?;
+        self.emit_skill_lifecycle_event(
+            plane,
+            crate::skill::manager::SkillLifecycleAction::Uninstall,
+            skill_id,
+            "completed",
+            Some(result.message.clone()),
+        );
+        Ok(result)
     }
 
     /// English: Execute one install or update preflight request in the requested operation plane.
@@ -2008,14 +2157,14 @@ impl LuaEngine {
         base_dir: &Path,
         override_dir: Option<&Path>,
         skill_id: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.mutate_skill_state_and_reload(
+        options: &SkillUninstallOptions,
+    ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
+        self.uninstall_skill_and_reload(
             SkillOperationPlane::Skills,
-            crate::skill::manager::SkillLifecycleAction::Uninstall,
             base_dir,
             override_dir,
             skill_id,
-            None,
+            options,
         )
     }
 
@@ -2026,14 +2175,14 @@ impl LuaEngine {
         base_dir: &Path,
         override_dir: Option<&Path>,
         skill_id: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.mutate_skill_state_and_reload(
+        options: &SkillUninstallOptions,
+    ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
+        self.uninstall_skill_and_reload(
             SkillOperationPlane::System,
-            crate::skill::manager::SkillLifecycleAction::Uninstall,
             base_dir,
             override_dir,
             skill_id,
-            None,
+            options,
         )
     }
 
@@ -4954,5 +5103,34 @@ mod tests {
         assert_eq!(alpha_skill.resolved_tool_name("baz"), Some("foo-bar-baz"));
         assert_eq!(beta_skill.resolved_tool_name("bar-baz"), Some("foo-bar-baz-2"));
         assert_eq!(gamma_skill.resolved_tool_name("baz"), Some("foo-bar-baz-3"));
+    }
+
+    /// Verify that host-reserved public tool names are treated as occupied during canonical-name generation.
+    /// 验证宿主保留的公开工具名称会在 canonical 名称生成阶段被视为已占用名称。
+    #[test]
+    fn rebuild_entry_registry_skips_host_reserved_names() {
+        let mut skills = HashMap::new();
+        skills.insert(
+            "alpha".to_string(),
+            make_loaded_skill("alpha", "vulcan", "help-list", "alpha_module"),
+        );
+
+        let mut engine = make_test_engine(skills);
+        Arc::get_mut(&mut engine.host_options)
+            .expect("host options should be uniquely owned in test")
+            .reserved_entry_names = vec!["vulcan-help-list".to_string()];
+
+        engine
+            .rebuild_entry_registry()
+            .expect("entry registry should rebuild successfully");
+
+        assert!(!engine.entry_registry.contains_key("vulcan-help-list"));
+        assert!(engine.entry_registry.contains_key("vulcan-help-list-2"));
+
+        let alpha_skill = engine.skills.get("alpha").expect("alpha skill should exist");
+        assert_eq!(
+            alpha_skill.resolved_tool_name("help-list"),
+            Some("vulcan-help-list-2")
+        );
     }
 }
