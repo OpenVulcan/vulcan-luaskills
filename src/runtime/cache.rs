@@ -215,7 +215,11 @@ mod tests {
 
     /// Build one deterministic cache config used by unit tests.
     /// 为单元测试构造一份稳定可预测的缓存配置。
-    fn test_cache_config(max_entries: usize, default_ttl_secs: u64, max_ttl_secs: u64) -> ToolCacheConfig {
+    fn test_cache_config(
+        max_entries: usize,
+        default_ttl_secs: u64,
+        max_ttl_secs: u64,
+    ) -> ToolCacheConfig {
         ToolCacheConfig {
             max_entries,
             default_ttl_secs,

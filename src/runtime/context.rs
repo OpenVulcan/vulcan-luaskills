@@ -46,4 +46,3 @@ pub struct RuntimeRequestContext {
 fn default_runtime_client_capabilities() -> Value {
     Value::Object(serde_json::Map::new())
 }
-

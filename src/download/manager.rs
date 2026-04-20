@@ -4,6 +4,7 @@ use std::thread;
 
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::dependency::types::DependencySourceType;
 use crate::download::github::{GithubReleaseApiResponse, rewrite_github_download_url};
@@ -26,6 +27,9 @@ pub struct ResolvedGithubReleaseAsset {
     /// Exact browser download URL after optional host-side GitHub URL rewriting.
     /// 经过可选宿主侧 GitHub URL 重写后的精确浏览器下载地址。
     pub download_url: String,
+    /// Expected SHA-256 checksum for the selected asset when one checksum manifest is available.
+    /// 当存在校验清单时，所选资产对应的期望 SHA-256 校验值。
+    pub sha256: Option<String>,
 }
 
 /// Download-manager configuration that describes cache roots and upstream policy.
@@ -79,7 +83,11 @@ impl DownloadManager {
     pub fn download(&self, request: &DownloadRequest) -> Result<PathBuf, String> {
         self.ensure_network_allowed()?;
         fs::create_dir_all(&self.config.cache_root).map_err(|error| {
-            format!("Failed to create download cache root {}: {}", self.config.cache_root.display(), error)
+            format!(
+                "Failed to create download cache root {}: {}",
+                self.config.cache_root.display(),
+                error
+            )
         })?;
 
         let file_extension = infer_download_extension(&request.source_locator);
@@ -91,7 +99,10 @@ impl DownloadManager {
             return Ok(target_path);
         }
 
-        log_info(format!("[LuaSkills:download] Fetching {} from {}", request.cache_key, request.source_locator));
+        log_info(format!(
+            "[LuaSkills:download] Fetching {} from {}",
+            request.cache_key, request.source_locator
+        ));
         let source_locator = request.source_locator.clone();
         let bytes = self.run_http_task(move |client| {
             let response = client
@@ -107,6 +118,21 @@ impl DownloadManager {
         })?;
         fs::write(&target_path, &bytes)
             .map_err(|error| format!("Failed to write {}: {}", target_path.display(), error))?;
+        Ok(target_path)
+    }
+
+    /// Download one binary payload and verify one expected SHA-256 checksum.
+    /// 下载单个二进制载荷，并验证其期望的 SHA-256 校验值。
+    pub fn download_with_sha256(
+        &self,
+        request: &DownloadRequest,
+        expected_sha256: &str,
+    ) -> Result<PathBuf, String> {
+        let target_path = self.download(request)?;
+        if let Err(error) = verify_file_sha256(&target_path, expected_sha256) {
+            let _ = fs::remove_file(&target_path);
+            return Err(error);
+        }
         Ok(target_path)
     }
 
@@ -157,7 +183,10 @@ impl DownloadManager {
             .iter()
             .find(|asset| asset.name == expected_asset_name)
             .ok_or_else(|| {
-                format!("GitHub release {} does not contain asset '{}'", release.tag_name, expected_asset_name)
+                format!(
+                    "GitHub release {} does not contain asset '{}'",
+                    release.tag_name, expected_asset_name
+                )
             })?;
         Ok(ResolvedGithubReleaseAsset {
             tag_name: release.tag_name.clone(),
@@ -167,7 +196,52 @@ impl DownloadManager {
                 asset.browser_download_url.as_str(),
                 self.config.github_base_url.as_deref(),
             ),
+            sha256: None,
         })
+    }
+
+    /// Resolve one managed GitHub skill release asset together with its checksum metadata.
+    /// 解析单个受管 GitHub 技能 release 资产及其校验和元数据。
+    pub fn resolve_github_managed_skill_release_asset(
+        &self,
+        source: &GithubReleaseSourceSpec,
+        skill_id: &str,
+        expected_version: Option<&str>,
+    ) -> Result<ResolvedGithubReleaseAsset, String> {
+        let mut resolved = self.resolve_github_release_asset(
+            source,
+            &format!("{}-v{{version}}-skill.zip", skill_id),
+            expected_version,
+        )?;
+        let release = self.fetch_github_release(source, Some(resolved.version.as_str()))?;
+        let checksum_asset_name = format!("{}-v{}-checksums.txt", skill_id, resolved.version);
+        let checksum_asset = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == checksum_asset_name)
+            .ok_or_else(|| {
+                format!(
+                    "GitHub release {} does not contain checksum asset '{}'",
+                    release.tag_name, checksum_asset_name
+                )
+            })?;
+        let checksum_url = rewrite_github_download_url(
+            checksum_asset.browser_download_url.as_str(),
+            self.config.github_base_url.as_deref(),
+        );
+        let checksum_text = self.fetch_text(
+            checksum_url.as_str(),
+            &format!(
+                "github-checksums-{}-{}",
+                sanitize_cache_key_fragment(source.repo.as_str()),
+                sanitize_cache_key_fragment(release.tag_name.as_str())
+            ),
+        )?;
+        resolved.sha256 = Some(parse_checksum_manifest_for_asset(
+            checksum_text.as_str(),
+            resolved.asset_name.as_str(),
+        )?);
+        Ok(resolved)
     }
 
     /// Ensure the downloader is allowed to hit the network.
@@ -197,8 +271,11 @@ impl DownloadManager {
                 let candidate_tags = [trimmed_version.to_string(), format!("v{}", trimmed_version)];
                 let mut last_not_found = None;
                 for candidate_tag in candidate_tags {
-                    let api_url =
-                        build_github_release_tag_api_url(&self.config, source.repo.as_str(), &candidate_tag);
+                    let api_url = build_github_release_tag_api_url(
+                        &self.config,
+                        source.repo.as_str(),
+                        &candidate_tag,
+                    );
                     match self.try_fetch_github_release_from_url(&api_url)? {
                         Some(release) => return Ok(release),
                         None => last_not_found = Some(api_url),
@@ -293,10 +370,7 @@ impl DownloadManager {
 
 /// Build the GitHub latest-release API URL for one repository.
 /// 为单个仓库构造 GitHub 最新 release API 地址。
-fn build_github_release_api_url(
-    config: &DownloadManagerConfig,
-    repo: &str,
-) -> String {
+fn build_github_release_api_url(config: &DownloadManagerConfig, repo: &str) -> String {
     let normalized_repo = repo
         .trim()
         .trim_start_matches("https://github.com/")
@@ -327,7 +401,12 @@ fn build_github_release_tag_api_url(
         .as_deref()
         .unwrap_or("https://api.github.com")
         .trim_end_matches('/');
-    format!("{}/repos/{}/releases/tags/{}", api_base, normalized_repo, tag.trim())
+    format!(
+        "{}/repos/{}/releases/tags/{}",
+        api_base,
+        normalized_repo,
+        tag.trim()
+    )
 }
 
 /// Normalize the effective release version used for asset name interpolation.
@@ -370,5 +449,110 @@ fn infer_download_extension(url: &str) -> &'static str {
         }
     } else {
         ""
+    }
+}
+
+/// Parse one checksum manifest and return the SHA-256 value matching one asset name.
+/// 解析单个校验清单，并返回与某个资产名称匹配的 SHA-256 值。
+fn parse_checksum_manifest_for_asset(content: &str, asset_name: &str) -> Result<String, String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.split_whitespace();
+        let checksum = parts.next().unwrap_or_default().trim();
+        let file_name = parts
+            .next()
+            .unwrap_or_default()
+            .trim_start_matches('*')
+            .trim();
+        if file_name == asset_name {
+            if checksum.len() == 64 && checksum.chars().all(|value| value.is_ascii_hexdigit()) {
+                return Ok(checksum.to_ascii_lowercase());
+            }
+            return Err(format!(
+                "Checksum entry for '{}' is not one valid SHA-256 value",
+                asset_name
+            ));
+        }
+    }
+    Err(format!(
+        "Checksum manifest does not contain an entry for '{}'",
+        asset_name
+    ))
+}
+
+/// Verify one downloaded file against one expected SHA-256 checksum.
+/// 使用单个期望的 SHA-256 校验值验证一个已下载文件。
+fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
+    let expected = expected_sha256.trim().to_ascii_lowercase();
+    if expected.len() != 64 || !expected.chars().all(|value| value.is_ascii_hexdigit()) {
+        return Err(format!(
+            "Expected checksum for {} is not one valid SHA-256 value",
+            path.display()
+        ));
+    }
+    let bytes =
+        fs::read(path).map_err(|error| format!("Failed to read {}: {}", path.display(), error))?;
+    let actual = format!("{:x}", Sha256::digest(&bytes));
+    if actual != expected {
+        return Err(format!(
+            "Checksum mismatch for {}: expected {}, got {}",
+            path.display(),
+            expected,
+            actual
+        ));
+    }
+    Ok(())
+}
+
+/// Sanitize one cache-key fragment so it can safely participate in cache file names.
+/// 规范化单个缓存键片段，使其可以安全参与缓存文件名构造。
+fn sanitize_cache_key_fragment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => ch,
+            _ => '-',
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_checksum_manifest_for_asset, verify_file_sha256};
+
+    /// Verify that the checksum manifest parser resolves one matching SHA-256 entry.
+    /// 验证校验清单解析器能够解析出匹配的 SHA-256 条目。
+    #[test]
+    fn checksum_manifest_parser_returns_matching_sha256() {
+        let checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let manifest = format!(
+            "{}  demo-v0.1.0-skill.zip\n{}  other-file.zip\n",
+            checksum, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        let parsed = parse_checksum_manifest_for_asset(&manifest, "demo-v0.1.0-skill.zip")
+            .expect("checksum should be parsed");
+        assert_eq!(parsed, checksum);
+    }
+
+    /// Verify that file SHA-256 verification succeeds for one matching payload.
+    /// 验证当文件内容匹配时，文件 SHA-256 校验会成功。
+    #[test]
+    fn file_sha256_verification_succeeds_for_matching_payload() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_download_checksum_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+        std::fs::create_dir_all(&temp_root).expect("temp root should be created");
+        let file_path = temp_root.join("payload.txt");
+        std::fs::write(&file_path, b"hello world").expect("payload should be written");
+        let checksum = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        verify_file_sha256(&file_path, checksum).expect("checksum should match");
+        let _ = std::fs::remove_dir_all(&temp_root);
     }
 }

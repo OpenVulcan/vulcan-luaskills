@@ -28,14 +28,25 @@ pub struct GithubReleaseApiResponse {
 /// Rewrite one GitHub browser download URL through the host-provided site base URL override.
 /// 通过宿主提供的站点基址覆盖重写单个 GitHub 浏览器下载地址。
 pub fn rewrite_github_download_url(download_url: &str, github_base_url: Option<&str>) -> String {
-    let Some(base_url) = github_base_url.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(base_url) = github_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return download_url.to_string();
     };
     let normalized_base = base_url.trim_end_matches('/');
     if download_url.starts_with("https://github.com/") {
-        format!("{}/{}", normalized_base, download_url.trim_start_matches("https://github.com/"))
+        format!(
+            "{}/{}",
+            normalized_base,
+            download_url.trim_start_matches("https://github.com/")
+        )
     } else if download_url.starts_with("http://github.com/") {
-        format!("{}/{}", normalized_base, download_url.trim_start_matches("http://github.com/"))
+        format!(
+            "{}/{}",
+            normalized_base,
+            download_url.trim_start_matches("http://github.com/")
+        )
     } else {
         download_url.to_string()
     }

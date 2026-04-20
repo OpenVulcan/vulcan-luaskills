@@ -71,8 +71,9 @@ pub fn extract_skill_package_zip(
 
         let target_path = temp_root.join(&entry_path);
         if entry.is_dir() {
-            fs::create_dir_all(&target_path)
-                .map_err(|error| format!("Failed to create {}: {}", target_path.display(), error))?;
+            fs::create_dir_all(&target_path).map_err(|error| {
+                format!("Failed to create {}: {}", target_path.display(), error)
+            })?;
             continue;
         }
 
@@ -112,10 +113,7 @@ fn install_from_raw_file(
     exports: &[DependencyExportSpec],
 ) -> Result<(), String> {
     if exports.len() != 1 {
-        return Err(
-            "raw dependency payload must declare exactly one export"
-                .to_string(),
-        );
+        return Err("raw dependency payload must declare exactly one export".to_string());
     }
     let export = &exports[0];
     let target_path = join_relative_target(install_root, &export.target_path);
@@ -160,7 +158,12 @@ fn install_from_zip_archive(
         let mut output = fs::File::create(&target_path)
             .map_err(|error| format!("Failed to create {}: {}", target_path.display(), error))?;
         std::io::copy(&mut entry, &mut output).map_err(|error| {
-            format!("Failed to extract '{}' into {}: {}", export.archive_path, target_path.display(), error)
+            format!(
+                "Failed to extract '{}' into {}: {}",
+                export.archive_path,
+                target_path.display(),
+                error
+            )
         })?;
         mark_executable_if_needed(&target_path, export.executable)?;
     }
@@ -181,7 +184,11 @@ fn install_from_tar_gz_archive(
     let mut extracted_entries: Vec<(PathBuf, bool)> = Vec::new();
 
     for archive_entry in archive.entries().map_err(|error| {
-        format!("Failed to enumerate tar.gz entries from {}: {}", archive_path.display(), error)
+        format!(
+            "Failed to enumerate tar.gz entries from {}: {}",
+            archive_path.display(),
+            error
+        )
     })? {
         let mut archive_entry =
             archive_entry.map_err(|error| format!("Failed to read tar entry: {}", error))?;
@@ -196,20 +203,23 @@ fn install_from_tar_gz_archive(
         {
             let target_path = join_relative_target(install_root, &export.target_path);
             if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent).map_err(|error| {
-                    format!("Failed to create {}: {}", parent.display(), error)
-                })?;
+                fs::create_dir_all(parent)
+                    .map_err(|error| format!("Failed to create {}: {}", parent.display(), error))?;
             }
             let mut output = fs::File::create(&target_path).map_err(|error| {
                 format!("Failed to create {}: {}", target_path.display(), error)
             })?;
             let mut buffer = Vec::new();
             archive_entry.read_to_end(&mut buffer).map_err(|error| {
-                format!("Failed to extract '{}' from {}: {}", export.archive_path, archive_path.display(), error)
+                format!(
+                    "Failed to extract '{}' from {}: {}",
+                    export.archive_path,
+                    archive_path.display(),
+                    error
+                )
             })?;
-            std::io::copy(&mut Cursor::new(buffer), &mut output).map_err(|error| {
-                format!("Failed to write {}: {}", target_path.display(), error)
-            })?;
+            std::io::copy(&mut Cursor::new(buffer), &mut output)
+                .map_err(|error| format!("Failed to write {}: {}", target_path.display(), error))?;
             extracted_entries.push((target_path, export.executable));
         }
     }
@@ -217,7 +227,11 @@ fn install_from_tar_gz_archive(
     for export in exports {
         let target_path = join_relative_target(install_root, &export.target_path);
         if !target_path.exists() {
-            return Err(format!("tar.gz archive {} does not contain required export '{}'", archive_path.display(), export.archive_path));
+            return Err(format!(
+                "tar.gz archive {} does not contain required export '{}'",
+                archive_path.display(),
+                export.archive_path
+            ));
         }
     }
 
@@ -234,13 +248,18 @@ fn resolve_zip_export_entry_name<R: Read + std::io::Seek>(
     expected_archive_path: &str,
 ) -> Option<String> {
     let expected = normalize_archive_entry_match_path(expected_archive_path);
-    if archive.file_names().any(|name| normalize_archive_entry_match_path(name) == expected) {
+    if archive
+        .file_names()
+        .any(|name| normalize_archive_entry_match_path(name) == expected)
+    {
         return Some(expected);
     }
 
     archive.file_names().find_map(|name| {
         let normalized_name = normalize_archive_entry_match_path(name);
-        if strip_one_leading_archive_component(&normalized_name).as_deref() == Some(expected.as_str()) {
+        if strip_one_leading_archive_component(&normalized_name).as_deref()
+            == Some(expected.as_str())
+        {
             Some(normalized_name)
         } else {
             None
@@ -267,7 +286,9 @@ fn normalize_archive_entry_match_path(raw: &str) -> String {
 /// Strip exactly one leading path component from one normalized archive entry path.
 /// 从一个已规范化的归档条目路径中剥离恰好一层顶层路径片段。
 fn strip_one_leading_archive_component(normalized_path: &str) -> Option<String> {
-    let mut components = normalized_path.split('/').filter(|component| !component.is_empty());
+    let mut components = normalized_path
+        .split('/')
+        .filter(|component| !component.is_empty());
     components.next()?;
     let remainder = components.collect::<Vec<_>>();
     if remainder.is_empty() {
@@ -292,7 +313,12 @@ fn copy_file_with_parent_dir(source: &Path, target: &Path) -> Result<(), String>
             .map_err(|error| format!("Failed to create {}: {}", parent.display(), error))?;
     }
     fs::copy(source, target).map_err(|error| {
-        format!("Failed to copy {} to {}: {}", source.display(), target.display(), error)
+        format!(
+            "Failed to copy {} to {}: {}",
+            source.display(),
+            target.display(),
+            error
+        )
     })?;
     Ok(())
 }
@@ -331,13 +357,13 @@ fn normalize_zip_entry_path(entry_name: &str) -> Result<PathBuf, String> {
                 return Err(format!(
                     "Zip entry '{}' must not contain parent-directory traversal",
                     entry_name
-                ))
+                ));
             }
             std::path::Component::RootDir | std::path::Component::Prefix(_) => {
                 return Err(format!(
                     "Zip entry '{}' must not use an absolute path",
                     entry_name
-                ))
+                ));
             }
         }
     }

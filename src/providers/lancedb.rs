@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::lua_skill::{SkillLanceDbLogLevel, SkillLanceDbMeta};
-use crate::runtime_options::LuaRuntimeHostOptions;
 use crate::runtime_logging::{info as log_info, warn as log_warn};
+use crate::runtime_options::LuaRuntimeHostOptions;
 
 /// Forward declaration of the FFI runtime handle used only for raw cross-library pointers.
 /// FFI 运行时句柄前置声明，仅用于跨动态库传递裸指针。
@@ -114,11 +114,19 @@ impl LoadedLanceDbApi {
     /// 按宿主约定加载 LanceDB 动态库，优先查找显式环境变量与运行时 libs 目录。
     fn load(library_path: &Path) -> Result<Self, String> {
         if !library_path.exists() {
-            return Err(format!("LanceDB dynamic library path does not exist: {}", library_path.display()));
+            return Err(format!(
+                "LanceDB dynamic library path does not exist: {}",
+                library_path.display()
+            ));
         }
 
         let library = unsafe { Library::new(library_path) }.map_err(|error| {
-            format!("failed to load {}: {}: {}", library_path.display(), error, error)
+            format!(
+                "failed to load {}: {}: {}",
+                library_path.display(),
+                error,
+                error
+            )
         })?;
         unsafe { Self::from_library(library_path.to_path_buf(), library) }
     }
@@ -132,7 +140,12 @@ impl LoadedLanceDbApi {
                     *library
                         .get::<$ty>(concat!($name, "\0").as_bytes())
                         .map_err(|error| {
-                            format!("failed to load symbol {} from {}: {}", $name, library_path.display(), error)
+                            format!(
+                                "failed to load symbol {} from {}: {}",
+                                $name,
+                                library_path.display(),
+                                error
+                            )
                         })?
                 }
             }};
@@ -282,17 +295,17 @@ impl LanceDbSkillBinding {
     /// 执行向量写入；调用方负责提供已经编码好的原始载荷。
     pub fn vector_upsert_json(&self, input: &Value, data: &[u8]) -> Result<Value, String> {
         let input_text = serde_json::to_string(input).map_err(|error| error.to_string())?;
-        let input_cstr = CString::new(input_text).map_err(|_| {
-            "input json contains interior NUL bytes".to_string()
-        })?;
+        let input_cstr = CString::new(input_text)
+            .map_err(|_| "input json contains interior NUL bytes".to_string())?;
         self.log_info(
             "vector_upsert",
             Some(format!("payload_bytes={}", data.len())),
         );
         let started_at = Instant::now();
-        let guard = self.handles.lock().map_err(|_| {
-            "failed to acquire LanceDB handle lock".to_string()
-        })?;
+        let guard = self
+            .handles
+            .lock()
+            .map_err(|_| "failed to acquire LanceDB handle lock".to_string())?;
         unsafe {
             let response = (self.api.engine_vector_upsert)(
                 guard.engine,
@@ -325,14 +338,14 @@ impl LanceDbSkillBinding {
     /// 执行向量检索并返回元信息 JSON 与原始结果字节。
     pub fn vector_search_json(&self, input: &Value) -> Result<(Value, Vec<u8>), String> {
         let input_text = serde_json::to_string(input).map_err(|error| error.to_string())?;
-        let input_cstr = CString::new(input_text).map_err(|_| {
-            "input json contains interior NUL bytes".to_string()
-        })?;
+        let input_cstr = CString::new(input_text)
+            .map_err(|_| "input json contains interior NUL bytes".to_string())?;
         self.log_info("vector_search", None);
         let started_at = Instant::now();
-        let guard = self.handles.lock().map_err(|_| {
-            "failed to acquire LanceDB handle lock".to_string()
-        })?;
+        let guard = self
+            .handles
+            .lock()
+            .map_err(|_| "failed to acquire LanceDB handle lock".to_string())?;
         let mut buffer = VldbLancedbByteBuffer {
             data: ptr::null_mut(),
             len: 0,
@@ -391,14 +404,14 @@ impl LanceDbSkillBinding {
         F: Fn(&LoadedLanceDbApi, &SkillHandleState, *const c_char) -> *mut c_char,
     {
         let input_text = serde_json::to_string(input).map_err(|error| error.to_string())?;
-        let input_cstr = CString::new(input_text).map_err(|_| {
-            "input json contains interior NUL bytes".to_string()
-        })?;
+        let input_cstr = CString::new(input_text)
+            .map_err(|_| "input json contains interior NUL bytes".to_string())?;
         self.log_info(operation, None);
         let started_at = Instant::now();
-        let guard = self.handles.lock().map_err(|_| {
-            "failed to acquire LanceDB handle lock".to_string()
-        })?;
+        let guard = self
+            .handles
+            .lock()
+            .map_err(|_| "failed to acquire LanceDB handle lock".to_string())?;
         let response = invoke(&self.api, &guard, input_cstr.as_ptr());
         let text = match self.api.take_owned_string(response) {
             Ok(text) => text,
@@ -408,9 +421,8 @@ impl LanceDbSkillBinding {
                 return Err(error);
             }
         };
-        let value = serde_json::from_str(&text).map_err(|error| {
-            format!("failed to parse LanceDB response JSON: {}", error)
-        })?;
+        let value = serde_json::from_str(&text)
+            .map_err(|error| format!("failed to parse LanceDB response JSON: {}", error))?;
         drop(guard);
         self.log_if_slow(operation, started_at, None);
         Ok(value)
@@ -421,8 +433,14 @@ impl LanceDbSkillBinding {
     fn log_info(&self, operation: &str, extra: Option<String>) {
         if self.config.log_level == SkillLanceDbLogLevel::Info {
             match extra {
-                Some(extra) => log_info(format!("[LanceDb:info] skill={} db={} op={} {}", self.skill_name, self.skill_dir_name, operation, extra)),
-                None => log_info(format!("[LanceDb:info] skill={} db={} op={}", self.skill_name, self.skill_dir_name, operation)),
+                Some(extra) => log_info(format!(
+                    "[LanceDb:info] skill={} db={} op={} {}",
+                    self.skill_name, self.skill_dir_name, operation, extra
+                )),
+                None => log_info(format!(
+                    "[LanceDb:info] skill={} db={} op={}",
+                    self.skill_name, self.skill_dir_name, operation
+                )),
             }
         }
     }
@@ -440,8 +458,14 @@ impl LanceDbSkillBinding {
         }
 
         match extra {
-            Some(extra) => log_info(format!("[LanceDb:slow] skill={} db={} op={} elapsed_ms={} {}", self.skill_name, self.skill_dir_name, operation, elapsed_ms, extra)),
-            None => log_info(format!("[LanceDb:slow] skill={} db={} op={} elapsed_ms={}", self.skill_name, self.skill_dir_name, operation, elapsed_ms)),
+            Some(extra) => log_info(format!(
+                "[LanceDb:slow] skill={} db={} op={} elapsed_ms={} {}",
+                self.skill_name, self.skill_dir_name, operation, elapsed_ms, extra
+            )),
+            None => log_info(format!(
+                "[LanceDb:slow] skill={} db={} op={} elapsed_ms={}",
+                self.skill_name, self.skill_dir_name, operation, elapsed_ms
+            )),
         }
     }
 
@@ -452,7 +476,10 @@ impl LanceDbSkillBinding {
             self.config.log_level,
             SkillLanceDbLogLevel::Info | SkillLanceDbLogLevel::Warning
         ) {
-            log_warn(format!("[LanceDb:warn] skill={} db={} op={} message={}", self.skill_name, self.skill_dir_name, operation, message));
+            log_warn(format!(
+                "[LanceDb:warn] skill={} db={} op={} message={}",
+                self.skill_name, self.skill_dir_name, operation, message
+            ));
         }
     }
 }
@@ -488,10 +515,10 @@ impl LanceDbSkillHost {
     /// Create the host-side LanceDB skill manager and load the dynamic library immediately.
     /// 创建宿主级 LanceDB 技能管理器，并立即加载动态库。
     pub fn new(host_options: LuaRuntimeHostOptions) -> Result<Self, String> {
-        let library_path = host_options.lancedb_library_path.clone().ok_or_else(|| {
-            "LanceDB host requires host_options.lancedb_library_path"
-                .to_string()
-        })?;
+        let library_path = host_options
+            .lancedb_library_path
+            .clone()
+            .ok_or_else(|| "LanceDB host requires host_options.lancedb_library_path".to_string())?;
         Ok(Self {
             api: Arc::new(LoadedLanceDbApi::load(&library_path)?),
             skills: Mutex::new(HashMap::new()),
@@ -507,10 +534,10 @@ impl LanceDbSkillHost {
         skill_dir: &Path,
         config: SkillLanceDbMeta,
     ) -> Result<Arc<LanceDbSkillBinding>, String> {
-        let mut guard = self.skills.lock().map_err(|_| {
-            "failed to acquire LanceDB skill registry lock"
-                .to_string()
-        })?;
+        let mut guard = self
+            .skills
+            .lock()
+            .map_err(|_| "failed to acquire LanceDB skill registry lock".to_string())?;
         if let Some(existing) = guard.get(skill_name) {
             return Ok(existing.clone());
         }
@@ -519,27 +546,37 @@ impl LanceDbSkillHost {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| {
-                format!("invalid skill directory name for {}: {}", skill_name, skill_dir.display())
+                format!(
+                    "invalid skill directory name for {}: {}",
+                    skill_name,
+                    skill_dir.display()
+                )
             })?
             .to_string();
         let skills_root = skill_dir.parent().ok_or_else(|| {
-            format!("invalid skill root for {}: {}", skill_name, skill_dir.display())
+            format!(
+                "invalid skill root for {}: {}",
+                skill_name,
+                skill_dir.display()
+            )
         })?;
         let sidecar_root = skills_root
             .parent()
             .unwrap_or(skills_root)
             .join(self.host_options.database_dir_name.as_str());
-        let db_path = sidecar_root
-            .join("lancedb")
-            .join(skill_name);
+        let db_path = sidecar_root.join("lancedb").join(skill_name);
         std::fs::create_dir_all(&db_path).map_err(|error| {
-            format!("failed to create LanceDB directory {}: {}: {}", db_path.display(), error, error)
+            format!(
+                "failed to create LanceDB directory {}: {}: {}",
+                db_path.display(),
+                error,
+                error
+            )
         })?;
 
         let database_path = db_path.to_string_lossy().to_string();
-        let default_path = CString::new(database_path.clone()).map_err(|_| {
-            "database path contains interior NUL bytes".to_string()
-        })?;
+        let default_path = CString::new(database_path.clone())
+            .map_err(|_| "database path contains interior NUL bytes".to_string())?;
         let mut options = unsafe { (self.api.runtime_options_default)() };
         options.default_db_path = default_path.as_ptr();
         options.db_root = ptr::null();
@@ -579,7 +616,10 @@ impl LanceDbSkillHost {
 
     /// Fetch a registered binding by skill name so Lua injection and cross-skill calls can restore context.
     /// 按 skill 名称获取已注册绑定，供 Lua 注入与跨 skill 调用恢复上下文使用。
-    pub fn binding_for_skill(&self, skill_name: &str) -> Result<Option<Arc<LanceDbSkillBinding>>, String> {
+    pub fn binding_for_skill(
+        &self,
+        skill_name: &str,
+    ) -> Result<Option<Arc<LanceDbSkillBinding>>, String> {
         let skills = self
             .skills
             .lock()

@@ -1,5 +1,5 @@
-use serde::Deserialize;
 use semver::Version;
+use serde::Deserialize;
 
 // ============================================================
 // Lua Skill metadata (loaded from skill.yaml only)
@@ -257,7 +257,9 @@ pub fn is_valid_luaskills_identifier(value: &str) -> bool {
         return false;
     }
 
-    chars.all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
+    chars.all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    })
 }
 
 /// Validate one LuaSkills identifier and return a bilingual error when it is invalid.
@@ -340,8 +342,7 @@ impl SkillMeta {
     /// Find one entry by its strict local name.
     /// 根据严格局部入口名查找单个入口。
     pub fn find_tool_by_local_name(&self, tool_name: &str) -> Option<&SkillToolMeta> {
-        self.entries()
-            .find(|tool| tool.name.trim() == tool_name)
+        self.entries().find(|tool| tool.name.trim() == tool_name)
     }
 
     /// Return the main help node declared by the skill.
@@ -359,7 +360,8 @@ impl SkillMeta {
     /// Find one help topic or workflow node by its declared name.
     /// 根据声明名称查找单个 help topic 或 workflow 节点。
     pub fn find_help_topic(&self, topic_name: &str) -> Option<&SkillHelpNodeMeta> {
-        self.help_topics().find(|topic| topic.name.trim() == topic_name)
+        self.help_topics()
+            .find(|topic| topic.name.trim() == topic_name)
     }
 
     /// Return all entries that reference one help topic/workflow name.

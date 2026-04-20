@@ -1,22 +1,22 @@
-use std::fs;
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::dependency::platform::current_platform_key;
 use crate::dependency::types::{
-    DependencyDetectionStatus, DependencyScope, DependencySourceType,
-    ResolvedDependencyRequest, SkillDependencyKind,
+    DependencyDetectionStatus, DependencyScope, DependencySourceType, ResolvedDependencyRequest,
+    SkillDependencyKind,
 };
 use crate::download::archive::install_downloaded_payload;
 use crate::download::manager::{DownloadManager, DownloadManagerConfig, DownloadRequest};
 use crate::runtime_logging::{info as log_info, warn as log_warn};
+use crate::runtime_options::RuntimeSkillRoot;
 use crate::skill::dependencies::{
     FfiDependencySpec, LuaDependencySpec, SkillDependencyManifest, SkillListIndexFile,
     ToolDependencySpec,
 };
-use crate::runtime_options::RuntimeSkillRoot;
 
 /// Dependency-manager configuration shared by dependency resolution and installation phases.
 /// 供依赖解析与安装阶段共享使用的依赖管理配置。
@@ -84,8 +84,7 @@ impl DependencyManager {
         let platform_key = current_platform_key();
         if platform_key == "unknown" {
             return Err(
-                "current platform is not supported by LuaSkills dependency manager"
-                    .to_string(),
+                "current platform is not supported by LuaSkills dependency manager".to_string(),
             );
         }
 
@@ -172,11 +171,7 @@ impl DependencyManager {
 
     /// Resolve the concrete install/probe root for one dependency kind and scope pair.
     /// 根据依赖类型与作用域解析实际安装/探测根目录。
-    fn install_root_for_kind(
-        &self,
-        kind: SkillDependencyKind,
-        scope: DependencyScope,
-    ) -> &Path {
+    fn install_root_for_kind(&self, kind: SkillDependencyKind, scope: DependencyScope) -> &Path {
         match (kind, scope) {
             (SkillDependencyKind::Tool, DependencyScope::Host) => &self.config.host_tool_root,
             (SkillDependencyKind::Tool, _) => &self.config.tool_root,
@@ -221,30 +216,50 @@ impl DependencyManager {
 
         match self.detect_dependency(&resolved_request)? {
             DependencyDetectionStatus::Present => {
-                log_info(format!("[LuaSkills:dependency] Skill '{}' reuses existing dependency '{}' on {}", skill_id, dependency_name, platform_key));
+                log_info(format!(
+                    "[LuaSkills:dependency] Skill '{}' reuses existing dependency '{}' on {}",
+                    skill_id, dependency_name, platform_key
+                ));
                 Ok(())
             }
             DependencyDetectionStatus::Missing => {
                 if scope == DependencyScope::Host {
                     if required {
-                        return Err(format!("required host dependency '{}' is missing", dependency_name));
+                        return Err(format!(
+                            "required host dependency '{}' is missing",
+                            dependency_name
+                        ));
                     }
-                    log_warn(format!("[LuaSkills:dependency] Optional host dependency '{}' is missing", dependency_name));
+                    log_warn(format!(
+                        "[LuaSkills:dependency] Optional host dependency '{}' is missing",
+                        dependency_name
+                    ));
                     return Ok(());
                 }
                 if !self.config.allow_network_download {
                     if required {
-                        return Err(format!("required dependency '{}' is missing and network download is disabled", dependency_name));
+                        return Err(format!(
+                            "required dependency '{}' is missing and network download is disabled",
+                            dependency_name
+                        ));
                     }
-                    log_warn(format!("[LuaSkills:dependency] Optional dependency '{}' is missing and download is disabled", dependency_name));
+                    log_warn(format!(
+                        "[LuaSkills:dependency] Optional dependency '{}' is missing and download is disabled",
+                        dependency_name
+                    ));
                     return Ok(());
                 }
 
-                let cache_key = format!("{}-{}-{}", match kind {
+                let cache_key = format!(
+                    "{}-{}-{}",
+                    match kind {
                         SkillDependencyKind::Tool => "tool",
                         SkillDependencyKind::Lua => "lua",
                         SkillDependencyKind::Ffi => "ffi",
-                    }, dependency_name, platform_key);
+                    },
+                    dependency_name,
+                    platform_key
+                );
                 let download_path = self.downloader.download(&DownloadRequest {
                     source_type,
                     source_locator: resolved_request.download_url.clone(),
@@ -260,10 +275,16 @@ impl DependencyManager {
                     self.detect_dependency(&resolved_request)?,
                     DependencyDetectionStatus::Missing
                 ) {
-                    return Err(format!("dependency '{}' was downloaded but exported files are still missing", dependency_name));
+                    return Err(format!(
+                        "dependency '{}' was downloaded but exported files are still missing",
+                        dependency_name
+                    ));
                 }
 
-                log_info(format!("[LuaSkills:dependency] Installed dependency '{}' for skill '{}' on {}", dependency_name, skill_id, platform_key));
+                log_info(format!(
+                    "[LuaSkills:dependency] Installed dependency '{}' for skill '{}' on {}",
+                    dependency_name, skill_id, platform_key
+                ));
                 Ok(())
             }
         }
@@ -286,28 +307,38 @@ impl DependencyManager {
         install_root: &Path,
     ) -> Result<ResolvedDependencyRequest, String> {
         let resolved_package = match source_type {
-            DependencySourceType::GithubRelease | DependencySourceType::Url => package
-                .cloned()
-                .ok_or_else(|| {
-                    format!("dependency '{}' does not declare package metadata for platform '{}'", dependency_name, platform_key)
-                })?,
+            DependencySourceType::GithubRelease | DependencySourceType::Url => {
+                package.cloned().ok_or_else(|| {
+                    format!(
+                        "dependency '{}' does not declare package metadata for platform '{}'",
+                        dependency_name, platform_key
+                    )
+                })?
+            }
             DependencySourceType::SkillList => {
                 let skilllist = source.skilllist.as_ref().ok_or_else(|| {
-                    format!("dependency '{}' declares skilllist source but misses skilllist config", dependency_name)
+                    format!(
+                        "dependency '{}' declares skilllist source but misses skilllist config",
+                        dependency_name
+                    )
                 })?;
                 let index_file = self.fetch_skilllist_index(&skilllist.url)?;
-                let package_manifest = index_file
-                    .packages
-                    .get(&skilllist.package)
-                    .ok_or_else(|| {
-                        format!("dependency '{}' cannot find package '{}' in skilllist", dependency_name, skilllist.package)
+                let package_manifest =
+                    index_file.packages.get(&skilllist.package).ok_or_else(|| {
+                        format!(
+                            "dependency '{}' cannot find package '{}' in skilllist",
+                            dependency_name, skilllist.package
+                        )
                     })?;
                 package_manifest
                     .packages
                     .get(platform_key)
                     .cloned()
                     .ok_or_else(|| {
-                        format!("dependency '{}' skilllist package '{}' does not support platform '{}'", dependency_name, skilllist.package, platform_key)
+                        format!(
+                            "dependency '{}' skilllist package '{}' does not support platform '{}'",
+                            dependency_name, skilllist.package, platform_key
+                        )
                     })?
             }
         };
@@ -315,10 +346,16 @@ impl DependencyManager {
         let download_url = match source_type {
             DependencySourceType::GithubRelease => {
                 let github_source = source.github.as_ref().ok_or_else(|| {
-                    format!("dependency '{}' declares github_release source but misses github config", dependency_name)
+                    format!(
+                        "dependency '{}' declares github_release source but misses github config",
+                        dependency_name
+                    )
                 })?;
                 let asset_name = resolved_package.asset_name.as_ref().ok_or_else(|| {
-                    format!("dependency '{}' github package for platform '{}' must declare asset_name", dependency_name, platform_key)
+                    format!(
+                        "dependency '{}' github package for platform '{}' must declare asset_name",
+                        dependency_name, platform_key
+                    )
                 })?;
                 self.downloader.resolve_github_release_asset_url(
                     github_source,
@@ -326,12 +363,14 @@ impl DependencyManager {
                     version.as_deref(),
                 )?
             }
-            DependencySourceType::Url | DependencySourceType::SkillList => resolved_package
-                .url
-                .clone()
-                .ok_or_else(|| {
-                    format!("dependency '{}' platform '{}' must declare url", dependency_name, platform_key)
-                })?,
+            DependencySourceType::Url | DependencySourceType::SkillList => {
+                resolved_package.url.clone().ok_or_else(|| {
+                    format!(
+                        "dependency '{}' platform '{}' must declare url",
+                        dependency_name, platform_key
+                    )
+                })?
+            }
         };
 
         Ok(ResolvedDependencyRequest {
@@ -415,7 +454,11 @@ impl DependencyManager {
         for stale_root in previous_roots.difference(&current_roots) {
             if stale_root.exists() {
                 fs::remove_dir_all(stale_root).map_err(|error| {
-                    format!("Failed to remove stale dependency root {}: {}", stale_root.display(), error)
+                    format!(
+                        "Failed to remove stale dependency root {}: {}",
+                        stale_root.display(),
+                        error
+                    )
                 })?;
             }
         }
@@ -527,13 +570,20 @@ impl DependencyManager {
         request: &ResolvedDependencyRequest,
     ) -> Result<DependencyDetectionStatus, String> {
         if request.exports.is_empty() {
-            return Err(format!("dependency '{}' must declare at least one export", request.name));
+            return Err(format!(
+                "dependency '{}' must declare at least one export",
+                request.name
+            ));
         }
 
         let all_present = request.exports.iter().all(|export| {
             request
                 .install_root
-                .join(export.target_path.replace('/', std::path::MAIN_SEPARATOR_STR))
+                .join(
+                    export
+                        .target_path
+                        .replace('/', std::path::MAIN_SEPARATOR_STR),
+                )
                 .exists()
         });
         Ok(if all_present {
@@ -546,11 +596,13 @@ impl DependencyManager {
     /// Fetch and parse one remote skilllist index file.
     /// 获取并解析单个远程 skilllist 索引文件。
     fn fetch_skilllist_index(&self, url: &str) -> Result<SkillListIndexFile, String> {
-        let cache_key = format!("skilllist-{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(url));
+        let cache_key = format!(
+            "skilllist-{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(url)
+        );
         let cached_text = self.downloader.fetch_text(url, &cache_key)?;
-        serde_yaml::from_str::<SkillListIndexFile>(&cached_text).map_err(|error| {
-            format!("failed to parse skilllist index {}: {}", url, error)
-        })
+        serde_yaml::from_str::<SkillListIndexFile>(&cached_text)
+            .map_err(|error| format!("failed to parse skilllist index {}: {}", url, error))
     }
 }
 
@@ -622,7 +674,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("vulcan-luaskills-dependency-test-{}", unique));
+        let root =
+            std::env::temp_dir().join(format!("vulcan-luaskills-dependency-test-{}", unique));
         let config = DependencyManagerConfig {
             tool_root: root.join("dependencies").join("tools"),
             host_tool_root: root.join("bin").join("tools"),
@@ -738,9 +791,18 @@ mod tests {
             )
             .unwrap();
 
-        assert!(!stale_root.exists(), "stale dependency root should be removed");
-        assert!(kept_root.exists(), "unchanged dependency root should be preserved");
-        assert!(current_root.exists(), "current dependency root should be preserved");
+        assert!(
+            !stale_root.exists(),
+            "stale dependency root should be removed"
+        );
+        assert!(
+            kept_root.exists(),
+            "unchanged dependency root should be preserved"
+        );
+        assert!(
+            current_root.exists(),
+            "current dependency root should be preserved"
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -777,7 +839,10 @@ mod tests {
             .cleanup_updated_skill_dependencies(skill_id, Some(&manifest), Some(&manifest))
             .unwrap();
 
-        assert!(dependency_root.exists(), "unchanged dependency root should remain");
+        assert!(
+            dependency_root.exists(),
+            "unchanged dependency root should remain"
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -832,8 +897,14 @@ mod tests {
             )
             .unwrap();
 
-        assert!(!rg_root.exists(), "removed dependency root should be deleted");
-        assert!(!fd_root.exists(), "removed dependency root should be deleted");
+        assert!(
+            !rg_root.exists(),
+            "removed dependency root should be deleted"
+        );
+        assert!(
+            !fd_root.exists(),
+            "removed dependency root should be deleted"
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -892,8 +963,14 @@ mod tests {
             )
             .unwrap();
 
-        assert!(rg_root.exists(), "existing dependency root should be preserved");
-        assert!(fd_root.exists(), "new dependency root should remain untouched");
+        assert!(
+            rg_root.exists(),
+            "existing dependency root should be preserved"
+        );
+        assert!(
+            fd_root.exists(),
+            "new dependency root should remain untouched"
+        );
 
         let _ = fs::remove_dir_all(root);
     }

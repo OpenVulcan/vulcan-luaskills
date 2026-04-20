@@ -1,7 +1,6 @@
 /// Unified English error message returned when a tool emits a non-string result.
 /// 当工具返回非字符串结果时，统一返回的英文错误提示。
-pub const NON_STRING_TOOL_RESULT_ERROR: &str =
-    "Tool results must be returned as plain strings. Structured JSON or table results are not supported.";
+pub const NON_STRING_TOOL_RESULT_ERROR: &str = "Tool results must be returned as plain strings. Structured JSON or table results are not supported.";
 
 /// Stable overflow-mode enum returned from the Lua runtime to the host.
 /// Lua runtime 返回给宿主的稳定超限模式枚举。
@@ -90,4 +89,3 @@ fn split_lines(text: &str) -> Vec<&str> {
         text.split('\n').collect()
     }
 }
-
