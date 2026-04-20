@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -118,6 +119,18 @@ pub struct SkillUninstallResult {
     /// English: Human-readable explanation of the uninstall result.
     /// 当前卸载结果的人类可读说明文本。
     pub message: String,
+}
+
+/// English: One resolved effective skill instance after applying root precedence rules.
+/// 应用根目录优先级规则后得到的单个生效技能实例。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedSkillInstance {
+    /// English: Stable skill identifier resolved from the directory name.
+    /// 从目录名称解析出的稳定技能标识符。
+    pub skill_id: String,
+    /// English: Physical skill directory that is currently effective for the resolved skill id.
+    /// 当前针对该技能标识符实际生效的物理技能目录。
+    pub actual_dir: PathBuf,
 }
 
 /// English: Persistent record written when one skill is explicitly disabled.
@@ -276,8 +289,19 @@ impl SkillManager {
         plane: SkillOperationPlane,
         skill_id: &str,
     ) -> Result<SkillUninstallResult, String> {
-        self.guard_operation(plane, SkillLifecycleAction::Uninstall, skill_id)?;
         let skill_dir = self.config.skill_root.join(skill_id);
+        self.uninstall_skill_at_path_in_plane(plane, skill_id, &skill_dir)
+    }
+
+    /// English: Remove one installed skill directory at an explicitly resolved path and clear its disabled marker.
+    /// 删除单个已解析物理路径上的技能目录，并清理其停用标记。
+    pub fn uninstall_skill_at_path_in_plane(
+        &self,
+        plane: SkillOperationPlane,
+        skill_id: &str,
+        skill_dir: &Path,
+    ) -> Result<SkillUninstallResult, String> {
+        self.guard_operation(plane, SkillLifecycleAction::Uninstall, skill_id)?;
         let skill_removed = if skill_dir.exists() {
             fs::remove_dir_all(&skill_dir)
                 .map_err(|error| format!("Failed to remove {}: {}", skill_dir.display(), error))?;
@@ -384,11 +408,150 @@ impl SkillManager {
     }
 }
 
+/// English: Resolve the currently effective skill directories after applying override precedence and empty-directory disable semantics.
+/// 在应用 override 优先级与空目录禁用语义后解析当前实际生效的技能目录集合。
+pub fn collect_effective_skill_instances(
+    base_dir: &Path,
+    override_dir: Option<&Path>,
+) -> Result<Vec<ResolvedSkillInstance>, String> {
+    let mut roots = Vec::new();
+    if let Some(override_dir) = override_dir {
+        roots.push(override_dir.to_path_buf());
+    }
+    roots.push(base_dir.to_path_buf());
+    collect_effective_skill_instances_from_roots(&roots)
+}
+
+/// English: Resolve the currently effective skill directories after applying ordered root precedence rules.
+/// 在应用有序根目录优先级规则后解析当前实际生效的技能目录集合。
+pub fn collect_effective_skill_instances_from_roots(
+    roots: &[PathBuf],
+) -> Result<Vec<ResolvedSkillInstance>, String> {
+    let mut all_skill_ids = BTreeSet::new();
+    let mut root_maps = Vec::new();
+    for root in roots {
+        let root_map = collect_named_skill_dirs(root)?;
+        all_skill_ids.extend(root_map.keys().cloned());
+        root_maps.push(root_map);
+    }
+
+    let mut resolved = Vec::new();
+    for skill_id in all_skill_ids {
+        for root_map in &root_maps {
+            let Some(skill_dir) = root_map.get(&skill_id) else {
+                continue;
+            };
+            if is_effective_disable_override(skill_dir)? {
+                break;
+            }
+            if !is_skill_manifest_enabled(skill_dir)? {
+                break;
+            }
+            resolved.push(ResolvedSkillInstance {
+                skill_id: skill_id.clone(),
+                actual_dir: skill_dir.clone(),
+            });
+            break;
+        }
+    }
+    Ok(resolved)
+}
+
+/// English: Resolve one effective skill instance by skill id after applying root precedence.
+/// 在应用根目录优先级后按技能标识符解析单个生效技能实例。
+pub fn resolve_effective_skill_instance(
+    base_dir: &Path,
+    override_dir: Option<&Path>,
+    skill_id: &str,
+) -> Result<Option<ResolvedSkillInstance>, String> {
+    validate_luaskills_identifier(skill_id, "skill_id")?;
+    Ok(collect_effective_skill_instances(base_dir, override_dir)?
+        .into_iter()
+        .find(|instance| instance.skill_id == skill_id))
+}
+
+/// English: Resolve one effective skill instance by skill id from an ordered root chain.
+/// 从有序根目录覆盖链中按技能标识符解析单个生效技能实例。
+pub fn resolve_effective_skill_instance_from_roots(
+    roots: &[PathBuf],
+    skill_id: &str,
+) -> Result<Option<ResolvedSkillInstance>, String> {
+    validate_luaskills_identifier(skill_id, "skill_id")?;
+    Ok(collect_effective_skill_instances_from_roots(roots)?
+        .into_iter()
+        .find(|instance| instance.skill_id == skill_id))
+}
+
+/// English: Read one root directory into a validated skill-id -> path map.
+/// 把单个根目录读取为经过校验的 skill-id -> 路径映射。
+fn collect_named_skill_dirs(root: &Path) -> Result<std::collections::BTreeMap<String, PathBuf>, String> {
+    let mut output = std::collections::BTreeMap::new();
+    if !root.exists() {
+        return Ok(output);
+    }
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("Failed to read {}: {}", root.display(), error))?
+    {
+        let entry = entry.map_err(|error| format!("Failed to read skill entry: {}", error))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Failed to inspect skill entry type: {}", error))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let skill_id = match entry.file_name().to_str() {
+            Some(value) => value.to_string(),
+            None => continue,
+        };
+        if validate_luaskills_identifier(&skill_id, "skill_id").is_err() {
+            continue;
+        }
+        output.insert(skill_id, entry.path());
+    }
+    Ok(output)
+}
+
+/// English: Return whether one override skill directory should disable lower-priority instances because it is intentionally empty.
+/// 返回单个 override 技能目录是否因为有意留空而应禁用更低优先级实例。
+fn is_effective_disable_override(skill_dir: &Path) -> Result<bool, String> {
+    Ok(fs::read_dir(skill_dir)
+        .map_err(|error| format!("Failed to read override dir {}: {}", skill_dir.display(), error))?
+        .next()
+        .is_none())
+}
+
+/// English: Return whether one resolved skill directory is enabled by its manifest.
+/// 返回单个已解析技能目录是否在其清单中启用。
+fn is_skill_manifest_enabled(skill_dir: &Path) -> Result<bool, String> {
+    let skill_yaml = skill_dir.join("skill.yaml");
+    if !skill_yaml.exists() {
+        return Ok(true);
+    }
+    let yaml_text = fs::read_to_string(&skill_yaml)
+        .map_err(|error| format!("Failed to read {}: {}", skill_yaml.display(), error))?;
+    #[derive(Debug, Deserialize)]
+    struct SkillEnableProbe {
+        /// English: When omitted the skill is treated as enabled.
+        /// 省略时表示技能默认启用。
+        #[serde(default = "default_skill_enable")]
+        enable: bool,
+    }
+    /// English: Return the default enable flag used by lightweight manifest probes.
+    /// 返回轻量清单探针使用的默认启用标记。
+    fn default_skill_enable() -> bool {
+        true
+    }
+    let probe: SkillEnableProbe = serde_yaml::from_str(&yaml_text)
+        .map_err(|error| format!("Failed to parse {}: {}", skill_yaml.display(), error))?;
+    Ok(probe.enable)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         SkillInstallRequest, SkillLifecycleAction, SkillManager, SkillManagerConfig,
-        SkillOperationPlane, SkillProtectionConfig,
+        SkillOperationPlane, SkillProtectionConfig, collect_effective_skill_instances,
+        resolve_effective_skill_instance,
     };
 
     /// English: Verify that disable/enable operations persist and clear state markers correctly.
@@ -543,6 +706,84 @@ mod tests {
         assert!(!result.sqlite_removed);
         assert!(!result.lancedb_removed);
         assert!(!skill_root.join("vulcan-codekit").exists());
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    /// English: Verify that override roots can contribute standalone skills and shadow lower-priority roots.
+    /// 验证 override 根目录既可以独立提供技能，也可以覆盖更低优先级根目录。
+    #[test]
+    fn collect_effective_skill_instances_supports_override_add_and_shadow() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_collect_effective_instances_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+        let base_dir = temp_root.join("base");
+        let override_dir = temp_root.join("override");
+        let _ = std::fs::create_dir_all(base_dir.join("vulcan-codekit"));
+        let _ = std::fs::create_dir_all(override_dir.join("vulcan-codekit"));
+        let _ = std::fs::create_dir_all(override_dir.join("vulcan-runtime"));
+        let _ = std::fs::write(
+            base_dir.join("vulcan-codekit").join("skill.yaml"),
+            "name: vulcan-codekit\nversion: 0.1.0\n",
+        );
+        let _ = std::fs::write(
+            override_dir.join("vulcan-codekit").join("skill.yaml"),
+            "name: vulcan-codekit\nversion: 0.2.0\n",
+        );
+        let _ = std::fs::write(
+            override_dir.join("vulcan-runtime").join("skill.yaml"),
+            "name: vulcan-runtime\nversion: 0.1.0\n",
+        );
+
+        let resolved = collect_effective_skill_instances(&base_dir, Some(&override_dir))
+            .expect("effective skill collection should succeed");
+        assert_eq!(resolved.len(), 2);
+        let codekit = resolved
+            .iter()
+            .find(|value| value.skill_id == "vulcan-codekit")
+            .expect("vulcan-codekit should exist");
+        assert!(codekit.actual_dir.starts_with(&override_dir));
+        let runtime = resolved
+            .iter()
+            .find(|value| value.skill_id == "vulcan-runtime")
+            .expect("override-only vulcan-runtime should exist");
+        assert!(runtime.actual_dir.starts_with(&override_dir));
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    /// English: Verify that resolving one effective skill instance returns the highest-priority existing directory.
+    /// 验证解析单个生效技能实例时会返回最高优先级的现有目录。
+    #[test]
+    fn resolve_effective_skill_instance_prefers_override_directory() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_resolve_effective_instance_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+        let base_dir = temp_root.join("base");
+        let override_dir = temp_root.join("override");
+        let _ = std::fs::create_dir_all(base_dir.join("vulcan-codekit"));
+        let _ = std::fs::create_dir_all(override_dir.join("vulcan-codekit"));
+        let _ = std::fs::write(
+            base_dir.join("vulcan-codekit").join("skill.yaml"),
+            "name: vulcan-codekit\nversion: 0.1.0\n",
+        );
+        let _ = std::fs::write(
+            override_dir.join("vulcan-codekit").join("skill.yaml"),
+            "name: vulcan-codekit\nversion: 0.2.0\n",
+        );
+
+        let resolved = resolve_effective_skill_instance(&base_dir, Some(&override_dir), "vulcan-codekit")
+            .expect("resolution should succeed")
+            .expect("instance should exist");
+        assert!(resolved.actual_dir.starts_with(&override_dir));
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }

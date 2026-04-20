@@ -16,7 +16,7 @@ use crate::skill::dependencies::{
     FfiDependencySpec, LuaDependencySpec, SkillDependencyManifest, SkillListIndexFile,
     ToolDependencySpec,
 };
-use crate::skill::manifest::validate_luaskills_identifier;
+use crate::skill::manager::collect_effective_skill_instances_from_roots;
 use std::collections::BTreeSet;
 
 /// English: Dependency-manager configuration shared by dependency resolution and installation phases.
@@ -414,11 +414,32 @@ impl DependencyManager {
         removed_skill_id: &str,
         removed_manifest: Option<&SkillDependencyManifest>,
     ) -> Result<(), String> {
+        let mut roots = Vec::new();
+        if let Some(override_dir) = override_dir {
+            roots.push(override_dir.to_path_buf());
+        }
+        roots.push(base_dir.to_path_buf());
+        self.cleanup_uninstalled_skill_dependencies_from_roots(
+            &roots,
+            removed_skill_id,
+            removed_manifest,
+        )
+    }
+
+    /// English: Remove all private dependency roots for one uninstalled skill and clean orphan shared roots using an ordered root chain.
+    /// 使用有序根目录链为单个已卸载技能清理全部私有依赖根，并清理孤立的共享依赖根。
+    pub fn cleanup_uninstalled_skill_dependencies_from_roots(
+        &self,
+        skill_roots: &[PathBuf],
+        removed_skill_id: &str,
+        removed_manifest: Option<&SkillDependencyManifest>,
+    ) -> Result<(), String> {
         self.remove_skill_private_dependency_roots(removed_skill_id)?;
         let Some(removed_manifest) = removed_manifest else {
             return Ok(());
         };
-        let remaining_shared_roots = self.collect_live_shared_dependency_roots(base_dir, override_dir)?;
+        let remaining_shared_roots =
+            self.collect_live_shared_dependency_roots_from_roots(skill_roots)?;
         for root in self.shared_dependency_roots_for_manifest(removed_skill_id, removed_manifest)? {
             if remaining_shared_roots.contains(&root) {
                 continue;
@@ -501,23 +522,35 @@ impl DependencyManager {
         base_dir: &Path,
         override_dir: Option<&Path>,
     ) -> Result<BTreeSet<PathBuf>, String> {
+        let mut roots = Vec::new();
+        if let Some(override_dir) = override_dir {
+            roots.push(override_dir.to_path_buf());
+        }
+        roots.push(base_dir.to_path_buf());
+        self.collect_live_shared_dependency_roots_from_roots(&roots)
+    }
+
+    /// English: Scan the current effective skill set and collect all shared dependency install roots from an ordered root chain.
+    /// 从有序根目录链扫描当前生效技能集合，并收集全部共享依赖安装根目录。
+    pub fn collect_live_shared_dependency_roots_from_roots(
+        &self,
+        skill_roots: &[PathBuf],
+    ) -> Result<BTreeSet<PathBuf>, String> {
         let platform_key = current_platform_key();
         if platform_key == "unknown" {
             return Ok(BTreeSet::new());
         }
 
         let mut roots = BTreeSet::new();
-        for skill_dir in collect_effective_skill_dirs(base_dir, override_dir)? {
-            let skill_id = skill_dir
-                .file_name()
-                .and_then(|value| value.to_str())
-                .ok_or_else(|| format!("Invalid skill directory name: {}", skill_dir.display()))?;
+        for resolved_instance in collect_effective_skill_instances_from_roots(skill_roots)? {
+            let skill_id = resolved_instance.skill_id;
+            let skill_dir = resolved_instance.actual_dir;
             let dependencies_path = skill_dir.join("dependencies.yaml");
             if !dependencies_path.exists() {
                 continue;
             }
             let manifest = SkillDependencyManifest::load_from_path(&dependencies_path)?;
-            for root in self.shared_dependency_roots_for_manifest(skill_id, &manifest)? {
+            for root in self.shared_dependency_roots_for_manifest(&skill_id, &manifest)? {
                 roots.insert(root);
             }
         }
@@ -531,7 +564,21 @@ impl DependencyManager {
         base_dir: &Path,
         override_dir: Option<&Path>,
     ) -> Result<(), String> {
-        let live_shared_roots = self.collect_live_shared_dependency_roots(base_dir, override_dir)?;
+        let mut roots = Vec::new();
+        if let Some(override_dir) = override_dir {
+            roots.push(override_dir.to_path_buf());
+        }
+        roots.push(base_dir.to_path_buf());
+        self.cleanup_orphaned_shared_dependencies_from_roots(&roots)
+    }
+
+    /// English: Remove orphan shared dependency directories by rescanning the current live root chain instead of trusting persisted state files.
+    /// 通过重新扫描当前生效根目录链删除孤立共享依赖目录，而不是依赖持久化状态文件。
+    pub fn cleanup_orphaned_shared_dependencies_from_roots(
+        &self,
+        skill_roots: &[PathBuf],
+    ) -> Result<(), String> {
+        let live_shared_roots = self.collect_live_shared_dependency_roots_from_roots(skill_roots)?;
         for root in self.enumerate_shared_dependency_install_roots()? {
             if live_shared_roots.contains(&root) {
                 continue;
@@ -682,80 +729,6 @@ fn normalize_dependency_path_component(raw: &str) -> String {
     }
 }
 
-/// English: Minimal manifest subset used to determine whether one scanned skill is enabled.
-/// 用于判断单个扫描到的技能是否启用的最小清单子集。
-#[derive(Debug, Deserialize)]
-struct SkillEnableProbe {
-    /// English: When omitted the skill is treated as enabled.
-    /// 省略时表示技能默认启用。
-    #[serde(default = "default_skill_enable")]
-    enable: bool,
-}
-
-/// English: Return the default enable flag used by dependency scanning.
-/// 返回依赖扫描时使用的默认启用标记。
-fn default_skill_enable() -> bool {
-    true
-}
-
-/// English: Collect the current effective skill directories after applying base/override precedence rules.
-/// 在应用 base/override 优先级规则后收集当前生效的 skill 目录。
-fn collect_effective_skill_dirs(
-    base_dir: &Path,
-    override_dir: Option<&Path>,
-) -> Result<Vec<PathBuf>, String> {
-    let mut effective_dirs = Vec::new();
-    let base_iter = fs::read_dir(base_dir)
-        .map_err(|error| format!("Failed to read {}: {}", base_dir.display(), error))?;
-    for entry in base_iter {
-        let entry = entry.map_err(|error| format!("Failed to read skill entry: {}", error))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("Failed to inspect skill entry type: {}", error))?;
-        if !file_type.is_dir() {
-            continue;
-        }
-        let skill_name = match entry.file_name().to_str() {
-            Some(value) => value.to_string(),
-            None => continue,
-        };
-        if validate_luaskills_identifier(&skill_name, "skill_id").is_err() {
-            continue;
-        }
-
-        let actual_dir = if let Some(override_dir) = override_dir {
-            let override_skill_dir = override_dir.join(&skill_name);
-            if override_skill_dir.exists() {
-                if override_skill_dir
-                    .read_dir()
-                    .map_err(|error| {
-                        format!(
-                            "Failed to read override dir {}: {}",
-                            override_skill_dir.display(),
-                            error
-                        )
-                    })?
-                    .next()
-                    .is_none()
-                {
-                    continue;
-                }
-                override_skill_dir
-            } else {
-                entry.path()
-            }
-        } else {
-            entry.path()
-        };
-
-        if !is_skill_manifest_enabled(&actual_dir)? {
-            continue;
-        }
-        effective_dirs.push(actual_dir);
-    }
-    Ok(effective_dirs)
-}
-
 /// English: Read immediate child directories of one root path and skip files or missing roots.
 /// 读取单个根目录的直接子目录，并跳过文件或不存在的根目录。
 fn read_child_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -775,18 +748,4 @@ fn read_child_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(output)
-}
-
-/// English: Return whether one scanned skill directory is enabled by its manifest.
-/// 返回单个扫描到的技能目录是否在清单中被启用。
-fn is_skill_manifest_enabled(skill_dir: &Path) -> Result<bool, String> {
-    let skill_yaml = skill_dir.join("skill.yaml");
-    if !skill_yaml.exists() {
-        return Ok(true);
-    }
-    let yaml_text = fs::read_to_string(&skill_yaml)
-        .map_err(|error| format!("Failed to read {}: {}", skill_yaml.display(), error))?;
-    let probe: SkillEnableProbe = serde_yaml::from_str(&yaml_text)
-        .map_err(|error| format!("Failed to parse {}: {}", skill_yaml.display(), error))?;
-    Ok(probe.enable)
 }

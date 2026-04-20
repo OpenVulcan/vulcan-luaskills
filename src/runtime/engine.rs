@@ -30,7 +30,8 @@ use crate::runtime_result::{
 use crate::skill::dependencies::SkillDependencyManifest;
 use crate::skill::manager::{
     SkillApplyResult, SkillInstallRequest, SkillManager, SkillManagerConfig, SkillOperationPlane,
-    SkillUninstallOptions, SkillUninstallResult,
+    SkillUninstallOptions, SkillUninstallResult, collect_effective_skill_instances_from_roots,
+    resolve_effective_skill_instance, resolve_effective_skill_instance_from_roots,
 };
 use crate::sqlite_host::{
     SqliteSkillBinding, SqliteSkillHost,
@@ -48,22 +49,6 @@ struct LoadedSkill {
     lancedb_binding: Option<Arc<LanceDbSkillBinding>>,
     sqlite_binding: Option<Arc<SqliteSkillBinding>>,
     resolved_entry_names: HashMap<String, String>,
-}
-
-/// English: Minimal manifest subset used to decide whether one skill should participate in reload/load.
-/// 用于决定单个技能是否参与重载/加载的最小清单子集。
-#[derive(Debug, Deserialize)]
-struct SkillEnableProbe {
-    /// English: When omitted the skill is treated as enabled.
-    /// 省略时表示技能默认启用。
-    #[serde(default = "default_skill_enable_probe")]
-    enable: bool,
-}
-
-/// English: Return the default enabled flag used by the lightweight manifest probe.
-/// 返回轻量技能清单探针使用的默认启用标记。
-fn default_skill_enable_probe() -> bool {
-    true
 }
 
 /// Pool sizing configuration for Lua virtual machines.
@@ -936,10 +921,6 @@ fn validate_skill_relative_path(
 
 /// Validate one discovered skill directory name against the strict LuaSkills rule.
 /// 按严格 LuaSkills 规则校验一个被发现的 skill 目录名。
-fn validate_skill_directory_name(directory_name: &str) -> Result<(), String> {
-    validate_luaskills_identifier(directory_name, "skill directory name")
-}
-
 /// Build the absolute Lua entry file path for a tool.
 /// 构建工具 Lua 入口文件的绝对路径。
 fn tool_entry_path(skill_dir: &Path, tool: &crate::lua_skill::SkillToolMeta) -> PathBuf {
@@ -1416,6 +1397,15 @@ fn parse_tool_call_output(
 }
 
 impl LuaEngine {
+    /// English: Return the reference root used for host-managed fallback directories when no explicit host path is provided.
+    /// 在未显式提供宿主管理路径时返回用于回退目录计算的参考根目录。
+    fn reference_skill_root<'a>(&self, skill_roots: &'a [PathBuf]) -> Result<&'a Path, String> {
+        skill_roots
+            .last()
+            .map(PathBuf::as_path)
+            .ok_or_else(|| "at least one skill root is required / 至少需要一个技能根目录".to_string())
+    }
+
     /// Create a new LuaEngine with LuaJIT VM and registered globals.
     pub fn new(options: LuaEngineOptions) -> Result<Self, Box<dyn std::error::Error>> {
         configure_global_tool_cache(
@@ -1553,17 +1543,6 @@ impl LuaEngine {
         manager.ensure_skill_dependencies(skill_name, &manifest)
     }
 
-    /// English: Read the manifest enable flag before dependency preparation and full load.
-    /// 在依赖准备与完整加载之前读取技能清单中的启用标记。
-    fn is_skill_manifest_enabled(skill_dir: &Path) -> Result<bool, String> {
-        let skill_yaml = skill_dir.join("skill.yaml");
-        let yaml_text = std::fs::read_to_string(&skill_yaml)
-            .map_err(|error| format!("Failed to read {}: {}", skill_yaml.display(), error))?;
-        let probe: SkillEnableProbe = serde_yaml::from_str(&yaml_text)
-            .map_err(|error| format!("Failed to parse {}: {}", skill_yaml.display(), error))?;
-        Ok(probe.enable)
-    }
-
     /// Resolve final canonical entry names for all loaded skills with stable collision indexing.
     /// 为全部已加载 skill 解析最终 canonical 入口名，并以稳定顺序处理冲突编号。
     fn rebuild_entry_registry(&mut self) -> Result<(), String> {
@@ -1696,32 +1675,32 @@ impl LuaEngine {
         base_dir: &Path,
         override_dir: Option<&Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if !base_dir.exists() {
+        let mut skill_roots = Vec::new();
+        if let Some(override_dir) = override_dir {
+            skill_roots.push(override_dir.to_path_buf());
+        }
+        skill_roots.push(base_dir.to_path_buf());
+        self.load_from_roots(&skill_roots)
+    }
+
+    /// English: Load skills from an ordered root chain where earlier roots override later roots.
+    /// 从有序根目录覆盖链加载技能，前面的根目录会覆盖后面的同名技能。
+    pub fn load_from_roots(
+        &mut self,
+        skill_roots: &[PathBuf],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if skill_roots.iter().all(|path| !path.exists()) {
             return Ok(());
         }
 
-        let mut discovered_skills = Vec::new();
-        let skill_manager = self.skill_manager_for(base_dir)?;
-        for entry in std::fs::read_dir(base_dir)? {
-            let entry = entry?;
-            let skill_dir = entry.path();
-            if !skill_dir.is_dir() {
-                continue;
-            }
-            let skill_name = entry.file_name().to_string_lossy().to_string();
-            if validate_skill_directory_name(&skill_name).is_err() {
-                log_warn(format!(
-                    "[LuaSkill] Skipped non-standard directory '{}': only ^[a-z]([a-z0-9-]*[a-z0-9])?$ is supported",
-                    skill_name
-                ));
-                continue;
-            }
-            discovered_skills.push((skill_name, skill_dir));
-        }
-
-        discovered_skills.sort_by(|left, right| left.0.cmp(&right.0));
-
-        for (skill_name, skill_dir) in discovered_skills {
+        let reference_root = self
+            .reference_skill_root(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let skill_manager = self.skill_manager_for(reference_root)?;
+        for resolved_instance in collect_effective_skill_instances_from_roots(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+        {
+            let skill_name = resolved_instance.skill_id;
             if !skill_manager.is_skill_enabled(&skill_name)? {
                 log_warn(format!(
                     "[LuaSkill] Skipped disabled skill '{}'",
@@ -1729,49 +1708,17 @@ impl LuaEngine {
                 ));
                 continue;
             }
-
-            // Check override directory
-            let actual_dir = if let Some(od) = override_dir {
-                let override_skill_dir = od.join(&skill_name);
-                if override_skill_dir.exists() {
-                    // Empty directory = disable this skill
-                    if override_skill_dir.read_dir()?.next().is_none() {
-                        log_info(format!(
-                            "[LuaSkill] Disabled by empty override: {}",
-                            skill_name
-                        ));
-                        continue;
-                    }
-                    log_info(format!("[LuaSkill] Override loaded: {}", skill_name));
-                    override_skill_dir
-                } else {
-                    log_info(format!("[LuaSkill] System loaded: {}", skill_name));
-                    skill_dir
-                }
+            let actual_dir = resolved_instance.actual_dir;
+            let root_label = if skill_roots.first().is_some_and(|root| actual_dir.starts_with(root))
+                && skill_roots.len() > 1
+            {
+                "Override"
             } else {
-                log_info(format!("[LuaSkill] System loaded: {}", skill_name));
-                skill_dir
+                "Resolved"
             };
+            log_info(format!("[LuaSkill] {} loaded: {}", root_label, skill_name));
 
-            match Self::is_skill_manifest_enabled(&actual_dir) {
-                Ok(true) => {}
-                Ok(false) => {
-                    log_info(format!(
-                        "[LuaSkill] Skipped manifest-disabled skill '{}'",
-                        skill_name
-                    ));
-                    continue;
-                }
-                Err(error) => {
-                    log_error(format!(
-                        "[LuaSkill] Failed to read enable flag for {}: {}",
-                        skill_name, error
-                    ));
-                    continue;
-                }
-            }
-
-            if let Err(error) = self.ensure_skill_dependencies(base_dir, &actual_dir) {
+            if let Err(error) = self.ensure_skill_dependencies(reference_root, &actual_dir) {
                 log_error(format!(
                     "[LuaSkill] Failed to prepare dependencies for {}: {}",
                     skill_name, error
@@ -1785,11 +1732,11 @@ impl LuaEngine {
         }
 
         let dependency_manager = DependencyManager::new(
-            self.dependency_manager_config_for(base_dir)
+            self.dependency_manager_config_for(reference_root)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
         );
         dependency_manager
-            .cleanup_orphaned_shared_dependencies(base_dir, override_dir)
+            .cleanup_orphaned_shared_dependencies_from_roots(skill_roots)
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
 
         self.rebuild_entry_registry()
@@ -1810,9 +1757,23 @@ impl LuaEngine {
         base_dir: &Path,
         override_dir: Option<&Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut skill_roots = Vec::new();
+        if let Some(override_dir) = override_dir {
+            skill_roots.push(override_dir.to_path_buf());
+        }
+        skill_roots.push(base_dir.to_path_buf());
+        self.reload_from_roots(&skill_roots)
+    }
+
+    /// English: Reload all skills from one ordered root chain and rebuild runtime state from scratch.
+    /// 从一条有序根目录覆盖链中重载全部技能，并从零重建运行时状态。
+    pub fn reload_from_roots(
+        &mut self,
+        skill_roots: &[PathBuf],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let previous_entries = self.list_entries();
         self.reset_runtime_state();
-        self.load_from_dirs(base_dir, override_dir)?;
+        self.load_from_roots(skill_roots)?;
         self.emit_entry_registry_delta(previous_entries);
         Ok(())
     }
@@ -1834,7 +1795,16 @@ impl LuaEngine {
             .skill_manager_for(base_dir)
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         let removed_dependency_manifest = if action == crate::skill::manager::SkillLifecycleAction::Uninstall {
-            let dependencies_path = manager.skill_root().join(skill_id).join("dependencies.yaml");
+            let resolved_instance = resolve_effective_skill_instance(base_dir, override_dir, skill_id)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                .ok_or_else(|| -> Box<dyn std::error::Error> {
+                    format!(
+                        "effective skill instance '{}' not found / 未找到当前生效的技能实例 '{}'",
+                        skill_id, skill_id
+                    )
+                    .into()
+                })?;
+            let dependencies_path = resolved_instance.actual_dir.join("dependencies.yaml");
             if dependencies_path.exists() {
                 Some(
                     SkillDependencyManifest::load_from_path(&dependencies_path)
@@ -1935,17 +1905,28 @@ impl LuaEngine {
     fn uninstall_skill_and_reload(
         &mut self,
         plane: SkillOperationPlane,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
+        skill_roots: &[PathBuf],
         skill_id: &str,
         options: &SkillUninstallOptions,
     ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
         validate_luaskills_identifier(skill_id, "skill_id")
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-        let manager = self
-            .skill_manager_for(base_dir)
+        let reference_root = self
+            .reference_skill_root(skill_roots)
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-        let dependencies_path = manager.skill_root().join(skill_id).join("dependencies.yaml");
+        let manager = self
+            .skill_manager_for(reference_root)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let resolved_instance = resolve_effective_skill_instance_from_roots(skill_roots, skill_id)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+            .ok_or_else(|| -> Box<dyn std::error::Error> {
+                format!(
+                    "effective skill instance '{}' not found / 未找到当前生效的技能实例 '{}'",
+                    skill_id, skill_id
+                )
+                .into()
+            })?;
+        let dependencies_path = resolved_instance.actual_dir.join("dependencies.yaml");
         let removed_dependency_manifest = if dependencies_path.exists() {
             Some(
                 SkillDependencyManifest::load_from_path(&dependencies_path)
@@ -1968,7 +1949,11 @@ impl LuaEngine {
             );
             return Err(error.into());
         }
-        let mut result = match manager.uninstall_skill_in_plane(plane, skill_id) {
+        let mut result = match manager.uninstall_skill_at_path_in_plane(
+            plane,
+            skill_id,
+            &resolved_instance.actual_dir,
+        ) {
             Ok(result) => result,
             Err(error) => {
                 let message = error.to_string();
@@ -1983,13 +1968,12 @@ impl LuaEngine {
             }
         };
         let dependency_manager = DependencyManager::new(
-            self.dependency_manager_config_for(base_dir)
+            self.dependency_manager_config_for(reference_root)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
         );
         dependency_manager
-            .cleanup_uninstalled_skill_dependencies(
-                base_dir,
-                override_dir,
+            .cleanup_uninstalled_skill_dependencies_from_roots(
+                skill_roots,
                 skill_id,
                 removed_dependency_manifest.as_ref(),
             )
@@ -2023,7 +2007,7 @@ impl LuaEngine {
             result.lancedb_removed,
             result.lancedb_retained
         );
-        self.reload_from_dirs(base_dir, override_dir)?;
+        self.reload_from_roots(skill_roots)?;
         self.emit_skill_lifecycle_event(
             plane,
             crate::skill::manager::SkillLifecycleAction::Uninstall,
@@ -2085,11 +2069,28 @@ impl LuaEngine {
         skill_id: &str,
         reason: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut skill_roots = Vec::new();
+        if let Some(override_dir) = override_dir {
+            skill_roots.push(override_dir.to_path_buf());
+        }
+        skill_roots.push(base_dir.to_path_buf());
+        self.disable_skill_in_roots(&skill_roots, skill_id, reason)
+    }
+
+    /// English: Mark one skill disabled through the ordinary skills plane using an ordered root chain and immediately reload the runtime view.
+    /// 通过普通 skills 平面使用有序根目录链将单个技能标记为停用，并立即重载运行时视图。
+    pub fn disable_skill_in_roots(
+        &mut self,
+        skill_roots: &[PathBuf],
+        skill_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let reference_root = self.reference_skill_root(skill_roots)?;
         self.mutate_skill_state_and_reload(
             SkillOperationPlane::Skills,
             crate::skill::manager::SkillLifecycleAction::Disable,
-            base_dir,
-            override_dir,
+            reference_root,
+            None,
             skill_id,
             reason,
         )
@@ -2104,11 +2105,28 @@ impl LuaEngine {
         skill_id: &str,
         reason: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut skill_roots = Vec::new();
+        if let Some(override_dir) = override_dir {
+            skill_roots.push(override_dir.to_path_buf());
+        }
+        skill_roots.push(base_dir.to_path_buf());
+        self.system_disable_skill_in_roots(&skill_roots, skill_id, reason)
+    }
+
+    /// English: Mark one skill disabled through the host-controlled system plane using an ordered root chain and immediately reload the runtime view.
+    /// 通过宿主控制的 system 平面使用有序根目录链将单个技能标记为停用，并立即重载运行时视图。
+    pub fn system_disable_skill_in_roots(
+        &mut self,
+        skill_roots: &[PathBuf],
+        skill_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let reference_root = self.reference_skill_root(skill_roots)?;
         self.mutate_skill_state_and_reload(
             SkillOperationPlane::System,
             crate::skill::manager::SkillLifecycleAction::Disable,
-            base_dir,
-            override_dir,
+            reference_root,
+            None,
             skill_id,
             reason,
         )
@@ -2118,15 +2136,15 @@ impl LuaEngine {
     /// 通过普通 skills 平面移除单个技能的停用标记，并立即重载运行时视图。
     pub fn enable_skill(
         &mut self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
+        skill_roots: &[PathBuf],
         skill_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let reference_root = self.reference_skill_root(skill_roots)?;
         self.mutate_skill_state_and_reload(
             SkillOperationPlane::Skills,
             crate::skill::manager::SkillLifecycleAction::Enable,
-            base_dir,
-            override_dir,
+            reference_root,
+            None,
             skill_id,
             None,
         )
@@ -2136,15 +2154,15 @@ impl LuaEngine {
     /// 通过宿主控制的 system 平面移除单个技能的停用标记，并立即重载运行时视图。
     pub fn system_enable_skill(
         &mut self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
+        skill_roots: &[PathBuf],
         skill_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let reference_root = self.reference_skill_root(skill_roots)?;
         self.mutate_skill_state_and_reload(
             SkillOperationPlane::System,
             crate::skill::manager::SkillLifecycleAction::Enable,
-            base_dir,
-            override_dir,
+            reference_root,
+            None,
             skill_id,
             None,
         )
@@ -2154,15 +2172,13 @@ impl LuaEngine {
     /// 通过普通 skills 平面卸载单个技能目录，并立即重载运行时视图。
     pub fn uninstall_skill(
         &mut self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
+        skill_roots: &[PathBuf],
         skill_id: &str,
         options: &SkillUninstallOptions,
     ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
         self.uninstall_skill_and_reload(
             SkillOperationPlane::Skills,
-            base_dir,
-            override_dir,
+            skill_roots,
             skill_id,
             options,
         )
@@ -2172,15 +2188,13 @@ impl LuaEngine {
     /// 通过宿主控制的 system 平面卸载单个技能目录，并立即重载运行时视图。
     pub fn system_uninstall_skill(
         &mut self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
+        skill_roots: &[PathBuf],
         skill_id: &str,
         options: &SkillUninstallOptions,
     ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
         self.uninstall_skill_and_reload(
             SkillOperationPlane::System,
-            base_dir,
-            override_dir,
+            skill_roots,
             skill_id,
             options,
         )

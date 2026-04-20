@@ -26,9 +26,10 @@ pub use skill::dependencies::{
 };
 pub use skill::manifest::{SkillHelpMeta, SkillHelpNodeMeta, SkillMeta, SkillToolMeta};
 pub use skill::manager::{
-    DisabledSkillRecord, SkillApplyResult, SkillInstallRequest, SkillLifecycleAction,
-    SkillManager, SkillManagerConfig, SkillOperationPlane, SkillProtectionConfig,
-    SkillUninstallOptions, SkillUninstallResult,
+    DisabledSkillRecord, ResolvedSkillInstance, SkillApplyResult, SkillInstallRequest,
+    SkillLifecycleAction, SkillManager, SkillManagerConfig, SkillOperationPlane,
+    SkillProtectionConfig, SkillUninstallOptions, SkillUninstallResult,
+    collect_effective_skill_instances, resolve_effective_skill_instance,
 };
 pub use host::options::{LuaInvocationContext, LuaRuntimeHostOptions};
 
