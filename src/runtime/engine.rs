@@ -1406,7 +1406,7 @@ impl LuaEngine {
         skill_roots
             .iter()
             .rev()
-            .find(|root| root.skills_dir.exists())
+            .find(|root| root.skills_dir.exists() && root.skills_dir.is_dir())
             .ok_or_else(|| "at least one skill root is required / 至少需要一个技能根目录".to_string())
     }
 
