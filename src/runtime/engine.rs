@@ -1541,6 +1541,19 @@ impl LuaEngine {
         manager.ensure_skill_dependencies(skill_name, &manifest)
     }
 
+    /// Load one optional dependency manifest from one skill directory when the file exists.
+    /// 当依赖文件存在时，从单个技能目录加载可选依赖清单。
+    fn load_skill_dependency_manifest(
+        &self,
+        skill_dir: &Path,
+    ) -> Result<Option<SkillDependencyManifest>, String> {
+        let dependencies_path = skill_dir.join("dependencies.yaml");
+        if !dependencies_path.exists() {
+            return Ok(None);
+        }
+        SkillDependencyManifest::load_from_path(&dependencies_path).map(Some)
+    }
+
     /// Resolve final canonical entry names for all loaded skills with stable collision indexing.
     /// 为全部已加载 skill 解析最终 canonical 入口名，并以稳定顺序处理冲突编号。
     fn rebuild_entry_registry(&mut self) -> Result<(), String> {
@@ -2053,6 +2066,38 @@ impl LuaEngine {
             }
             _ => unreachable!("unsupported apply action should have returned early"),
         };
+        let previous_dependency_manifest =
+            if action == crate::skill::manager::SkillLifecycleAction::Update {
+                let target_skill_id = request
+                    .skill_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .or_else(|| {
+                        request
+                            .source
+                            .as_deref()
+                            .and_then(|value| value.trim().rsplit('/').next())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned)
+                    });
+                if let Some(target_skill_id) = target_skill_id {
+                    resolve_declared_skill_instance_from_roots(skill_roots, &target_skill_id)
+                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                        .and_then(|resolved| {
+                            self.load_skill_dependency_manifest(&resolved.actual_dir)
+                                .transpose()
+                        })
+                        .transpose()
+                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
         let manager = self
             .skill_manager_for(&target_root)
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
@@ -2067,6 +2112,30 @@ impl LuaEngine {
         };
         if matches!(result.status.as_str(), "installed" | "updated") {
             self.reload_from_roots(skill_roots)?;
+            if action == crate::skill::manager::SkillLifecycleAction::Update
+                && result.status == "updated"
+            {
+                let current_dependency_manifest =
+                    resolve_declared_skill_instance_from_roots(skill_roots, &result.skill_id)
+                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                        .and_then(|resolved| {
+                            self.load_skill_dependency_manifest(&resolved.actual_dir)
+                                .transpose()
+                        })
+                        .transpose()
+                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+                let dependency_manager = DependencyManager::new(
+                    self.dependency_manager_config_for(&target_root)
+                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+                );
+                dependency_manager
+                    .cleanup_updated_skill_dependencies(
+                        &result.skill_id,
+                        previous_dependency_manifest.as_ref(),
+                        current_dependency_manifest.as_ref(),
+                    )
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            }
         }
         let resolved_instance =
             resolve_declared_skill_instance_from_roots(skill_roots, &result.skill_id)
