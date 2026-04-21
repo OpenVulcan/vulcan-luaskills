@@ -64,8 +64,12 @@ impl LuaRuntimeSpaceControllerBridge {
         };
         let runtime = Runtime::new()
             .map_err(|error| format!("failed to create controller tokio runtime: {}", error))?;
+        let client = ControllerClient::new(config, registration);
+        runtime
+            .block_on(client.connect())
+            .map_err(|error| format!("failed to connect space controller client: {}", error))?;
         Ok(Arc::new(Self {
-            client: ControllerClient::new(config, registration),
+            client,
             runtime: Mutex::new(runtime),
         }))
     }

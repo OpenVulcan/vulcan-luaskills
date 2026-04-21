@@ -2510,6 +2510,9 @@ impl SqliteSkillHost {
                     space_id: controller_space_id,
                     binding_id: controller_binding_id,
                     db_path: database_path.clone(),
+                    // Controller mode already centralizes ownership in one dedicated process.
+                    // 控制器模式已经把数据库所有权集中到单独控制进程，不再额外启用文件锁。
+                    enforce_db_file_lock: false,
                     ..ControllerSqliteEnableRequest::default()
                 },
             ))?;
