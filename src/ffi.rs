@@ -16,6 +16,10 @@ use crate::{
     SkillInstallRequest, SkillUninstallOptions, SkillUninstallResult,
 };
 
+/// Stable FFI protocol version derived from the crate package version.
+/// 从 crate 包版本派生出的稳定 FFI 协议版本。
+pub(crate) const FFI_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// One stable JSON response envelope returned by every LuaSkills FFI entrypoint.
 /// 每个 LuaSkills FFI 入口统一返回的稳定 JSON 响应包络。
 #[derive(Debug, Serialize)]
@@ -506,7 +510,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_string_free(value: *mut c_char) {
 #[unsafe(no_mangle)]
 pub extern "C" fn vulcan_luaskills_ffi_version_json() -> *mut c_char {
     ffi_ok(json!({
-        "ffi_version": "0.1.0",
+        "ffi_version": FFI_VERSION,
         "protocol": "json-cabi"
     }))
 }
@@ -516,7 +520,7 @@ pub extern "C" fn vulcan_luaskills_ffi_version_json() -> *mut c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn vulcan_luaskills_ffi_describe_json() -> *mut c_char {
     ffi_ok(FfiDescribeJsonResult {
-        ffi_version: "0.1.0".to_string(),
+        ffi_version: FFI_VERSION.to_string(),
         exported_functions: exported_ffi_function_names(),
     })
 }

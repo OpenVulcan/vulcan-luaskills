@@ -65,9 +65,21 @@ typedef struct FfiLuaInvocationContext {
     const char *tool_config_json;
 } FfiLuaInvocationContext;
 
+/*
+Stable source-type integers used by standard install and update requests/results.
+标准安装与更新请求及结果使用的稳定来源类型整数。
+*/
+enum {
+    FFI_SOURCE_TYPE_ABSENT = -1,
+    FFI_SOURCE_TYPE_GITHUB = 0,
+    FFI_SOURCE_TYPE_URL = 1
+};
+
 typedef struct FfiSkillInstallRequest {
     const char *skill_id;
     const char *source;
+    /* FFI_SOURCE_TYPE_GITHUB or FFI_SOURCE_TYPE_URL. */
+    /* FFI_SOURCE_TYPE_GITHUB 或 FFI_SOURCE_TYPE_URL。 */
     int32_t source_type;
 } FfiSkillInstallRequest;
 
@@ -156,6 +168,8 @@ typedef struct FfiSkillApplyResult {
     char *status;
     char *message;
     char *version;
+    /* FFI_SOURCE_TYPE_ABSENT, FFI_SOURCE_TYPE_GITHUB, or FFI_SOURCE_TYPE_URL. */
+    /* FFI_SOURCE_TYPE_ABSENT、FFI_SOURCE_TYPE_GITHUB 或 FFI_SOURCE_TYPE_URL。 */
     int32_t source_type;
     char *source_locator;
 } FfiSkillApplyResult;

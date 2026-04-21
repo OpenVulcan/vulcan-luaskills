@@ -21,6 +21,9 @@ use crate::{
 
 const FFI_STATUS_OK: i32 = 0;
 const FFI_STATUS_ERROR: i32 = 1;
+const FFI_SOURCE_TYPE_ABSENT: i32 = -1;
+const FFI_SOURCE_TYPE_GITHUB: i32 = 0;
+const FFI_SOURCE_TYPE_URL: i32 = 1;
 
 /// Plain C ABI engine pool config used by standard non-JSON FFI calls.
 /// 标准非 JSON FFI 调用使用的原生 C ABI 引擎池配置。
@@ -715,8 +718,8 @@ fn parse_invocation_context(
 /// 将单个 C ABI 来源类型整数转换为一个 Rust 来源类型值。
 fn parse_source_type(value: i32) -> Result<SkillInstallSourceType, String> {
     match value {
-        0 => Ok(SkillInstallSourceType::Github),
-        1 => Ok(SkillInstallSourceType::Url),
+        FFI_SOURCE_TYPE_GITHUB => Ok(SkillInstallSourceType::Github),
+        FFI_SOURCE_TYPE_URL => Ok(SkillInstallSourceType::Url),
         _ => Err(format!("Unsupported source_type '{}'", value)),
     }
 }
@@ -865,9 +868,9 @@ fn alloc_invocation_result(value: &RuntimeInvocationResult) -> FfiRuntimeInvocat
 /// 将单个安装或更新结果转换为一个 C ABI 结果结构。
 fn alloc_skill_apply_result(value: &SkillApplyResult) -> FfiSkillApplyResult {
     let source_type = match value.source_type {
-        None => -1,
-        Some(SkillInstallSourceType::Github) => 0,
-        Some(SkillInstallSourceType::Url) => 1,
+        None => FFI_SOURCE_TYPE_ABSENT,
+        Some(SkillInstallSourceType::Github) => FFI_SOURCE_TYPE_GITHUB,
+        Some(SkillInstallSourceType::Url) => FFI_SOURCE_TYPE_URL,
     };
     FfiSkillApplyResult {
         skill_id: alloc_c_string(&value.skill_id),
@@ -1098,7 +1101,7 @@ pub extern "C" fn vulcan_luaskills_ffi_version(
     if version_out.is_null() {
         return ffi_error_status(error_out, "version_out must not be null");
     }
-    unsafe { *version_out = alloc_c_string("0.1.0") };
+    unsafe { *version_out = alloc_c_string(crate::ffi::FFI_VERSION) };
     ffi_ok_status(error_out)
 }
 

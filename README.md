@@ -160,19 +160,43 @@ skill **不应该**：
 
 ```text
 src/
-├─ lib.rs                # 对外导出
-├─ lua_engine.rs         # 核心运行时与 skill 调用
-├─ lua_skill.rs          # skill.yaml 解析与 skill 模型
-├─ entry_descriptor.rs   # entry 描述结构
-├─ runtime_context.rs    # 宿主注入上下文
-├─ runtime_result.rs     # 运行时结构化结果
-├─ runtime_help.rs       # help 树结构
-├─ runtime_options.rs    # 宿主传入运行时选项
-├─ runtime_logging.rs    # 回调式日志事件
-├─ tool_cache.rs         # 运行时缓存能力
-├─ sqlite_host.rs        # SQLite 标准能力绑定
-└─ lancedb_host.rs       # LanceDB 标准能力绑定
+├─ lib.rs                # 对外导出与兼容 re-export
+├─ ffi.rs                # JSON 风格 FFI 接口与统一导出清单
+├─ ffi_standard.rs       # 标准结构化 C ABI FFI 接口
+├─ dependency/           # skill 依赖解析、安装与清理
+├─ download/             # GitHub / URL / archive 下载与校验
+├─ host/                 # 宿主回调与宿主选项模型
+├─ providers/            # SQLite / LanceDB provider 绑定
+├─ runtime/              # 引擎、上下文、帮助、结果与日志
+└─ skill/                # manifest、来源记录、生命周期管理
 ```
+
+当前 `ffi.rs` 与 `ffi_standard.rs` 仍位于 `src` 根目录，原因是：
+
+- 它们都是顶层对外接口入口
+- 直接依赖 `runtime`、`skill`、`host` 等多个子模块
+- 当前文件规模仍可控，放在根目录更利于让宿主快速定位 FFI 导出面
+
+如果后续继续扩展：
+
+- FFI 回调
+- 自动生成绑定
+- 更多语言专用辅助层
+- 更细的共享 ABI 类型
+
+则更推荐进一步收敛成：
+
+```text
+src/
+└─ ffi/
+   ├─ mod.rs
+   ├─ json.rs
+   ├─ standard.rs
+   ├─ types.rs
+   └─ memory.rs
+```
+
+也就是说，**当前结构可以继续使用，但当 FFI 再显著扩张时，建议再下沉为独立目录模块。**
 
 ## LuaSkills 目录规则
 
@@ -270,6 +294,10 @@ FFI 设计规则如下：
 - 原生 C ABI 参数
 - `error_out` 输出英文错误文本
 - 复杂列表/结果结构通过专用 free 函数释放
+- `source_type` 采用稳定整数协议：
+  - `-1 = absent`
+  - `0 = github`
+  - `1 = url`
 
 说明：
 

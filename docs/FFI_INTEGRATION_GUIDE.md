@@ -80,15 +80,27 @@
 核心文件：
 
 - 标准接口导出：
-  - [D:\projects\vulcan-luaskills\src\ffi_standard.rs](/D:/projects/vulcan-luaskills/src/ffi_standard.rs)
+  - [src/ffi_standard.rs](../src/ffi_standard.rs)
 - JSON 接口导出：
-  - [D:\projects\vulcan-luaskills\src\ffi.rs](/D:/projects/vulcan-luaskills/src/ffi.rs)
+  - [src/ffi.rs](../src/ffi.rs)
 - 头文件：
-  - [D:\projects\vulcan-luaskills\include\vulcan_luaskills_ffi.h](/D:/projects/vulcan-luaskills/include/vulcan_luaskills_ffi.h)
+  - [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
 - 示例：
-  - [D:\projects\vulcan-luaskills\examples\ffi\python\demo.py](/D:/projects/vulcan-luaskills/examples/ffi/python/demo.py)
-  - [D:\projects\vulcan-luaskills\examples\ffi\go\demo.go](/D:/projects/vulcan-luaskills/examples/ffi/go/demo.go)
-  - [D:\projects\vulcan-luaskills\examples\ffi\typescript\demo.ts](/D:/projects/vulcan-luaskills/examples/ffi/typescript/demo.ts)
+  - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
+  - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
+- [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
+
+当前 FFI 版本字符串统一派生自 crate 包版本：
+
+- `env!("CARGO_PKG_VERSION")`
+
+也就是说：
+
+- 标准接口 `vulcan_luaskills_ffi_version`
+- JSON 接口 `vulcan_luaskills_ffi_version_json`
+- 自描述结果中的 `ffi_version`
+
+都与 `Cargo.toml` 中的 `version` 保持同源。
 
 ## 4. 引擎与句柄模型
 
@@ -344,6 +356,24 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 说明：
 
 当前受管安装主链重点支持 GitHub。
+
+`source_type` 在标准 FFI 中采用稳定整数协议：
+
+- `-1`
+  - absent
+  - 仅用于结果里表示来源不存在
+- `0`
+  - github
+  - 表示 GitHub 仓库来源
+- `1`
+  - url
+  - 表示 URL metadata 来源
+
+头文件中对应常量为：
+
+- `FFI_SOURCE_TYPE_ABSENT`
+- `FFI_SOURCE_TYPE_GITHUB`
+- `FFI_SOURCE_TYPE_URL`
 
 ### 8.8 `FfiSkillUninstallOptions`
 
@@ -802,11 +832,11 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 示例位置：
 
 - Python：
-  - [D:\projects\vulcan-luaskills\examples\ffi\python\demo.py](/D:/projects/vulcan-luaskills/examples/ffi/python/demo.py)
+  - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
 - Go：
-  - [D:\projects\vulcan-luaskills\examples\ffi\go\demo.go](/D:/projects/vulcan-luaskills/examples/ffi/go/demo.go)
+  - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
 - TypeScript：
-  - [D:\projects\vulcan-luaskills\examples\ffi\typescript\demo.ts](/D:/projects/vulcan-luaskills/examples/ffi/typescript/demo.ts)
+  - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
 
 当前示例主要演示：
 
@@ -826,7 +856,8 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 另外还提供一个可直接运行的完整烟测目录：
 
-- [D:\projects\vulcan-luaskills\examples\ffi\demo_runtime\README.md](/D:/projects/vulcan-luaskills/examples/ffi/demo_runtime/README.md)
+- [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
+ - [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
 
 它会：
 
