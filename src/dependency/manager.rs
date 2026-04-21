@@ -14,8 +14,8 @@ use crate::download::manager::{DownloadManager, DownloadManagerConfig, DownloadR
 use crate::runtime_logging::{info as log_info, warn as log_warn};
 use crate::runtime_options::RuntimeSkillRoot;
 use crate::skill::dependencies::{
-    FfiDependencySpec, LuaDependencySpec, SkillDependencyManifest, SkillListIndexFile,
-    ToolDependencySpec,
+    DependencyExportSpec, FfiDependencySpec, LuaDependencySpec, SkillDependencyManifest,
+    SkillListIndexFile, ToolDependencySpec,
 };
 
 /// Dependency-manager configuration shared by dependency resolution and installation phases.
@@ -263,14 +263,38 @@ impl DependencyManager {
                 let download_path = self.downloader.download(&DownloadRequest {
                     source_type,
                     source_locator: resolved_request.download_url.clone(),
-                    cache_key,
+                    cache_key: cache_key.clone(),
                 })?;
-                install_downloaded_payload(
+                if let Err(first_error) = install_downloaded_payload(
                     &download_path,
                     resolved_request.archive_type,
                     &resolved_request.install_root,
                     &resolved_request.exports,
-                )?;
+                ) {
+                    log_warn(format!(
+                        "[LuaSkills:dependency] Dependency '{}' install from cached archive failed once, retrying after cache cleanup: {}",
+                        dependency_name, first_error
+                    ));
+                    let _ = fs::remove_file(&download_path);
+                    let _ = fs::remove_dir_all(&resolved_request.install_root);
+                    let redownloaded_path = self.downloader.download(&DownloadRequest {
+                        source_type,
+                        source_locator: resolved_request.download_url.clone(),
+                        cache_key,
+                    })?;
+                    install_downloaded_payload(
+                        &redownloaded_path,
+                        resolved_request.archive_type,
+                        &resolved_request.install_root,
+                        &resolved_request.exports,
+                    )
+                    .map_err(|retry_error| {
+                        format!(
+                            "{}. Automatic redownload and reinstall also failed: {}",
+                            first_error, retry_error
+                        )
+                    })?;
+                }
                 if matches!(
                     self.detect_dependency(&resolved_request)?,
                     DependencyDetectionStatus::Missing
@@ -343,6 +367,8 @@ impl DependencyManager {
             }
         };
 
+        let mut resolved_version = version.clone();
+        let mut resolved_tag_name: Option<String> = None;
         let download_url = match source_type {
             DependencySourceType::GithubRelease => {
                 let github_source = source.github.as_ref().ok_or_else(|| {
@@ -357,11 +383,14 @@ impl DependencyManager {
                         dependency_name, platform_key
                     )
                 })?;
-                self.downloader.resolve_github_release_asset_url(
+                let resolved_asset = self.downloader.resolve_github_release_asset(
                     github_source,
                     asset_name,
                     version.as_deref(),
-                )?
+                )?;
+                resolved_version = Some(resolved_asset.version.clone());
+                resolved_tag_name = Some(resolved_asset.tag_name.clone());
+                resolved_asset.download_url
             }
             DependencySourceType::Url | DependencySourceType::SkillList => {
                 resolved_package.url.clone().ok_or_else(|| {
@@ -379,17 +408,21 @@ impl DependencyManager {
             scope,
             platform_key: platform_key.to_string(),
             download_url,
-            version: version.clone(),
+            version: resolved_version.clone(),
             install_root: build_dependency_install_root(
                 install_root,
                 scope,
                 skill_id,
                 dependency_name,
-                version.as_deref(),
+                resolved_version.as_deref(),
                 platform_key,
             ),
             archive_type: resolved_package.archive_type,
-            exports: resolved_package.exports,
+            exports: resolve_export_templates(
+                &resolved_package.exports,
+                resolved_version.as_deref(),
+                resolved_tag_name.as_deref(),
+            ),
         })
     }
 
@@ -655,6 +688,37 @@ fn normalize_dependency_path_component(raw: &str) -> String {
     } else {
         output
     }
+}
+
+/// Resolve export-path templates using the final normalized version and tag values.
+/// 使用最终标准化版本号与标签值解析导出路径模板。
+fn resolve_export_templates(
+    exports: &[DependencyExportSpec],
+    version: Option<&str>,
+    tag: Option<&str>,
+) -> Vec<DependencyExportSpec> {
+    exports
+        .iter()
+        .cloned()
+        .map(|mut export| {
+            export.archive_path = resolve_export_template_field(&export.archive_path, version, tag);
+            export.target_path = resolve_export_template_field(&export.target_path, version, tag);
+            export
+        })
+        .collect()
+}
+
+/// Resolve one export template field by replacing `{version}` and `{tag}` when values are available.
+/// 在值可用时解析单个导出模板字段中的 `{version}` 与 `{tag}`。
+fn resolve_export_template_field(raw: &str, version: Option<&str>, tag: Option<&str>) -> String {
+    let mut value = raw.to_string();
+    if let Some(version) = version {
+        value = value.replace("{version}", version);
+    }
+    if let Some(tag) = tag {
+        value = value.replace("{tag}", tag);
+    }
+    value
 }
 
 #[cfg(test)]
@@ -973,5 +1037,23 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// GitHub-release export templates should resolve `{version}` placeholders before archive extraction.
+    /// GitHub Release 导出模板应在归档解包前解析 `{version}` 占位符。
+    #[test]
+    fn resolve_export_templates_expands_version_placeholder() {
+        let exports = vec![DependencyExportSpec {
+            archive_path: "ripgrep-{version}-x86_64-pc-windows-msvc/rg.exe".to_string(),
+            target_path: "bin/rg-{version}.exe".to_string(),
+            executable: false,
+        }];
+
+        let resolved = resolve_export_templates(&exports, Some("14.1.1"), Some("14.1.1"));
+        assert_eq!(
+            resolved[0].archive_path,
+            "ripgrep-14.1.1-x86_64-pc-windows-msvc/rg.exe"
+        );
+        assert_eq!(resolved[0].target_path, "bin/rg-14.1.1.exe");
     }
 }
