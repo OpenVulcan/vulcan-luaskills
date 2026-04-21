@@ -1,16 +1,26 @@
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
+use std::ptr;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 
 use crate::ffi::{FFI_ENGINE_COUNTER, ffi_engine_registry, with_engine, with_engine_mut};
+use crate::host::database::{
+    LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,
+    RuntimeDatabaseKind, RuntimeLanceDbProviderAction, RuntimeLanceDbProviderCallback,
+    RuntimeLanceDbProviderRequest, RuntimeLanceDbProviderResult, RuntimeSqliteProviderAction,
+    RuntimeSqliteProviderCallback, RuntimeSqliteProviderRequest, set_lancedb_provider_callback,
+    set_lancedb_provider_json_callback, set_sqlite_provider_callback,
+    set_sqlite_provider_json_callback,
+};
 use crate::runtime_context::RuntimeRequestContext;
 use crate::runtime_help::{
     RuntimeHelpDetail, RuntimeHelpNodeDescriptor, RuntimeSkillHelpDescriptor,
 };
 use crate::runtime_options::{
-    LuaInvocationContext, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions, RuntimeSkillRoot,
+    LuaInvocationContext, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions,
+    LuaRuntimeSpaceControllerOptions, LuaRuntimeSpaceControllerProcessMode, RuntimeSkillRoot,
 };
 use crate::skill::manager::{SkillInstallRequest, SkillUninstallOptions};
 use crate::skill::source::SkillInstallSourceType;
@@ -26,6 +36,36 @@ const FFI_STATUS_ERROR: i32 = 1;
 const FFI_SOURCE_TYPE_ABSENT: i32 = -1;
 const FFI_SOURCE_TYPE_GITHUB: i32 = 0;
 const FFI_SOURCE_TYPE_URL: i32 = 1;
+const FFI_PROVIDER_MODE_DYNAMIC_LIBRARY: i32 = 0;
+const FFI_PROVIDER_MODE_HOST_CALLBACK: i32 = 1;
+const FFI_PROVIDER_MODE_SPACE_CONTROLLER: i32 = 2;
+const FFI_CALLBACK_MODE_STANDARD: i32 = 0;
+const FFI_CALLBACK_MODE_JSON: i32 = 1;
+const FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE: i32 = 0;
+const FFI_SPACE_CONTROLLER_PROCESS_MODE_MANAGED: i32 = 1;
+const FFI_DATABASE_KIND_SQLITE: i32 = 0;
+const FFI_DATABASE_KIND_LANCEDB: i32 = 1;
+const FFI_SQLITE_PROVIDER_ACTION_EXECUTE_SCRIPT: i32 = 0;
+const FFI_SQLITE_PROVIDER_ACTION_EXECUTE_BATCH: i32 = 1;
+const FFI_SQLITE_PROVIDER_ACTION_QUERY_JSON: i32 = 2;
+const FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM: i32 = 3;
+const FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_WAIT_METRICS: i32 = 4;
+const FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_CHUNK: i32 = 5;
+const FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_CLOSE: i32 = 6;
+const FFI_SQLITE_PROVIDER_ACTION_TOKENIZE_TEXT: i32 = 7;
+const FFI_SQLITE_PROVIDER_ACTION_UPSERT_CUSTOM_WORD: i32 = 8;
+const FFI_SQLITE_PROVIDER_ACTION_REMOVE_CUSTOM_WORD: i32 = 9;
+const FFI_SQLITE_PROVIDER_ACTION_LIST_CUSTOM_WORDS: i32 = 10;
+const FFI_SQLITE_PROVIDER_ACTION_ENSURE_FTS_INDEX: i32 = 11;
+const FFI_SQLITE_PROVIDER_ACTION_REBUILD_FTS_INDEX: i32 = 12;
+const FFI_SQLITE_PROVIDER_ACTION_UPSERT_FTS_DOCUMENT: i32 = 13;
+const FFI_SQLITE_PROVIDER_ACTION_DELETE_FTS_DOCUMENT: i32 = 14;
+const FFI_SQLITE_PROVIDER_ACTION_SEARCH_FTS: i32 = 15;
+const FFI_LANCEDB_PROVIDER_ACTION_CREATE_TABLE: i32 = 0;
+const FFI_LANCEDB_PROVIDER_ACTION_VECTOR_UPSERT: i32 = 1;
+const FFI_LANCEDB_PROVIDER_ACTION_VECTOR_SEARCH: i32 = 2;
+const FFI_LANCEDB_PROVIDER_ACTION_DELETE: i32 = 3;
+const FFI_LANCEDB_PROVIDER_ACTION_DROP_TABLE: i32 = 4;
 
 /// Plain C ABI engine pool config used by standard non-JSON FFI calls.
 /// 标准非 JSON FFI 调用使用的原生 C ABI 引擎池配置。
@@ -112,9 +152,33 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Optional host SQLite dynamic library path.
     /// 可选宿主 SQLite 动态库路径。
     pub sqlite_library_path: *const c_char,
+    /// SQLite provider mode integer where `0=dynamic_library`, `1=host_callback`, and `2=space_controller`.
+    /// SQLite provider 模式整数，其中 `0=dynamic_library`、`1=host_callback`、`2=space_controller`。
+    pub sqlite_provider_mode: i32,
+    /// SQLite callback mode integer where `0=standard` and `1=json`.
+    /// SQLite 回调模式整数，其中 `0=standard`、`1=json`。
+    pub sqlite_callback_mode: i32,
     /// Optional host LanceDB dynamic library path.
     /// 可选宿主 LanceDB 动态库路径。
     pub lancedb_library_path: *const c_char,
+    /// LanceDB provider mode integer where `0=dynamic_library` and `1=host_callback` and `2=space_controller`.
+    /// LanceDB provider 模式整数，其中 `0=dynamic_library`、`1=host_callback`、`2=space_controller`。
+    pub lancedb_provider_mode: i32,
+    /// LanceDB callback mode integer where `0=standard` and `1=json`.
+    /// LanceDB 回调模式整数，其中 `0=standard`、`1=json`。
+    pub lancedb_callback_mode: i32,
+    /// Optional shared space-controller endpoint.
+    /// 可选共享空间控制器端点。
+    pub space_controller_endpoint: *const c_char,
+    /// Whether the runtime may auto-spawn the space-controller process.
+    /// 运行时是否允许自动唤起空间控制器进程。
+    pub space_controller_auto_spawn: u8,
+    /// Optional copied local controller executable path.
+    /// 可选的本地复制控制器可执行文件路径。
+    pub space_controller_executable_path: *const c_char,
+    /// Space-controller process mode integer where `0=service` and `1=managed`.
+    /// 空间控制器进程模式整数，其中 `0=service`、`1=managed`。
+    pub space_controller_process_mode: i32,
     /// Optional tool-cache config pointer.
     /// 可选工具缓存配置指针。
     pub cache_config: *const FfiToolCacheConfig,
@@ -128,6 +192,31 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Lua 是否允许使用 `vulcan.runtime.skills.*` 管理桥接。
     pub enable_skill_management_bridge: u8,
 }
+
+/// C ABI JSON provider callback used by non-Rust hosts to bridge database requests.
+/// 供非 Rust 宿主桥接数据库请求使用的 C ABI JSON provider 回调。
+pub type FfiJsonProviderCallback =
+    unsafe extern "C" fn(request_json: *const c_char, user_data: *mut c_void) -> *mut c_char;
+
+/// C ABI SQLite provider callback used by standard host integration.
+/// 标准宿主集成使用的 C ABI SQLite provider 回调。
+pub type FfiSqliteProviderCallback = unsafe extern "C" fn(
+    request: *const FfiSqliteProviderRequest,
+    user_data: *mut c_void,
+    response_json_out: *mut *mut c_char,
+    error_out: *mut *mut c_char,
+) -> i32;
+
+/// C ABI LanceDB provider callback used by standard host integration.
+/// 标准宿主集成使用的 C ABI LanceDB provider 回调。
+pub type FfiLanceDbProviderCallback = unsafe extern "C" fn(
+    request: *const FfiLanceDbProviderRequest,
+    user_data: *mut c_void,
+    meta_json_out: *mut *mut c_char,
+    data_out: *mut *mut u8,
+    data_len_out: *mut usize,
+    error_out: *mut *mut c_char,
+) -> i32;
 
 /// Plain C ABI engine options used by standard non-JSON engine creation.
 /// 标准非 JSON 引擎创建使用的原生 C ABI 引擎选项。
@@ -193,6 +282,69 @@ pub struct FfiSkillUninstallOptions {
     /// Remove LanceDB data when non-zero.
     /// 非零时删除 LanceDB 数据。
     pub remove_lancedb: u8,
+}
+
+/// Plain C ABI database binding context forwarded into one host-managed database provider.
+/// 转发给宿主管理数据库 provider 的原生 C ABI 数据库绑定上下文。
+#[repr(C)]
+pub struct FfiRuntimeDatabaseBindingContext {
+    /// Stable host-provided space label such as ROOT, USER, or PROJECT_A.
+    /// 由宿主提供的稳定空间标签，例如 ROOT、USER 或 PROJECT_A。
+    pub space_label: *const c_char,
+    /// Stable skill identifier owning the current binding.
+    /// 拥有当前绑定的稳定技能标识符。
+    pub skill_id: *const c_char,
+    /// Stable database binding tag composed from space label and skill id.
+    /// 由空间标签与技能标识符组合得到的稳定数据库绑定标签。
+    pub binding_tag: *const c_char,
+    /// Effective physical skill root label that resolved the current skill instance.
+    /// 解析出当前技能实例的生效物理技能根标签。
+    pub root_name: *const c_char,
+    /// Physical space root directory path.
+    /// 物理空间根目录路径。
+    pub space_root: *const c_char,
+    /// Physical skill directory path.
+    /// 物理技能目录路径。
+    pub skill_dir: *const c_char,
+    /// Basename of the physical skill directory.
+    /// 物理技能目录名称。
+    pub skill_dir_name: *const c_char,
+    /// Database kind integer where `0=sqlite` and `1=lancedb`.
+    /// 数据库类型整数，其中 `0=sqlite`、`1=lancedb`。
+    pub database_kind: i32,
+    /// Library-computed default embedded database path for diagnostics and fallback.
+    /// 由库计算出的默认内嵌数据库路径，用于诊断和回退。
+    pub default_database_path: *const c_char,
+}
+
+/// Plain C ABI SQLite provider request delivered to one host callback.
+/// 传递给宿主回调的原生 C ABI SQLite provider 请求。
+#[repr(C)]
+pub struct FfiSqliteProviderRequest {
+    /// Requested action integer defined by `FFI_SQLITE_PROVIDER_ACTION_*`.
+    /// 由 `FFI_SQLITE_PROVIDER_ACTION_*` 定义的请求动作整数。
+    pub action: i32,
+    /// Stable binding context of the current skill-scoped database.
+    /// 当前 skill 级数据库的稳定绑定上下文。
+    pub binding: FfiRuntimeDatabaseBindingContext,
+    /// Action-specific input payload encoded as JSON text.
+    /// 以 JSON 文本编码的动作专属输入载荷。
+    pub input_json: *const c_char,
+}
+
+/// Plain C ABI LanceDB provider request delivered to one host callback.
+/// 传递给宿主回调的原生 C ABI LanceDB provider 请求。
+#[repr(C)]
+pub struct FfiLanceDbProviderRequest {
+    /// Requested action integer defined by `FFI_LANCEDB_PROVIDER_ACTION_*`.
+    /// 由 `FFI_LANCEDB_PROVIDER_ACTION_*` 定义的请求动作整数。
+    pub action: i32,
+    /// Stable binding context of the current skill-scoped database.
+    /// 当前 skill 级数据库的稳定绑定上下文。
+    pub binding: FfiRuntimeDatabaseBindingContext,
+    /// Action-specific input payload encoded as JSON text.
+    /// 以 JSON 文本编码的动作专属输入载荷。
+    pub input_json: *const c_char,
 }
 
 /// Plain C ABI string-array result.
@@ -494,6 +646,12 @@ fn alloc_c_string(value: impl AsRef<str>) -> *mut c_char {
         .into_raw()
 }
 
+/// Convert one Rust string into one owned C string while rejecting interior NUL bytes.
+/// 将一个 Rust 字符串转换为拥有所有权的 C 字符串，并拒绝内部 NUL 字节。
+fn to_cstring(value: impl AsRef<str>, field_name: &str) -> Result<CString, String> {
+    CString::new(value.as_ref()).map_err(|_| format!("{} contains interior NUL bytes", field_name))
+}
+
 /// Convert one optional Rust string into one nullable owned raw C string pointer.
 /// 将单个可选 Rust 字符串转换为一个可空拥有所有权的原生 C 字符串指针。
 fn alloc_optional_c_string(value: Option<&str>) -> *mut c_char {
@@ -648,11 +806,44 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             "sqlite_library_path",
         )?
         .map(PathBuf::from),
+        sqlite_provider_mode: parse_provider_mode(
+            value.sqlite_provider_mode,
+            "sqlite_provider_mode",
+        )?,
+        sqlite_callback_mode: parse_callback_mode(
+            value.sqlite_callback_mode,
+            "sqlite_callback_mode",
+        )?,
         lancedb_library_path: parse_optional_string(
             value.lancedb_library_path,
             "lancedb_library_path",
         )?
         .map(PathBuf::from),
+        lancedb_provider_mode: parse_provider_mode(
+            value.lancedb_provider_mode,
+            "lancedb_provider_mode",
+        )?,
+        lancedb_callback_mode: parse_callback_mode(
+            value.lancedb_callback_mode,
+            "lancedb_callback_mode",
+        )?,
+        space_controller: LuaRuntimeSpaceControllerOptions {
+            endpoint: parse_optional_string(
+                value.space_controller_endpoint,
+                "space_controller_endpoint",
+            )?,
+            auto_spawn: value.space_controller_auto_spawn != 0,
+            executable_path: parse_optional_string(
+                value.space_controller_executable_path,
+                "space_controller_executable_path",
+            )?
+            .map(PathBuf::from),
+            process_mode: parse_space_controller_process_mode(
+                value.space_controller_process_mode,
+                "space_controller_process_mode",
+            )?,
+            ..LuaRuntimeSpaceControllerOptions::default()
+        },
         cache_config: parse_cache_config(value.cache_config),
         reserved_entry_names: parse_string_array(
             value.reserved_entry_names,
@@ -663,6 +854,50 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             enable_skill_management_bridge: value.enable_skill_management_bridge != 0,
         },
     })
+}
+
+/// Convert one stable integer provider-mode value into the Rust runtime enum.
+/// 将一个稳定整数 provider 模式值转换为 Rust 运行时枚举。
+fn parse_provider_mode(
+    value: i32,
+    field_name: &str,
+) -> Result<LuaRuntimeDatabaseProviderMode, String> {
+    match value {
+        FFI_PROVIDER_MODE_DYNAMIC_LIBRARY => Ok(LuaRuntimeDatabaseProviderMode::DynamicLibrary),
+        FFI_PROVIDER_MODE_HOST_CALLBACK => Ok(LuaRuntimeDatabaseProviderMode::HostCallback),
+        FFI_PROVIDER_MODE_SPACE_CONTROLLER => Ok(LuaRuntimeDatabaseProviderMode::SpaceController),
+        _ => Err(format!("Unsupported {} value '{}'", field_name, value)),
+    }
+}
+
+/// Convert one stable integer callback-mode value into the Rust runtime enum.
+/// 将一个稳定整数回调模式值转换为 Rust 运行时枚举。
+fn parse_callback_mode(
+    value: i32,
+    field_name: &str,
+) -> Result<LuaRuntimeDatabaseCallbackMode, String> {
+    match value {
+        FFI_CALLBACK_MODE_STANDARD => Ok(LuaRuntimeDatabaseCallbackMode::Standard),
+        FFI_CALLBACK_MODE_JSON => Ok(LuaRuntimeDatabaseCallbackMode::Json),
+        _ => Err(format!("Unsupported {} value '{}'", field_name, value)),
+    }
+}
+
+/// Convert one stable integer space-controller process-mode value into the Rust runtime enum.
+/// 将一个稳定整数空间控制器进程模式值转换为 Rust 运行时枚举。
+fn parse_space_controller_process_mode(
+    value: i32,
+    field_name: &str,
+) -> Result<LuaRuntimeSpaceControllerProcessMode, String> {
+    match value {
+        FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE => {
+            Ok(LuaRuntimeSpaceControllerProcessMode::Service)
+        }
+        FFI_SPACE_CONTROLLER_PROCESS_MODE_MANAGED => {
+            Ok(LuaRuntimeSpaceControllerProcessMode::Managed)
+        }
+        _ => Err(format!("Unsupported {} value '{}'", field_name, value)),
+    }
 }
 
 /// Convert one C ABI engine options struct into one Rust engine options value.
@@ -904,12 +1139,401 @@ fn alloc_skill_uninstall_result(value: &SkillUninstallResult) -> FfiSkillUninsta
     }
 }
 
+/// Owned C-string storage used to keep one provider binding context alive during one callback invocation.
+/// 用于在单次回调调用期间保持 provider 绑定上下文存活的拥有型 C 字符串存储。
+struct OwnedFfiRuntimeDatabaseBindingContext {
+    /// Stable host-provided space label.
+    /// 宿主提供的稳定空间标签。
+    space_label: CString,
+    /// Stable skill identifier.
+    /// 稳定技能标识符。
+    skill_id: CString,
+    /// Stable database binding tag.
+    /// 稳定数据库绑定标签。
+    binding_tag: CString,
+    /// Effective physical root label.
+    /// 生效物理根标签。
+    root_name: CString,
+    /// Physical space root path.
+    /// 物理空间根路径。
+    space_root: CString,
+    /// Physical skill directory path.
+    /// 物理技能目录路径。
+    skill_dir: CString,
+    /// Physical skill directory basename.
+    /// 物理技能目录名称。
+    skill_dir_name: CString,
+    /// Default embedded database path.
+    /// 默认内嵌数据库路径。
+    default_database_path: CString,
+    /// Borrowed C ABI view built on top of the owned strings.
+    /// 构建在拥有型字符串之上的借用式 C ABI 视图。
+    ffi: FfiRuntimeDatabaseBindingContext,
+}
+
+impl OwnedFfiRuntimeDatabaseBindingContext {
+    /// Build one owned C ABI binding context from one runtime binding context.
+    /// 基于运行时绑定上下文构造一个拥有型 C ABI 绑定上下文。
+    fn from_runtime(value: &RuntimeDatabaseBindingContext) -> Result<Self, String> {
+        let space_label = to_cstring(&value.space_label, "space_label")?;
+        let skill_id = to_cstring(&value.skill_id, "skill_id")?;
+        let binding_tag = to_cstring(&value.binding_tag, "binding_tag")?;
+        let root_name = to_cstring(&value.root_name, "root_name")?;
+        let space_root = to_cstring(&value.space_root, "space_root")?;
+        let skill_dir = to_cstring(&value.skill_dir, "skill_dir")?;
+        let skill_dir_name = to_cstring(&value.skill_dir_name, "skill_dir_name")?;
+        let default_database_path =
+            to_cstring(&value.default_database_path, "default_database_path")?;
+        let database_kind = ffi_database_kind_code(value.database_kind);
+        let ffi = FfiRuntimeDatabaseBindingContext {
+            space_label: space_label.as_ptr(),
+            skill_id: skill_id.as_ptr(),
+            binding_tag: binding_tag.as_ptr(),
+            root_name: root_name.as_ptr(),
+            space_root: space_root.as_ptr(),
+            skill_dir: skill_dir.as_ptr(),
+            skill_dir_name: skill_dir_name.as_ptr(),
+            database_kind,
+            default_database_path: default_database_path.as_ptr(),
+        };
+        Ok(Self {
+            space_label,
+            skill_id,
+            binding_tag,
+            root_name,
+            space_root,
+            skill_dir,
+            skill_dir_name,
+            default_database_path,
+            ffi,
+        })
+    }
+
+    /// Borrow the underlying C ABI binding context.
+    /// 借用底层 C ABI 绑定上下文。
+    fn as_ffi(&self) -> FfiRuntimeDatabaseBindingContext {
+        FfiRuntimeDatabaseBindingContext {
+            space_label: self.space_label.as_ptr(),
+            skill_id: self.skill_id.as_ptr(),
+            binding_tag: self.binding_tag.as_ptr(),
+            root_name: self.root_name.as_ptr(),
+            space_root: self.space_root.as_ptr(),
+            skill_dir: self.skill_dir.as_ptr(),
+            skill_dir_name: self.skill_dir_name.as_ptr(),
+            database_kind: self.ffi.database_kind,
+            default_database_path: self.default_database_path.as_ptr(),
+        }
+    }
+}
+
+/// Owned SQLite provider request wrapper used during one standard callback invocation.
+/// 在单次标准回调调用期间使用的拥有型 SQLite provider 请求包装器。
+struct OwnedFfiSqliteProviderRequest {
+    /// Owned binding context backing the request.
+    /// 为请求提供支撑的拥有型绑定上下文。
+    _binding: OwnedFfiRuntimeDatabaseBindingContext,
+    /// JSON-encoded action input payload.
+    /// 以 JSON 编码的动作输入载荷。
+    _input_json: CString,
+    /// Borrowed C ABI request view.
+    /// 借用式 C ABI 请求视图。
+    ffi: FfiSqliteProviderRequest,
+}
+
+impl OwnedFfiSqliteProviderRequest {
+    /// Build one owned SQLite provider request wrapper from one runtime request.
+    /// 基于运行时请求构造一个拥有型 SQLite provider 请求包装器。
+    fn from_runtime(value: &RuntimeSqliteProviderRequest) -> Result<Self, String> {
+        let binding = OwnedFfiRuntimeDatabaseBindingContext::from_runtime(&value.binding)?;
+        let input_json = to_cstring(
+            &serde_json::to_string(&value.input)
+                .map_err(|error| format!("failed to encode sqlite input json: {}", error))?,
+            "input_json",
+        )?;
+        let ffi = FfiSqliteProviderRequest {
+            action: ffi_sqlite_provider_action_code(&value.action),
+            binding: binding.as_ffi(),
+            input_json: input_json.as_ptr(),
+        };
+        Ok(Self {
+            _binding: binding,
+            _input_json: input_json,
+            ffi,
+        })
+    }
+
+    /// Borrow the underlying C ABI request pointer.
+    /// 借用底层 C ABI 请求指针。
+    fn as_ptr(&self) -> *const FfiSqliteProviderRequest {
+        &self.ffi
+    }
+}
+
+/// Owned LanceDB provider request wrapper used during one standard callback invocation.
+/// 在单次标准回调调用期间使用的拥有型 LanceDB provider 请求包装器。
+struct OwnedFfiLanceDbProviderRequest {
+    /// Owned binding context backing the request.
+    /// 为请求提供支撑的拥有型绑定上下文。
+    _binding: OwnedFfiRuntimeDatabaseBindingContext,
+    /// JSON-encoded action input payload.
+    /// 以 JSON 编码的动作输入载荷。
+    _input_json: CString,
+    /// Borrowed C ABI request view.
+    /// 借用式 C ABI 请求视图。
+    ffi: FfiLanceDbProviderRequest,
+}
+
+impl OwnedFfiLanceDbProviderRequest {
+    /// Build one owned LanceDB provider request wrapper from one runtime request.
+    /// 基于运行时请求构造一个拥有型 LanceDB provider 请求包装器。
+    fn from_runtime(value: &RuntimeLanceDbProviderRequest) -> Result<Self, String> {
+        let binding = OwnedFfiRuntimeDatabaseBindingContext::from_runtime(&value.binding)?;
+        let input_json = to_cstring(
+            &serde_json::to_string(&value.input)
+                .map_err(|error| format!("failed to encode lancedb input json: {}", error))?,
+            "input_json",
+        )?;
+        let ffi = FfiLanceDbProviderRequest {
+            action: ffi_lancedb_provider_action_code(&value.action),
+            binding: binding.as_ffi(),
+            input_json: input_json.as_ptr(),
+        };
+        Ok(Self {
+            _binding: binding,
+            _input_json: input_json,
+            ffi,
+        })
+    }
+
+    /// Borrow the underlying C ABI request pointer.
+    /// 借用底层 C ABI 请求指针。
+    fn as_ptr(&self) -> *const FfiLanceDbProviderRequest {
+        &self.ffi
+    }
+}
+
+/// Convert one runtime database kind into one stable FFI integer code.
+/// 将运行时数据库类型转换为稳定 FFI 整数编码。
+fn ffi_database_kind_code(value: RuntimeDatabaseKind) -> i32 {
+    match value {
+        RuntimeDatabaseKind::Sqlite => FFI_DATABASE_KIND_SQLITE,
+        RuntimeDatabaseKind::LanceDb => FFI_DATABASE_KIND_LANCEDB,
+    }
+}
+
+/// Convert one runtime SQLite provider action into one stable FFI integer code.
+/// 将运行时 SQLite provider 动作转换为稳定 FFI 整数编码。
+fn ffi_sqlite_provider_action_code(value: &RuntimeSqliteProviderAction) -> i32 {
+    match value {
+        RuntimeSqliteProviderAction::ExecuteScript => FFI_SQLITE_PROVIDER_ACTION_EXECUTE_SCRIPT,
+        RuntimeSqliteProviderAction::ExecuteBatch => FFI_SQLITE_PROVIDER_ACTION_EXECUTE_BATCH,
+        RuntimeSqliteProviderAction::QueryJson => FFI_SQLITE_PROVIDER_ACTION_QUERY_JSON,
+        RuntimeSqliteProviderAction::QueryStream => FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM,
+        RuntimeSqliteProviderAction::QueryStreamWaitMetrics => {
+            FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_WAIT_METRICS
+        }
+        RuntimeSqliteProviderAction::QueryStreamChunk => {
+            FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_CHUNK
+        }
+        RuntimeSqliteProviderAction::QueryStreamClose => {
+            FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_CLOSE
+        }
+        RuntimeSqliteProviderAction::TokenizeText => FFI_SQLITE_PROVIDER_ACTION_TOKENIZE_TEXT,
+        RuntimeSqliteProviderAction::UpsertCustomWord => {
+            FFI_SQLITE_PROVIDER_ACTION_UPSERT_CUSTOM_WORD
+        }
+        RuntimeSqliteProviderAction::RemoveCustomWord => {
+            FFI_SQLITE_PROVIDER_ACTION_REMOVE_CUSTOM_WORD
+        }
+        RuntimeSqliteProviderAction::ListCustomWords => {
+            FFI_SQLITE_PROVIDER_ACTION_LIST_CUSTOM_WORDS
+        }
+        RuntimeSqliteProviderAction::EnsureFtsIndex => FFI_SQLITE_PROVIDER_ACTION_ENSURE_FTS_INDEX,
+        RuntimeSqliteProviderAction::RebuildFtsIndex => {
+            FFI_SQLITE_PROVIDER_ACTION_REBUILD_FTS_INDEX
+        }
+        RuntimeSqliteProviderAction::UpsertFtsDocument => {
+            FFI_SQLITE_PROVIDER_ACTION_UPSERT_FTS_DOCUMENT
+        }
+        RuntimeSqliteProviderAction::DeleteFtsDocument => {
+            FFI_SQLITE_PROVIDER_ACTION_DELETE_FTS_DOCUMENT
+        }
+        RuntimeSqliteProviderAction::SearchFts => FFI_SQLITE_PROVIDER_ACTION_SEARCH_FTS,
+    }
+}
+
+/// Convert one runtime LanceDB provider action into one stable FFI integer code.
+/// 将运行时 LanceDB provider 动作转换为稳定 FFI 整数编码。
+fn ffi_lancedb_provider_action_code(value: &RuntimeLanceDbProviderAction) -> i32 {
+    match value {
+        RuntimeLanceDbProviderAction::CreateTable => FFI_LANCEDB_PROVIDER_ACTION_CREATE_TABLE,
+        RuntimeLanceDbProviderAction::VectorUpsert => FFI_LANCEDB_PROVIDER_ACTION_VECTOR_UPSERT,
+        RuntimeLanceDbProviderAction::VectorSearch => FFI_LANCEDB_PROVIDER_ACTION_VECTOR_SEARCH,
+        RuntimeLanceDbProviderAction::Delete => FFI_LANCEDB_PROVIDER_ACTION_DELETE,
+        RuntimeLanceDbProviderAction::DropTable => FFI_LANCEDB_PROVIDER_ACTION_DROP_TABLE,
+    }
+}
+
 /// Free one owned C string pointer if it is not null.
 /// 如果单个拥有所有权的 C 字符串指针非空，则释放它。
 unsafe fn free_c_string(value: *mut c_char) {
     if !value.is_null() {
         let _ = unsafe { CString::from_raw(value) };
     }
+}
+
+/// Invoke one host-supplied JSON provider callback and copy the returned string into Rust ownership.
+/// 调用宿主提供的 JSON provider 回调，并把返回字符串复制到 Rust 所有权下。
+fn invoke_json_provider_callback(
+    callback: FfiJsonProviderCallback,
+    user_data: usize,
+    request_json: &str,
+) -> Result<String, String> {
+    let request_cstr = CString::new(request_json)
+        .map_err(|_| "request_json contains interior NUL bytes".to_string())?;
+    let response_ptr = unsafe { callback(request_cstr.as_ptr(), user_data as *mut c_void) };
+    if response_ptr.is_null() {
+        return Err("host provider callback returned null".to_string());
+    }
+    let response = unsafe { CStr::from_ptr(response_ptr) }
+        .to_string_lossy()
+        .to_string();
+    unsafe { free_c_string(response_ptr) };
+    Ok(response)
+}
+
+/// Invoke one host-supplied standard SQLite provider callback and decode the returned JSON payload.
+/// 调用宿主提供的标准 SQLite provider 回调，并解码返回的 JSON 载荷。
+fn invoke_standard_sqlite_provider_callback(
+    callback: FfiSqliteProviderCallback,
+    user_data: usize,
+    request: &RuntimeSqliteProviderRequest,
+) -> Result<Value, String> {
+    let request = OwnedFfiSqliteProviderRequest::from_runtime(request)?;
+    let mut response_json_ptr: *mut c_char = ptr::null_mut();
+    let mut error_ptr: *mut c_char = ptr::null_mut();
+    let status = unsafe {
+        callback(
+            request.as_ptr(),
+            user_data as *mut c_void,
+            &mut response_json_ptr,
+            &mut error_ptr,
+        )
+    };
+    let callback_error = take_owned_ffi_string(error_ptr);
+    if status != FFI_STATUS_OK {
+        unsafe { free_c_string(response_json_ptr) };
+        return Err(callback_error.unwrap_or_else(|| {
+            "sqlite host provider callback returned failure without error message".to_string()
+        }));
+    }
+    let response_json = take_owned_ffi_string(response_json_ptr).ok_or_else(|| {
+        "sqlite host provider callback returned null response_json_out".to_string()
+    })?;
+    if let Some(message) = callback_error {
+        if !message.is_empty() {
+            return Err(format!(
+                "sqlite host provider callback returned unexpected error text on success: {}",
+                message
+            ));
+        }
+    }
+    serde_json::from_str(&response_json).map_err(|error| {
+        format!(
+            "failed to parse sqlite provider callback response json: {}",
+            error
+        )
+    })
+}
+
+/// Invoke one host-supplied standard LanceDB provider callback and decode the returned payload.
+/// 调用宿主提供的标准 LanceDB provider 回调，并解码返回的载荷。
+fn invoke_standard_lancedb_provider_callback(
+    callback: FfiLanceDbProviderCallback,
+    user_data: usize,
+    request: &RuntimeLanceDbProviderRequest,
+) -> Result<RuntimeLanceDbProviderResult, String> {
+    let request = OwnedFfiLanceDbProviderRequest::from_runtime(request)?;
+    let mut meta_json_ptr: *mut c_char = ptr::null_mut();
+    let mut data_ptr: *mut u8 = ptr::null_mut();
+    let mut data_len: usize = 0;
+    let mut error_ptr: *mut c_char = ptr::null_mut();
+    let status = unsafe {
+        callback(
+            request.as_ptr(),
+            user_data as *mut c_void,
+            &mut meta_json_ptr,
+            &mut data_ptr,
+            &mut data_len,
+            &mut error_ptr,
+        )
+    };
+    let callback_error = take_owned_ffi_string(error_ptr);
+    if status != FFI_STATUS_OK {
+        unsafe {
+            free_c_string(meta_json_ptr);
+            free_ffi_bytes(data_ptr, data_len);
+        }
+        return Err(callback_error.unwrap_or_else(|| {
+            "lancedb host provider callback returned failure without error message".to_string()
+        }));
+    }
+    let meta_json = take_owned_ffi_string(meta_json_ptr).unwrap_or_else(|| "{}".to_string());
+    let meta = serde_json::from_str::<Value>(&meta_json).map_err(|error| {
+        format!(
+            "failed to parse lancedb provider callback meta json: {}",
+            error
+        )
+    })?;
+    let bytes = take_owned_ffi_bytes(data_ptr, data_len)?;
+    if let Some(message) = callback_error {
+        if !message.is_empty() {
+            return Err(format!(
+                "lancedb host provider callback returned unexpected error text on success: {}",
+                message
+            ));
+        }
+    }
+    Ok(RuntimeLanceDbProviderResult::binary(meta, bytes))
+}
+
+/// Copy one owned FFI string into Rust ownership and free the original allocation.
+/// 将拥有型 FFI 字符串复制到 Rust 所有权，并释放原始分配。
+fn take_owned_ffi_string(value: *mut c_char) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let text = unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .to_string();
+    unsafe { free_c_string(value) };
+    Some(text)
+}
+
+/// Copy one owned FFI byte buffer into Rust ownership and free the original allocation.
+/// 将拥有型 FFI 字节缓冲复制到 Rust 所有权，并释放原始分配。
+fn take_owned_ffi_bytes(value: *mut u8, len: usize) -> Result<Vec<u8>, String> {
+    if value.is_null() {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        return Err(
+            "lancedb provider callback returned null data_out with non-zero data_len_out"
+                .to_string(),
+        );
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(value, len) }.to_vec();
+    unsafe { free_ffi_bytes(value, len) };
+    Ok(bytes)
+}
+
+/// Free one owned byte buffer allocated by one FFI callback helper.
+/// 释放由某个 FFI 回调辅助函数分配的拥有型字节缓冲。
+unsafe fn free_ffi_bytes(value: *mut u8, len: usize) {
+    if value.is_null() || len == 0 {
+        return;
+    }
+    let _ = unsafe { Vec::from_raw_parts(value, len, len) };
 }
 
 /// Free one owned string array and all nested string items.
@@ -971,6 +1595,116 @@ fn ffi_ok_status(error_out: *mut *mut c_char) -> i32 {
 fn ffi_error_status(error_out: *mut *mut c_char, message: impl Into<String>) -> i32 {
     set_error_out(error_out, message);
     FFI_STATUS_ERROR
+}
+
+/// Clone one host string into one LuaSkills-owned heap string so callbacks can return safely across FFI.
+/// 将宿主字符串克隆到 LuaSkills 管理的堆字符串，便于回调安全跨 FFI 返回。
+#[unsafe(no_mangle)]
+pub extern "C" fn vulcan_luaskills_ffi_string_clone(value: *const c_char) -> *mut c_char {
+    if value.is_null() {
+        return alloc_c_string("");
+    }
+    let text = unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .to_string();
+    alloc_c_string(&text)
+}
+
+/// Clone one host byte buffer into one LuaSkills-owned heap buffer for standard callback returns.
+/// 将宿主字节缓冲克隆到 LuaSkills 管理的堆缓冲，用于标准回调返回。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_bytes_clone(value: *const u8, len: usize) -> *mut u8 {
+    if value.is_null() || len == 0 {
+        return ptr::null_mut();
+    }
+    let slice = unsafe { std::slice::from_raw_parts(value, len) };
+    let mut bytes = slice.to_vec();
+    let pointer = bytes.as_mut_ptr();
+    std::mem::forget(bytes);
+    pointer
+}
+
+/// Free one LuaSkills-owned heap byte buffer created by `vulcan_luaskills_ffi_bytes_clone`.
+/// 释放由 `vulcan_luaskills_ffi_bytes_clone` 创建的 LuaSkills 自主管理堆字节缓冲。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_bytes_free(value: *mut u8, len: usize) {
+    unsafe { free_ffi_bytes(value, len) };
+}
+
+/// Register or clear one SQLite standard provider callback for host-managed database integration.
+/// 为宿主管理数据库集成注册或清理一个 SQLite 标准 provider 回调。
+#[unsafe(no_mangle)]
+pub extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_callback(
+    callback: Option<FfiSqliteProviderCallback>,
+    user_data: *mut c_void,
+    error_out: *mut *mut c_char,
+) -> i32 {
+    clear_error_out(error_out);
+    let wrapped = callback.map(|callback_fn| {
+        let user_data = user_data as usize;
+        std::sync::Arc::new(move |request: &RuntimeSqliteProviderRequest| {
+            invoke_standard_sqlite_provider_callback(callback_fn, user_data, request)
+        }) as RuntimeSqliteProviderCallback
+    });
+    set_sqlite_provider_callback(wrapped);
+    ffi_ok_status(error_out)
+}
+
+/// Register or clear one LanceDB standard provider callback for host-managed database integration.
+/// 为宿主管理数据库集成注册或清理一个 LanceDB 标准 provider 回调。
+#[unsafe(no_mangle)]
+pub extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_callback(
+    callback: Option<FfiLanceDbProviderCallback>,
+    user_data: *mut c_void,
+    error_out: *mut *mut c_char,
+) -> i32 {
+    clear_error_out(error_out);
+    let wrapped = callback.map(|callback_fn| {
+        let user_data = user_data as usize;
+        std::sync::Arc::new(move |request: &RuntimeLanceDbProviderRequest| {
+            invoke_standard_lancedb_provider_callback(callback_fn, user_data, request)
+        }) as RuntimeLanceDbProviderCallback
+    });
+    set_lancedb_provider_callback(wrapped);
+    ffi_ok_status(error_out)
+}
+
+/// Register or clear one SQLite JSON provider callback for cross-language host integration.
+/// 为跨语言宿主集成注册或清理一个 SQLite JSON provider 回调。
+#[unsafe(no_mangle)]
+pub extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
+    callback: Option<FfiJsonProviderCallback>,
+    user_data: *mut c_void,
+    error_out: *mut *mut c_char,
+) -> i32 {
+    clear_error_out(error_out);
+    let wrapped = callback.map(|callback_fn| {
+        let user_data = user_data as usize;
+        std::sync::Arc::new(move |request_json: &str| {
+            invoke_json_provider_callback(callback_fn, user_data, request_json)
+        }) as crate::host::database::RuntimeSqliteProviderJsonCallback
+    });
+    set_sqlite_provider_json_callback(wrapped);
+    ffi_ok_status(error_out)
+}
+
+/// Register or clear one LanceDB JSON provider callback for cross-language host integration.
+/// 为跨语言宿主集成注册或清理一个 LanceDB JSON provider 回调。
+#[unsafe(no_mangle)]
+pub extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_json_callback(
+    callback: Option<FfiJsonProviderCallback>,
+    user_data: *mut c_void,
+    error_out: *mut *mut c_char,
+) -> i32 {
+    clear_error_out(error_out);
+    let wrapped = callback.map(|callback_fn| {
+        let user_data = user_data as usize;
+        std::sync::Arc::new(move |request_json: &str| {
+            invoke_json_provider_callback(callback_fn, user_data, request_json)
+        }) as crate::host::database::RuntimeLanceDbProviderJsonCallback
+    });
+    set_lancedb_provider_json_callback(wrapped);
+    ffi_ok_status(error_out)
 }
 
 /// Free one string array result allocated by the standard FFI layer.

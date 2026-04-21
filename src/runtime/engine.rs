@@ -2849,7 +2849,7 @@ impl LuaEngine {
                 .clone();
 
             Some(
-                host.register_skill(meta.effective_skill_id(), dir, effective_lancedb)
+                host.register_skill(root_name, meta.effective_skill_id(), dir, effective_lancedb)
                     .map_err(|error| {
                         format!(
                             "Failed to register LanceDB for skill {}: {}",
@@ -2879,7 +2879,7 @@ impl LuaEngine {
                 .clone();
 
             Some(
-                host.register_skill(meta.effective_skill_id(), dir, effective_sqlite)
+                host.register_skill(root_name, meta.effective_skill_id(), dir, effective_sqlite)
                     .map_err(|error| {
                         format!(
                             "Failed to register SQLite for skill {}: {}",
@@ -5378,8 +5378,8 @@ end
 
         let runtime_skills_status_fn = lua.create_function(move |lua, ()| {
             let status = lua.create_table()?;
-            let callback_registered = try_has_skill_management_callback()
-                .map_err(mlua::Error::runtime)?;
+            let callback_registered =
+                try_has_skill_management_callback().map_err(mlua::Error::runtime)?;
             status.set("enabled", skill_management_enabled)?;
             status.set("callback_registered", callback_registered)?;
             status.set("mode", "host_callback")?;

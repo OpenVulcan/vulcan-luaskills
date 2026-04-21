@@ -1,0 +1,21 @@
+name: host-provider-sqlite-demo
+version: 0.1.0
+enable: true
+sqlite:
+  enable: true
+  log_level: info
+help:
+  main:
+    description: Host-provider SQLite demo help entry.
+    file: help/help.md
+entries:
+  - name: sqlite-smoke
+    description: "Run one host-managed SQLite smoke test and return a success payload."
+    lua_entry: runtime/sqlite_smoke.lua
+    lua_module: host_provider_sqlite_demo_smoke
+    help: main
+    parameters:
+      - name: note
+        type: string
+        description: "Optional note written into the host-managed SQLite database."
+        required: false

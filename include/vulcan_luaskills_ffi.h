@@ -5,8 +5,8 @@
 #include <stdint.h>
 
 /*
-Stable JSON-based C ABI surface exported by vulcan-luaskills.
-vulcan-luaskills 导出的稳定 JSON 风格 C ABI 接口面。
+Stable dual-surface C ABI exported by vulcan-luaskills.
+vulcan-luaskills 导出的稳定双接口 C ABI 接口面。
 */
 
 #ifdef __cplusplus
@@ -43,7 +43,47 @@ typedef struct FfiLuaRuntimeHostOptions {
     const char *github_base_url;
     const char *github_api_base_url;
     const char *sqlite_library_path;
+    /*
+    SQLite provider mode where 0=dynamic_library, 1=host_callback, and 2=space_controller.
+    SQLite provider 模式，其中 0=dynamic_library、1=host_callback、2=space_controller。
+    */
+    int32_t sqlite_provider_mode;
+    /*
+    SQLite callback mode used only when sqlite_provider_mode=host_callback.
+    sqlite_provider_mode=host_callback 时使用的 SQLite 回调模式。
+    */
+    int32_t sqlite_callback_mode;
     const char *lancedb_library_path;
+    /*
+    LanceDB provider mode where 0=dynamic_library, 1=host_callback, and 2=space_controller.
+    LanceDB provider 模式，其中 0=dynamic_library、1=host_callback、2=space_controller。
+    */
+    int32_t lancedb_provider_mode;
+    /*
+    LanceDB callback mode used only when lancedb_provider_mode=host_callback.
+    lancedb_provider_mode=host_callback 时使用的 LanceDB 回调模式。
+    */
+    int32_t lancedb_callback_mode;
+    /*
+    Optional shared space-controller endpoint used when one provider mode is space_controller.
+    当某个 provider 模式为 space_controller 时使用的可选共享空间控制器端点。
+    */
+    const char *space_controller_endpoint;
+    /*
+    Whether the runtime may auto-spawn one space-controller process when the endpoint is unavailable.
+    当空间控制器端点不可用时，运行时是否允许自动唤起空间控制器进程。
+    */
+    uint8_t space_controller_auto_spawn;
+    /*
+    Optional copied local controller executable path managed by the host.
+    由宿主复制并管理的可选本地控制器可执行文件路径。
+    */
+    const char *space_controller_executable_path;
+    /*
+    Space-controller process mode where 0=service and 1=managed.
+    空间控制器进程模式，其中 0=service、1=managed。
+    */
+    int32_t space_controller_process_mode;
     const FfiToolCacheConfig *cache_config;
     const char **reserved_entry_names;
     size_t reserved_entry_names_len;
@@ -80,6 +120,62 @@ enum {
     FFI_SOURCE_TYPE_URL = 1
 };
 
+enum {
+    FFI_PROVIDER_MODE_DYNAMIC_LIBRARY = 0,
+    FFI_PROVIDER_MODE_HOST_CALLBACK = 1,
+    FFI_PROVIDER_MODE_SPACE_CONTROLLER = 2
+};
+
+/*
+Stable callback-mode integers used when one provider mode is host_callback.
+当 provider 模式为 host_callback 时所使用的稳定回调模式整数。
+*/
+enum {
+    FFI_CALLBACK_MODE_STANDARD = 0,
+    FFI_CALLBACK_MODE_JSON = 1
+};
+
+/*
+Stable process-mode integers used when one provider mode is space_controller.
+当 provider 模式为 space_controller 时所使用的稳定进程模式整数。
+*/
+enum {
+    FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE = 0,
+    FFI_SPACE_CONTROLLER_PROCESS_MODE_MANAGED = 1
+};
+
+enum {
+    FFI_DATABASE_KIND_SQLITE = 0,
+    FFI_DATABASE_KIND_LANCEDB = 1
+};
+
+enum {
+    FFI_SQLITE_PROVIDER_ACTION_EXECUTE_SCRIPT = 0,
+    FFI_SQLITE_PROVIDER_ACTION_EXECUTE_BATCH = 1,
+    FFI_SQLITE_PROVIDER_ACTION_QUERY_JSON = 2,
+    FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM = 3,
+    FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_WAIT_METRICS = 4,
+    FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_CHUNK = 5,
+    FFI_SQLITE_PROVIDER_ACTION_QUERY_STREAM_CLOSE = 6,
+    FFI_SQLITE_PROVIDER_ACTION_TOKENIZE_TEXT = 7,
+    FFI_SQLITE_PROVIDER_ACTION_UPSERT_CUSTOM_WORD = 8,
+    FFI_SQLITE_PROVIDER_ACTION_REMOVE_CUSTOM_WORD = 9,
+    FFI_SQLITE_PROVIDER_ACTION_LIST_CUSTOM_WORDS = 10,
+    FFI_SQLITE_PROVIDER_ACTION_ENSURE_FTS_INDEX = 11,
+    FFI_SQLITE_PROVIDER_ACTION_REBUILD_FTS_INDEX = 12,
+    FFI_SQLITE_PROVIDER_ACTION_UPSERT_FTS_DOCUMENT = 13,
+    FFI_SQLITE_PROVIDER_ACTION_DELETE_FTS_DOCUMENT = 14,
+    FFI_SQLITE_PROVIDER_ACTION_SEARCH_FTS = 15
+};
+
+enum {
+    FFI_LANCEDB_PROVIDER_ACTION_CREATE_TABLE = 0,
+    FFI_LANCEDB_PROVIDER_ACTION_VECTOR_UPSERT = 1,
+    FFI_LANCEDB_PROVIDER_ACTION_VECTOR_SEARCH = 2,
+    FFI_LANCEDB_PROVIDER_ACTION_DELETE = 3,
+    FFI_LANCEDB_PROVIDER_ACTION_DROP_TABLE = 4
+};
+
 typedef struct FfiSkillInstallRequest {
     const char *skill_id;
     const char *source;
@@ -92,6 +188,30 @@ typedef struct FfiSkillUninstallOptions {
     uint8_t remove_sqlite;
     uint8_t remove_lancedb;
 } FfiSkillUninstallOptions;
+
+typedef struct FfiRuntimeDatabaseBindingContext {
+    const char *space_label;
+    const char *skill_id;
+    const char *binding_tag;
+    const char *root_name;
+    const char *space_root;
+    const char *skill_dir;
+    const char *skill_dir_name;
+    int32_t database_kind;
+    const char *default_database_path;
+} FfiRuntimeDatabaseBindingContext;
+
+typedef struct FfiSqliteProviderRequest {
+    int32_t action;
+    FfiRuntimeDatabaseBindingContext binding;
+    const char *input_json;
+} FfiSqliteProviderRequest;
+
+typedef struct FfiLanceDbProviderRequest {
+    int32_t action;
+    FfiRuntimeDatabaseBindingContext binding;
+    const char *input_json;
+} FfiLanceDbProviderRequest;
 
 typedef struct FfiStringArray {
     char **items;
@@ -189,11 +309,50 @@ typedef struct FfiSkillUninstallResult {
     char *message;
 } FfiSkillUninstallResult;
 
+typedef char *(*FfiJsonProviderCallback)(const char *request_json, void *user_data);
+typedef int32_t (*FfiSqliteProviderCallback)(
+    const FfiSqliteProviderRequest *request,
+    void *user_data,
+    char **response_json_out,
+    char **error_out
+);
+typedef int32_t (*FfiLanceDbProviderCallback)(
+    const FfiLanceDbProviderRequest *request,
+    void *user_data,
+    char **meta_json_out,
+    uint8_t **data_out,
+    size_t *data_len_out,
+    char **error_out
+);
+
 /*
 Free one heap-allocated JSON string returned by the FFI layer.
 释放一段由 FFI 层返回并在堆上分配的 JSON 字符串。
 */
 void vulcan_luaskills_ffi_string_free(char *value);
+char *vulcan_luaskills_ffi_string_clone(const char *value);
+uint8_t *vulcan_luaskills_ffi_bytes_clone(const uint8_t *value, size_t len);
+void vulcan_luaskills_ffi_bytes_free(uint8_t *value, size_t len);
+int32_t vulcan_luaskills_ffi_set_sqlite_provider_callback(
+    FfiSqliteProviderCallback callback,
+    void *user_data,
+    char **error_out
+);
+int32_t vulcan_luaskills_ffi_set_lancedb_provider_callback(
+    FfiLanceDbProviderCallback callback,
+    void *user_data,
+    char **error_out
+);
+int32_t vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
+    FfiJsonProviderCallback callback,
+    void *user_data,
+    char **error_out
+);
+int32_t vulcan_luaskills_ffi_set_lancedb_provider_json_callback(
+    FfiJsonProviderCallback callback,
+    void *user_data,
+    char **error_out
+);
 
 /*
 Free one heap-allocated string-array result returned by the standard FFI layer.

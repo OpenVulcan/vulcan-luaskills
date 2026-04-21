@@ -338,6 +338,7 @@ FFI 设计规则如下：
 完整对接文档：
 
 - [docs/FFI_INTEGRATION_GUIDE.md](docs/FFI_INTEGRATION_GUIDE.md)
+- [docs/HOST_DATABASE_PROVIDER_GUIDE.md](docs/HOST_DATABASE_PROVIDER_GUIDE.md)
 
 语言示例：
 
@@ -345,6 +346,7 @@ FFI 设计规则如下：
 - [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
 - [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
 - [examples/ffi/demo_runtime/README.md](examples/ffi/demo_runtime/README.md)
+- [examples/ffi/host_provider_demo/README.md](examples/ffi/host_provider_demo/README.md)
 
 这些示例当前都采用同一规则：
 
@@ -352,6 +354,62 @@ FFI 设计规则如下：
 - 标准示例优先演示 `version / engine_new / engine_free`
 - `demo_runtime` 目录额外提供一条真实的安装与调用烟测链
 - 动态安装与调用部分通过 `_json` 接口完成
+- `host_provider_demo` 目录额外提供一条“宿主通过 host_callback 模式接管 SQLite 数据库落点”的独立烟测链
+
+#### 宿主数据库 Provider
+
+当前数据库接入不再只有一种方式。
+
+每个数据库后端都支持三种模式：
+
+- `dynamic_library`
+- `host_callback`
+- `space_controller`
+
+其中：
+
+- `dynamic_library`
+  - 由 lib 自己加载本地数据库动态库
+- `host_callback`
+  - 由宿主注册数据库 provider 回调
+  - lib 把数据库请求和稳定绑定上下文回调给宿主
+- `space_controller`
+  - 由 lib 把数据库请求转发给外部空间控制器
+  - 代码层通过 `git + rev` 固定依赖 `vldb-controller-client`
+  - 服务进程本体不走 Cargo 依赖注入，而是由宿主复制本地 controller 可执行文件后，通过 `space_controller.executable_path` 指定启动路径
+  - 宿主不指定 `endpoint` 时，默认连接共享端点 `http://127.0.0.1:19801`
+  - 宿主指定独立端点时，可切换到独占 controller 实例
+
+而 `host_callback` 模式内部再细分两种回调传输方式：
+
+- `standard`
+- `json`
+
+也就是说：
+
+- 宿主如果偏向高性能和稳定 ABI，可以实现 `standard` 回调
+- 宿主如果偏向动态语言、快速接入和原型验证，可以实现 `json` 回调
+
+并且这些模式是**按后端分别配置**的：
+
+- `sqlite_provider_mode`
+- `sqlite_callback_mode`
+- `lancedb_provider_mode`
+- `lancedb_callback_mode`
+
+这意味着宿主可以出现混合组合，例如：
+
+- SQLite 使用 `host_callback + json`
+- LanceDB 使用 `dynamic_library`
+
+或者：
+
+- SQLite 使用 `dynamic_library`
+- LanceDB 使用 `space_controller`
+
+这部分完整说明见：
+
+- [docs/HOST_DATABASE_PROVIDER_GUIDE.md](docs/HOST_DATABASE_PROVIDER_GUIDE.md)
 
 ## 开发
 

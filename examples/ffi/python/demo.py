@@ -45,7 +45,11 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("github_base_url", ctypes.c_char_p),
         ("github_api_base_url", ctypes.c_char_p),
         ("sqlite_library_path", ctypes.c_char_p),
+        ("sqlite_provider_mode", ctypes.c_int32),
+        ("sqlite_callback_mode", ctypes.c_int32),
         ("lancedb_library_path", ctypes.c_char_p),
+        ("lancedb_provider_mode", ctypes.c_int32),
+        ("lancedb_callback_mode", ctypes.c_int32),
         ("cache_config", ctypes.c_void_p),
         ("reserved_entry_names", ctypes.POINTER(ctypes.c_char_p)),
         ("reserved_entry_names_len", ctypes.c_size_t),
@@ -163,7 +167,11 @@ def main() -> None:
     host.github_base_url = None
     host.github_api_base_url = None
     host.sqlite_library_path = None
+    host.sqlite_provider_mode = 0
+    host.sqlite_callback_mode = 0
     host.lancedb_library_path = None
+    host.lancedb_provider_mode = 0
+    host.lancedb_callback_mode = 0
     host.cache_config = None
     host.reserved_entry_names = None
     host.reserved_entry_names_len = 0

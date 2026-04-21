@@ -1,3 +1,5 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use libloading::Library;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -7,9 +9,16 @@ use std::ptr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::host::controller::{LuaRuntimeSpaceControllerBridge, controller_space_id_for_binding};
+use crate::host::database::{
+    LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,
+    RuntimeDatabaseKind, RuntimeLanceDbProviderAction, RuntimeLanceDbProviderRequest,
+    dispatch_lancedb_provider_request, has_lancedb_provider_callback_for_mode,
+};
 use crate::lua_skill::{SkillLanceDbLogLevel, SkillLanceDbMeta};
 use crate::runtime_logging::{info as log_info, warn as log_warn};
 use crate::runtime_options::LuaRuntimeHostOptions;
+use vldb_controller_client::ControllerLanceDbEnableRequest;
 
 /// Forward declaration of the FFI runtime handle used only for raw cross-library pointers.
 /// FFI 运行时句柄前置声明，仅用于跨动态库传递裸指针。
@@ -244,6 +253,15 @@ struct SkillHandleState {
     engine: *mut VldbLancedbEngineHandle,
 }
 
+/// Stable provider integration mode used by one LanceDB skill binding.
+/// 单个 LanceDB skill 绑定所使用的稳定 provider 集成模式。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LanceDbBindingMode {
+    DynamicLibrary,
+    HostCallback,
+    SpaceController,
+}
+
 /// FFI handles are accessed only behind host-side mutexes, and cross-thread sharing is controlled centrally by the host.
 /// FFI 句柄只通过宿主互斥量串行访问，跨线程共享由宿主统一控制。
 unsafe impl Send for SkillHandleState {}
@@ -251,12 +269,16 @@ unsafe impl Send for SkillHandleState {}
 /// Database context bound to one LanceDB-enabled skill.
 /// 某个启用 LanceDB 的 skill 所绑定的数据库上下文。
 pub struct LanceDbSkillBinding {
-    api: Arc<LoadedLanceDbApi>,
+    api: Option<Arc<LoadedLanceDbApi>>,
     skill_name: String,
     skill_dir_name: String,
     database_path: String,
     config: SkillLanceDbMeta,
-    handles: Mutex<SkillHandleState>,
+    provider_mode: LanceDbBindingMode,
+    callback_mode: LuaRuntimeDatabaseCallbackMode,
+    handles: Option<Mutex<SkillHandleState>>,
+    controller: Option<Arc<LuaRuntimeSpaceControllerBridge>>,
+    provider_binding: RuntimeDatabaseBindingContext,
 }
 
 impl LanceDbSkillBinding {
@@ -269,8 +291,13 @@ impl LanceDbSkillBinding {
             "skill_name": self.skill_name,
             "skill_dir_name": self.skill_dir_name,
             "database_path": self.database_path,
-            "integration_mode": "dynamic_library",
-            "library_path": self.api.library_path.to_string_lossy().to_string(),
+            "integration_mode": self.integration_mode_name(),
+            "library_path": self.api.as_ref().map(|api| api.library_path.to_string_lossy().to_string()).unwrap_or_default(),
+            "space_label": self.provider_binding.space_label,
+            "root_name": self.provider_binding.root_name,
+            "binding_tag": self.provider_binding.binding_tag,
+            "space_root": self.provider_binding.space_root,
+            "default_database_path": self.provider_binding.default_database_path,
             "log_level": self.config.log_level.as_str(),
             "slow_log_enabled": self.config.slow_log_enabled,
             "slow_log_threshold_ms": self.config.slow_log_threshold_ms,
@@ -286,6 +313,25 @@ impl LanceDbSkillBinding {
     /// Execute create-table using the host-defined JSON input shape.
     /// 执行建表操作，输入必须符合宿主约定的 JSON 结构。
     pub fn create_table_json(&self, input: &Value) -> Result<Value, String> {
+        if self.is_space_controller_mode() {
+            self.log_info("create_table", None);
+            let started_at = Instant::now();
+            let bridge = self.controller_bridge()?;
+            let space_id = self.controller_space_id();
+            let binding_id = self.controller_binding_id();
+            let result = bridge.block_on(bridge.client().create_lancedb_table(
+                space_id,
+                binding_id,
+                serde_json::to_string(input).map_err(|error| error.to_string())?,
+            ))?;
+            self.log_if_slow("create_table", started_at, None);
+            return Ok(json!({ "message": result.message }));
+        }
+        if self.is_host_provider_mode() {
+            return self
+                .dispatch_host_provider(RuntimeLanceDbProviderAction::CreateTable, input)
+                .map(|result| result.meta);
+        }
         self.call_json_string("create_table", input, |api, state, input_ptr| unsafe {
             (api.engine_create_table_json)(state.engine, input_ptr)
         })
@@ -294,6 +340,48 @@ impl LanceDbSkillBinding {
     /// Execute vector upsert; callers must provide an already encoded raw payload.
     /// 执行向量写入；调用方负责提供已经编码好的原始载荷。
     pub fn vector_upsert_json(&self, input: &Value, data: &[u8]) -> Result<Value, String> {
+        if self.is_space_controller_mode() {
+            self.log_info(
+                "vector_upsert",
+                Some(format!("payload_bytes={}", data.len())),
+            );
+            let started_at = Instant::now();
+            let bridge = self.controller_bridge()?;
+            let space_id = self.controller_space_id();
+            let binding_id = self.controller_binding_id();
+            let result = bridge.block_on(bridge.client().upsert_lancedb(
+                space_id,
+                binding_id,
+                serde_json::to_string(input).map_err(|error| error.to_string())?,
+                data.to_vec(),
+            ))?;
+            self.log_if_slow(
+                "vector_upsert",
+                started_at,
+                Some(format!("payload_bytes={}", data.len())),
+            );
+            return Ok(json!({
+                "message": result.message,
+                "version": result.version,
+                "input_rows": result.input_rows,
+                "inserted_rows": result.inserted_rows,
+                "updated_rows": result.updated_rows,
+                "deleted_rows": result.deleted_rows,
+            }));
+        }
+        if self.is_host_provider_mode() {
+            let mut host_input = input.clone();
+            if let Some(object) = host_input.as_object_mut() {
+                object.insert(
+                    "data_base64".to_string(),
+                    Value::String(BASE64_STANDARD.encode(data)),
+                );
+            }
+            return self
+                .dispatch_host_provider(RuntimeLanceDbProviderAction::VectorUpsert, &host_input)
+                .map(|result| result.meta);
+        }
+        let api = self.api_ref();
         let input_text = serde_json::to_string(input).map_err(|error| error.to_string())?;
         let input_cstr = CString::new(input_text)
             .map_err(|_| "input json contains interior NUL bytes".to_string())?;
@@ -302,18 +390,15 @@ impl LanceDbSkillBinding {
             Some(format!("payload_bytes={}", data.len())),
         );
         let started_at = Instant::now();
-        let guard = self
-            .handles
-            .lock()
-            .map_err(|_| "failed to acquire LanceDB handle lock".to_string())?;
+        let guard = self.lock_handles()?;
         unsafe {
-            let response = (self.api.engine_vector_upsert)(
+            let response = (api.engine_vector_upsert)(
                 guard.engine,
                 input_cstr.as_ptr(),
                 data.as_ptr(),
                 data.len(),
             );
-            let text = match self.api.take_owned_string(response) {
+            let text = match api.take_owned_string(response) {
                 Ok(text) => text,
                 Err(error) => {
                     drop(guard);
@@ -337,15 +422,43 @@ impl LanceDbSkillBinding {
     /// Execute vector search and return both metadata JSON and raw result bytes.
     /// 执行向量检索并返回元信息 JSON 与原始结果字节。
     pub fn vector_search_json(&self, input: &Value) -> Result<(Value, Vec<u8>), String> {
+        if self.is_space_controller_mode() {
+            self.log_info("vector_search", None);
+            let started_at = Instant::now();
+            let bridge = self.controller_bridge()?;
+            let space_id = self.controller_space_id();
+            let binding_id = self.controller_binding_id();
+            let result = bridge.block_on(bridge.client().search_lancedb(
+                space_id,
+                binding_id,
+                serde_json::to_string(input).map_err(|error| error.to_string())?,
+            ))?;
+            self.log_if_slow(
+                "vector_search",
+                started_at,
+                Some(format!("result_bytes={}", result.data.len())),
+            );
+            return Ok((
+                json!({
+                    "message": result.message,
+                    "format": result.format,
+                    "rows": result.rows,
+                }),
+                result.data,
+            ));
+        }
+        if self.is_host_provider_mode() {
+            return self
+                .dispatch_host_provider(RuntimeLanceDbProviderAction::VectorSearch, input)
+                .map(|result| (result.meta, result.bytes));
+        }
+        let api = self.api_ref();
         let input_text = serde_json::to_string(input).map_err(|error| error.to_string())?;
         let input_cstr = CString::new(input_text)
             .map_err(|_| "input json contains interior NUL bytes".to_string())?;
         self.log_info("vector_search", None);
         let started_at = Instant::now();
-        let guard = self
-            .handles
-            .lock()
-            .map_err(|_| "failed to acquire LanceDB handle lock".to_string())?;
+        let guard = self.lock_handles()?;
         let mut buffer = VldbLancedbByteBuffer {
             data: ptr::null_mut(),
             len: 0,
@@ -353,8 +466,8 @@ impl LanceDbSkillBinding {
         };
         unsafe {
             let response =
-                (self.api.engine_vector_search)(guard.engine, input_cstr.as_ptr(), &mut buffer);
-            let text = match self.api.take_owned_string(response) {
+                (api.engine_vector_search)(guard.engine, input_cstr.as_ptr(), &mut buffer);
+            let text = match api.take_owned_string(response) {
                 Ok(text) => text,
                 Err(error) => {
                     drop(guard);
@@ -365,7 +478,7 @@ impl LanceDbSkillBinding {
             let meta: Value = serde_json::from_str(&text).map_err(|error| {
                 format!("failed to parse LanceDB search response JSON: {}", error)
             })?;
-            let bytes = self.api.take_owned_bytes(buffer);
+            let bytes = api.take_owned_bytes(buffer);
             drop(guard);
             self.log_if_slow(
                 "vector_search",
@@ -379,6 +492,29 @@ impl LanceDbSkillBinding {
     /// Execute delete.
     /// 执行删除操作。
     pub fn delete_json(&self, input: &Value) -> Result<Value, String> {
+        if self.is_space_controller_mode() {
+            self.log_info("delete", None);
+            let started_at = Instant::now();
+            let bridge = self.controller_bridge()?;
+            let space_id = self.controller_space_id();
+            let binding_id = self.controller_binding_id();
+            let result = bridge.block_on(bridge.client().delete_lancedb(
+                space_id,
+                binding_id,
+                serde_json::to_string(input).map_err(|error| error.to_string())?,
+            ))?;
+            self.log_if_slow("delete", started_at, None);
+            return Ok(json!({
+                "message": result.message,
+                "version": result.version,
+                "deleted_rows": result.deleted_rows,
+            }));
+        }
+        if self.is_host_provider_mode() {
+            return self
+                .dispatch_host_provider(RuntimeLanceDbProviderAction::Delete, input)
+                .map(|result| result.meta);
+        }
         self.call_json_string("delete", input, |api, state, input_ptr| unsafe {
             (api.engine_delete_json)(state.engine, input_ptr)
         })
@@ -387,6 +523,25 @@ impl LanceDbSkillBinding {
     /// Execute drop-table.
     /// 执行删表操作。
     pub fn drop_table_json(&self, input: &Value) -> Result<Value, String> {
+        if self.is_space_controller_mode() {
+            self.log_info("drop_table", None);
+            let started_at = Instant::now();
+            let bridge = self.controller_bridge()?;
+            let space_id = self.controller_space_id();
+            let binding_id = self.controller_binding_id();
+            let result = bridge.block_on(bridge.client().drop_lancedb_table(
+                space_id,
+                binding_id,
+                require_string_field(input, "table_name")?.to_string(),
+            ))?;
+            self.log_if_slow("drop_table", started_at, None);
+            return Ok(json!({ "message": result.message }));
+        }
+        if self.is_host_provider_mode() {
+            return self
+                .dispatch_host_provider(RuntimeLanceDbProviderAction::DropTable, input)
+                .map(|result| result.meta);
+        }
         self.call_json_string("drop_table", input, |api, state, input_ptr| unsafe {
             (api.engine_drop_table_json)(state.engine, input_ptr)
         })
@@ -408,12 +563,10 @@ impl LanceDbSkillBinding {
             .map_err(|_| "input json contains interior NUL bytes".to_string())?;
         self.log_info(operation, None);
         let started_at = Instant::now();
-        let guard = self
-            .handles
-            .lock()
-            .map_err(|_| "failed to acquire LanceDB handle lock".to_string())?;
-        let response = invoke(&self.api, &guard, input_cstr.as_ptr());
-        let text = match self.api.take_owned_string(response) {
+        let api = self.api_ref();
+        let guard = self.lock_handles()?;
+        let response = invoke(api, &guard, input_cstr.as_ptr());
+        let text = match api.take_owned_string(response) {
             Ok(text) => text,
             Err(error) => {
                 drop(guard);
@@ -482,20 +635,103 @@ impl LanceDbSkillBinding {
             ));
         }
     }
+
+    /// Return whether the current binding dispatches requests into one host provider.
+    /// 返回当前绑定是否把请求转发给宿主 provider。
+    fn is_host_provider_mode(&self) -> bool {
+        self.provider_mode == LanceDbBindingMode::HostCallback
+    }
+
+    /// Return whether the current binding dispatches requests into one external space controller.
+    /// 返回当前绑定是否把请求转发给外部空间控制器。
+    fn is_space_controller_mode(&self) -> bool {
+        self.provider_mode == LanceDbBindingMode::SpaceController
+    }
+
+    /// Return the loaded dynamic-library API for dynamic mode bindings.
+    /// 返回动态模式绑定所对应的已加载动态库 API。
+    fn api_ref(&self) -> &LoadedLanceDbApi {
+        self.api
+            .as_ref()
+            .expect("LanceDB dynamic-library API missing in host provider mode")
+    }
+
+    /// Return the stable integration mode name for diagnostics and Lua status payloads.
+    /// 返回用于诊断和 Lua 状态输出的稳定集成模式名称。
+    fn integration_mode_name(&self) -> &'static str {
+        match self.provider_mode {
+            LanceDbBindingMode::DynamicLibrary => "dynamic_library",
+            LanceDbBindingMode::HostCallback => "host_callback",
+            LanceDbBindingMode::SpaceController => "space_controller",
+        }
+    }
+
+    /// Dispatch one LanceDB operation through the host-registered provider contract.
+    /// 通过宿主已注册的 provider 协议分发一次 LanceDB 操作。
+    fn dispatch_host_provider(
+        &self,
+        action: RuntimeLanceDbProviderAction,
+        input: &Value,
+    ) -> Result<crate::host::database::RuntimeLanceDbProviderResult, String> {
+        let request = RuntimeLanceDbProviderRequest {
+            action,
+            binding: self.provider_binding.clone(),
+            input: input.clone(),
+        };
+        dispatch_lancedb_provider_request(&request, self.callback_mode)
+    }
+
+    /// Acquire the handle lock so LanceDB FFI calls for the same skill execute serially.
+    /// 获取句柄锁，确保同一个 skill 的 LanceDB FFI 调用按顺序串行执行。
+    fn lock_handles(&self) -> Result<std::sync::MutexGuard<'_, SkillHandleState>, String> {
+        self.handles
+            .as_ref()
+            .ok_or_else(|| {
+                "LanceDB dynamic-library handles are unavailable in host provider mode".to_string()
+            })?
+            .lock()
+            .map_err(|_| "failed to acquire LanceDB handle lock".to_string())
+    }
+
+    /// Return the shared controller bridge for one space-controller binding.
+    /// 返回 space-controller 绑定所使用的共享控制器桥接。
+    fn controller_bridge(&self) -> Result<&Arc<LuaRuntimeSpaceControllerBridge>, String> {
+        self.controller
+            .as_ref()
+            .ok_or_else(|| "LanceDB space-controller bridge is unavailable".to_string())
+    }
+
+    /// Return the shared controller runtime-space identifier for the current skill binding.
+    /// 返回当前 skill 绑定对应的共享控制器运行时空间标识。
+    fn controller_space_id(&self) -> String {
+        controller_space_id_for_binding(&self.provider_binding)
+    }
+
+    /// Return the stable controller database-binding identifier for the current skill binding.
+    /// 返回当前 skill 绑定对应的稳定控制器数据库绑定标识。
+    fn controller_binding_id(&self) -> String {
+        self.provider_binding.binding_tag.clone()
+    }
 }
 
 impl Drop for LanceDbSkillBinding {
     /// The host releases engine and runtime handles together when the skill binding is dropped.
     /// 由宿主在 skill 生命周期结束时统一释放引擎与运行时句柄。
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.handles.lock() {
+        let Some(handles) = self.handles.as_ref() else {
+            return;
+        };
+        let Some(api) = self.api.as_ref() else {
+            return;
+        };
+        if let Ok(mut guard) = handles.lock() {
             unsafe {
                 if !guard.engine.is_null() {
-                    (self.api.engine_destroy)(guard.engine);
+                    (api.engine_destroy)(guard.engine);
                     guard.engine = ptr::null_mut();
                 }
                 if !guard.runtime.is_null() {
-                    (self.api.runtime_destroy)(guard.runtime);
+                    (api.runtime_destroy)(guard.runtime);
                     guard.runtime = ptr::null_mut();
                 }
             }
@@ -506,7 +742,8 @@ impl Drop for LanceDbSkillBinding {
 /// Maintain skill-scoped LanceDB bindings, auto-creating and reusing them for enabled skills.
 /// 按 skill 维度维护 LanceDB 绑定，负责技能启用后的自动创建与长期复用。
 pub struct LanceDbSkillHost {
-    api: Arc<LoadedLanceDbApi>,
+    api: Option<Arc<LoadedLanceDbApi>>,
+    controller: Option<Arc<LuaRuntimeSpaceControllerBridge>>,
     skills: Mutex<HashMap<String, Arc<LanceDbSkillBinding>>>,
     host_options: LuaRuntimeHostOptions,
 }
@@ -515,12 +752,34 @@ impl LanceDbSkillHost {
     /// Create the host-side LanceDB skill manager and load the dynamic library immediately.
     /// 创建宿主级 LanceDB 技能管理器，并立即加载动态库。
     pub fn new(host_options: LuaRuntimeHostOptions) -> Result<Self, String> {
-        let library_path = host_options
-            .lancedb_library_path
-            .clone()
-            .ok_or_else(|| "LanceDB host requires host_options.lancedb_library_path".to_string())?;
+        let api = match host_options.lancedb_provider_mode {
+            LuaRuntimeDatabaseProviderMode::DynamicLibrary => {
+                let library_path = host_options.lancedb_library_path.clone().ok_or_else(|| {
+                    "LanceDB dynamic-library mode requires host_options.lancedb_library_path"
+                        .to_string()
+                })?;
+                Some(Arc::new(LoadedLanceDbApi::load(&library_path)?))
+            }
+            LuaRuntimeDatabaseProviderMode::HostCallback => {
+                if !has_lancedb_provider_callback_for_mode(host_options.lancedb_callback_mode)? {
+                    return Err(format!(
+                        "LanceDB host-callback mode is enabled but no {} callback is registered",
+                        callback_mode_name(host_options.lancedb_callback_mode)
+                    ));
+                }
+                None
+            }
+            LuaRuntimeDatabaseProviderMode::SpaceController => None,
+        };
+        let controller = match host_options.lancedb_provider_mode {
+            LuaRuntimeDatabaseProviderMode::SpaceController => Some(
+                LuaRuntimeSpaceControllerBridge::new(&host_options, "lancedb")?,
+            ),
+            _ => None,
+        };
         Ok(Self {
-            api: Arc::new(LoadedLanceDbApi::load(&library_path)?),
+            api,
+            controller,
             skills: Mutex::new(HashMap::new()),
             host_options,
         })
@@ -530,6 +789,7 @@ impl LanceDbSkillHost {
     /// 为启用 LanceDB 的 skill 注册固定数据库绑定；同一个 skill 只会创建一次。
     pub fn register_skill(
         &self,
+        root_name: &str,
         skill_name: &str,
         skill_dir: &Path,
         config: SkillLanceDbMeta,
@@ -565,42 +825,90 @@ impl LanceDbSkillHost {
             .unwrap_or(skills_root)
             .join(self.host_options.database_dir_name.as_str());
         let db_path = sidecar_root.join("lancedb").join(skill_name);
-        std::fs::create_dir_all(&db_path).map_err(|error| {
-            format!(
-                "failed to create LanceDB directory {}: {}: {}",
-                db_path.display(),
-                error,
-                error
-            )
-        })?;
-
         let database_path = db_path.to_string_lossy().to_string();
-        let default_path = CString::new(database_path.clone())
-            .map_err(|_| "database path contains interior NUL bytes".to_string())?;
-        let mut options = unsafe { (self.api.runtime_options_default)() };
-        options.default_db_path = default_path.as_ptr();
-        options.db_root = ptr::null();
-        let runtime = unsafe { (self.api.runtime_create)(options) };
-        if runtime.is_null() {
-            return Err(self.api.take_last_error_message());
-        }
-
-        let engine = unsafe { (self.api.runtime_open_default_engine)(runtime) };
-        if engine.is_null() {
-            unsafe {
-                (self.api.runtime_destroy)(runtime);
+        let binding_context = RuntimeDatabaseBindingContext::new(
+            root_name,
+            skill_name,
+            root_name,
+            sidecar_root.to_string_lossy().to_string(),
+            skill_dir.to_string_lossy().to_string(),
+            skill_dir_name.clone(),
+            RuntimeDatabaseKind::LanceDb,
+            database_path.clone(),
+        );
+        let (resolved_path, handles, provider_mode, controller) = if let Some(api) =
+            self.api.as_ref()
+        {
+            std::fs::create_dir_all(&db_path).map_err(|error| {
+                format!(
+                    "failed to create LanceDB directory {}: {}: {}",
+                    db_path.display(),
+                    error,
+                    error
+                )
+            })?;
+            let default_path = CString::new(database_path.clone())
+                .map_err(|_| "database path contains interior NUL bytes".to_string())?;
+            let mut options = unsafe { (api.runtime_options_default)() };
+            options.default_db_path = default_path.as_ptr();
+            options.db_root = ptr::null();
+            let runtime = unsafe { (api.runtime_create)(options) };
+            if runtime.is_null() {
+                return Err(api.take_last_error_message());
             }
-            return Err(self.api.take_last_error_message());
-        }
 
-        let resolved_path = unsafe {
-            self.api
-                .take_owned_string((self.api.runtime_database_path_for_name)(
-                    runtime,
-                    ptr::null(),
-                ))
-        }
-        .unwrap_or(database_path.clone());
+            let engine = unsafe { (api.runtime_open_default_engine)(runtime) };
+            if engine.is_null() {
+                unsafe {
+                    (api.runtime_destroy)(runtime);
+                }
+                return Err(api.take_last_error_message());
+            }
+
+            let resolved_path = unsafe {
+                api.take_owned_string((api.runtime_database_path_for_name)(runtime, ptr::null()))
+            }
+            .unwrap_or(database_path.clone());
+            (
+                resolved_path,
+                Some(Mutex::new(SkillHandleState { runtime, engine })),
+                LanceDbBindingMode::DynamicLibrary,
+                None,
+            )
+        } else if matches!(
+            self.host_options.lancedb_provider_mode,
+            LuaRuntimeDatabaseProviderMode::SpaceController
+        ) {
+            let controller = self
+                .controller
+                .as_ref()
+                .ok_or_else(|| "LanceDB space-controller bridge is unavailable".to_string())?
+                .clone();
+            let controller_space_id = controller_space_id_for_binding(&binding_context);
+            let controller_binding_id = binding_context.binding_tag.clone();
+            controller.attach_binding(&binding_context)?;
+            controller.block_on(controller.client().enable_lancedb(
+                ControllerLanceDbEnableRequest {
+                    space_id: controller_space_id,
+                    binding_id: controller_binding_id,
+                    default_db_path: database_path.clone(),
+                    ..ControllerLanceDbEnableRequest::default()
+                },
+            ))?;
+            (
+                database_path.clone(),
+                None,
+                LanceDbBindingMode::SpaceController,
+                Some(controller),
+            )
+        } else {
+            (
+                database_path.clone(),
+                None,
+                LanceDbBindingMode::HostCallback,
+                None,
+            )
+        };
 
         let binding = Arc::new(LanceDbSkillBinding {
             api: self.api.clone(),
@@ -608,7 +916,11 @@ impl LanceDbSkillHost {
             skill_dir_name,
             database_path: resolved_path,
             config,
-            handles: Mutex::new(SkillHandleState { runtime, engine }),
+            provider_mode,
+            callback_mode: self.host_options.lancedb_callback_mode,
+            handles,
+            controller,
+            provider_binding: binding_context,
         });
         guard.insert(skill_name.to_string(), binding.clone());
         Ok(binding)
@@ -638,4 +950,23 @@ pub fn disabled_skill_status_json(skill_name: Option<&str>) -> Value {
         "integration_mode": "dynamic_library",
         "reason": "current skill has not enabled lancedb"
     })
+}
+
+/// Return the stable callback-mode display name used in host callback error messages.
+/// 返回宿主回调错误消息中使用的稳定回调模式显示名称。
+fn callback_mode_name(mode: LuaRuntimeDatabaseCallbackMode) -> &'static str {
+    match mode {
+        LuaRuntimeDatabaseCallbackMode::Standard => "standard",
+        LuaRuntimeDatabaseCallbackMode::Json => "json",
+    }
+}
+
+/// Ensure that a required string field exists in the JSON request payload.
+/// 确保 JSON 请求载荷中存在指定的必填字符串字段。
+fn require_string_field<'a>(input: &'a Value, field_name: &str) -> Result<&'a str, String> {
+    input
+        .get(field_name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("missing or empty field `{}`", field_name))
 }

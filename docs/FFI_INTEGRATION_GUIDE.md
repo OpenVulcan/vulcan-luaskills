@@ -69,6 +69,27 @@
 - 所有直接集成主接口，都必须提供标准接口
 - 所有直接集成主接口，也都必须提供 `_json` 版本
 
+### 2.4 宿主数据库 provider 也遵循双接口规则
+
+当宿主需要自己接管：
+
+- SQLite
+- LanceDB
+
+时，当前协议同样要求提供两套回调形式：
+
+- 标准结构化回调
+- JSON 回调
+
+也就是说：
+
+- 宿主如果已经能稳定处理 C ABI 结构和 out 指针，应该优先接标准回调
+- 宿主如果是 Python / Node / 快速原型，则可以直接接 JSON 回调
+
+数据库 provider 的详细对接说明见：
+
+- [HOST_DATABASE_PROVIDER_GUIDE.md](HOST_DATABASE_PROVIDER_GUIDE.md)
+
 ## 3. 动态库与头文件
 
 当前产物方向：
@@ -236,6 +257,28 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `database_dir_name`
 - `allow_network_download`
 
+### 7.1.1 Space Controller 额外前置要求
+
+当 SQLite 或 LanceDB 的 provider mode 选择 `space_controller` 时，宿主还需要额外准备：
+
+- `LuaRuntimeHostOptions.space_controller.endpoint`
+  - 可选
+  - 缺失时默认使用共享端点 `http://127.0.0.1:19801`
+- `LuaRuntimeHostOptions.space_controller.auto_spawn`
+  - 是否允许自动唤起 controller
+- `LuaRuntimeHostOptions.space_controller.executable_path`
+  - 可选
+  - 指向宿主已经复制到本地稳定目录的 `vldb-controller` 可执行文件
+- `LuaRuntimeHostOptions.space_controller.process_mode`
+  - `service`
+  - `managed`
+
+这里要特别注意：
+
+- `vulcan-luaskills` 代码层只通过 `git + rev` 固定依赖 `vldb-controller-client`
+- 真正被拉起的 controller 服务程序，不是通过 Cargo 把二进制嵌进宿主，而是由宿主自行复制并管理
+- 也就是说，**Rust SDK 走 git 固定版本，controller 可执行文件走宿主本地复制路径**
+
 ### 7.2 生命周期接口的前置要求
 
 若调用：
@@ -300,8 +343,32 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `allow_network_download`
 - GitHub base URL
 - SQLite / LanceDB 动态库路径
+- `sqlite_provider_mode`
+- `sqlite_callback_mode`
+- `lancedb_provider_mode`
+- `lancedb_callback_mode`
 - `reserved_entry_names`
 - `enable_skill_management_bridge`
+
+数据库后端模式规则如下：
+
+- `dynamic_library`
+  - lib 自己加载数据库动态库
+- `host_callback`
+  - lib 把数据库请求回调给宿主
+- `space_controller`
+  - lib 把数据库请求转发给外部空间控制器
+
+当 provider mode 为 `host_callback` 时，还必须继续指定 callback mode：
+
+- `standard`
+- `json`
+
+也就是说：
+
+- provider mode 决定数据库请求走哪一类后端
+- callback mode 只在 `host_callback` 模式下决定“用标准回调还是 JSON 回调”
+- SQLite 与 LanceDB 可以分别设置成不同组合
 
 说明：
 

@@ -1,9 +1,83 @@
+use crate::host::database::{LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode};
 use crate::runtime_context::RuntimeRequestContext;
 use crate::skill::manager::SkillProtectionConfig;
 use crate::tool_cache::ToolCacheConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
+
+/// Process mode used when the runtime auto-spawns one local space controller process.
+/// 运行时自动拉起本地空间控制器进程时使用的进程模式。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LuaRuntimeSpaceControllerProcessMode {
+    /// Service mode keeps the controller process alive until an external stop happens.
+    /// Service 模式会让控制器进程持续存活，直到外部显式停止。
+    Service,
+    /// Managed mode allows the controller process to stop itself after idle timeouts.
+    /// Managed 模式允许控制器进程在空闲超时后自行停止。
+    #[default]
+    Managed,
+}
+
+/// Host-provided controller client options used when one database backend chooses `space_controller`.
+/// 当数据库后端选择 `space_controller` 时使用的宿主侧控制器客户端选项。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LuaRuntimeSpaceControllerOptions {
+    /// Optional explicit controller endpoint; when omitted the shared default endpoint is used.
+    /// 可选的显式控制器端点；缺失时使用共享默认端点。
+    pub endpoint: Option<String>,
+    /// Whether the runtime may auto-spawn the controller when the endpoint is unavailable.
+    /// 当控制器端点不可用时，运行时是否允许自动唤起控制器。
+    pub auto_spawn: bool,
+    /// Optional local executable path copied and managed by the host.
+    /// 由宿主复制并管理的可选本地可执行文件路径。
+    pub executable_path: Option<PathBuf>,
+    /// Process mode used when auto-spawning one controller process.
+    /// 自动唤起控制器进程时使用的进程模式。
+    pub process_mode: LuaRuntimeSpaceControllerProcessMode,
+    /// Minimum uptime in seconds passed to one auto-spawned controller.
+    /// 传递给自动唤起控制器的最小存活秒数。
+    pub minimum_uptime_secs: u64,
+    /// Idle timeout in seconds passed to one auto-spawned controller.
+    /// 传递给自动唤起控制器的空闲超时秒数。
+    pub idle_timeout_secs: u64,
+    /// Default lease TTL in seconds passed to one auto-spawned controller.
+    /// 传递给自动唤起控制器的默认租约 TTL 秒数。
+    pub default_lease_ttl_secs: u64,
+    /// Transport connect timeout in seconds used by the controller client proxy.
+    /// 控制器客户端代理使用的传输连接超时秒数。
+    pub connect_timeout_secs: u64,
+    /// Startup timeout in seconds used while waiting for one spawned controller to become ready.
+    /// 等待已唤起控制器就绪时使用的启动超时秒数。
+    pub startup_timeout_secs: u64,
+    /// Startup retry interval in milliseconds used while polling one spawned controller.
+    /// 轮询已唤起控制器时使用的启动重试间隔毫秒数。
+    pub startup_retry_interval_ms: u64,
+    /// Lease renew interval in seconds used by the background controller client task.
+    /// 后台控制器客户端任务使用的租约续约间隔秒数。
+    pub lease_renew_interval_secs: u64,
+}
+
+impl Default for LuaRuntimeSpaceControllerOptions {
+    /// Return one safe-by-default shared controller configuration.
+    /// 返回一套默认安全且面向共享控制器的配置。
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            auto_spawn: true,
+            executable_path: None,
+            process_mode: LuaRuntimeSpaceControllerProcessMode::Managed,
+            minimum_uptime_secs: 300,
+            idle_timeout_secs: 900,
+            default_lease_ttl_secs: 120,
+            connect_timeout_secs: 5,
+            startup_timeout_secs: 15,
+            startup_retry_interval_ms: 250,
+            lease_renew_interval_secs: 30,
+        }
+    }
+}
 
 /// Host-controlled toggles for optional Lua-exposed runtime bridges.
 /// 宿主控制的可选 Lua 暴露运行时桥接开关集合。
@@ -88,9 +162,29 @@ pub struct LuaRuntimeHostOptions {
     /// Explicit SQLite dynamic-library path owned by the host.
     /// 由宿主显式提供的 SQLite 动态库路径。
     pub sqlite_library_path: Option<PathBuf>,
+    /// SQLite database provider mode selected by the host.
+    /// 宿主为 SQLite 数据库选择的 provider 模式。
+    #[serde(default)]
+    pub sqlite_provider_mode: LuaRuntimeDatabaseProviderMode,
+    /// SQLite callback transport mode selected by the host when provider mode is `host_callback`.
+    /// 当 provider 模式为 `host_callback` 时，宿主为 SQLite 选择的回调传输模式。
+    #[serde(default)]
+    pub sqlite_callback_mode: LuaRuntimeDatabaseCallbackMode,
     /// Explicit LanceDB dynamic-library path owned by the host.
     /// 由宿主显式提供的 LanceDB 动态库路径。
     pub lancedb_library_path: Option<PathBuf>,
+    /// LanceDB database provider mode selected by the host.
+    /// 宿主为 LanceDB 数据库选择的 provider 模式。
+    #[serde(default)]
+    pub lancedb_provider_mode: LuaRuntimeDatabaseProviderMode,
+    /// LanceDB callback transport mode selected by the host when provider mode is `host_callback`.
+    /// 当 provider 模式为 `host_callback` 时，宿主为 LanceDB 选择的回调传输模式。
+    #[serde(default)]
+    pub lancedb_callback_mode: LuaRuntimeDatabaseCallbackMode,
+    /// Shared controller client options used when one database backend selects `space_controller`.
+    /// 当数据库后端选择 `space_controller` 时所使用的共享控制器客户端选项。
+    #[serde(default)]
+    pub space_controller: LuaRuntimeSpaceControllerOptions,
     /// Host-provided transient cache policy consumed by `vulcan.cache`.
     /// 由宿主提供并供 `vulcan.cache` 消费的临时缓存策略。
     pub cache_config: Option<ToolCacheConfig>,

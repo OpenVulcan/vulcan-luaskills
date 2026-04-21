@@ -13,8 +13,19 @@ pub use host::callbacks::{
     RuntimeSkillManagementRequest, set_entry_registry_callback, set_skill_lifecycle_callback,
     set_skill_management_callback,
 };
-pub use host::options::{LuaInvocationContext, LuaRuntimeHostOptions, RuntimeSkillRoot};
-pub use host::options::LuaRuntimeCapabilityOptions;
+pub use host::database::{
+    LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,
+    RuntimeDatabaseKind, RuntimeLanceDbProviderAction, RuntimeLanceDbProviderCallback,
+    RuntimeLanceDbProviderJsonCallback, RuntimeLanceDbProviderRequest,
+    RuntimeLanceDbProviderResult, RuntimeSqliteProviderAction, RuntimeSqliteProviderCallback,
+    RuntimeSqliteProviderJsonCallback, RuntimeSqliteProviderRequest, set_lancedb_provider_callback,
+    set_lancedb_provider_json_callback, set_sqlite_provider_callback,
+    set_sqlite_provider_json_callback,
+};
+pub use host::options::{
+    LuaInvocationContext, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions,
+    LuaRuntimeSpaceControllerOptions, LuaRuntimeSpaceControllerProcessMode, RuntimeSkillRoot,
+};
 pub use runtime::cache::{
     DEFAULT_TOOL_CACHE_DEFAULT_TTL_SECS, DEFAULT_TOOL_CACHE_MAX_ENTRIES,
     DEFAULT_TOOL_CACHE_MAX_TTL_SECS, ToolCacheConfig,
