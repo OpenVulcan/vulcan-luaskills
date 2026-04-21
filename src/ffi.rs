@@ -418,10 +418,38 @@ where
     operation(&mut slot.engine)
 }
 
-/// Return one stable list of exported JSON FFI entrypoints.
-/// 返回一份稳定的已导出 JSON FFI 入口点列表。
-fn exported_ffi_function_names() -> Vec<String> {
+/// Return one stable list of all exported FFI entrypoints.
+/// 返回一份稳定的全部已导出 FFI 入口点列表。
+pub(crate) fn exported_ffi_function_names() -> Vec<String> {
     vec![
+        "vulcan_luaskills_ffi_version",
+        "vulcan_luaskills_ffi_describe",
+        "vulcan_luaskills_ffi_engine_new",
+        "vulcan_luaskills_ffi_engine_free",
+        "vulcan_luaskills_ffi_load_from_dirs",
+        "vulcan_luaskills_ffi_load_from_roots",
+        "vulcan_luaskills_ffi_reload_from_dirs",
+        "vulcan_luaskills_ffi_reload_from_roots",
+        "vulcan_luaskills_ffi_list_entries",
+        "vulcan_luaskills_ffi_list_skill_help",
+        "vulcan_luaskills_ffi_render_skill_help_detail",
+        "vulcan_luaskills_ffi_prompt_argument_completions",
+        "vulcan_luaskills_ffi_is_skill",
+        "vulcan_luaskills_ffi_skill_name_for_tool",
+        "vulcan_luaskills_ffi_call_skill",
+        "vulcan_luaskills_ffi_run_lua",
+        "vulcan_luaskills_ffi_disable_skill_in_dirs",
+        "vulcan_luaskills_ffi_disable_skill",
+        "vulcan_luaskills_ffi_system_disable_skill_in_dirs",
+        "vulcan_luaskills_ffi_system_disable_skill",
+        "vulcan_luaskills_ffi_enable_skill",
+        "vulcan_luaskills_ffi_system_enable_skill",
+        "vulcan_luaskills_ffi_uninstall_skill",
+        "vulcan_luaskills_ffi_system_uninstall_skill",
+        "vulcan_luaskills_ffi_install_skill",
+        "vulcan_luaskills_ffi_system_install_skill",
+        "vulcan_luaskills_ffi_update_skill",
+        "vulcan_luaskills_ffi_system_update_skill",
         "vulcan_luaskills_ffi_version_json",
         "vulcan_luaskills_ffi_describe_json",
         "vulcan_luaskills_ffi_engine_new_json",
@@ -451,6 +479,13 @@ fn exported_ffi_function_names() -> Vec<String> {
         "vulcan_luaskills_ffi_update_skill_json",
         "vulcan_luaskills_ffi_system_update_skill_json",
         "vulcan_luaskills_ffi_string_free",
+        "vulcan_luaskills_ffi_string_array_free",
+        "vulcan_luaskills_ffi_entry_list_free",
+        "vulcan_luaskills_ffi_help_list_free",
+        "vulcan_luaskills_ffi_help_detail_free",
+        "vulcan_luaskills_ffi_invocation_result_free",
+        "vulcan_luaskills_ffi_skill_apply_result_free",
+        "vulcan_luaskills_ffi_skill_uninstall_result_free",
     ]
     .into_iter()
     .map(str::to_string)

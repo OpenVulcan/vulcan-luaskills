@@ -446,6 +446,38 @@ fn set_error_out(error_out: *mut *mut c_char, message: impl Into<String>) {
     }
 }
 
+/// Clear one caller-provided error output pointer to null.
+/// 将调用方提供的错误输出指针清空为 null。
+fn clear_error_out(error_out: *mut *mut c_char) {
+    if !error_out.is_null() {
+        unsafe { *error_out = std::ptr::null_mut() };
+    }
+}
+
+/// Clear one caller-provided pointer output slot to null.
+/// 将调用方提供的指针输出槽位清空为 null。
+fn clear_out_ptr<T>(value_out: *mut *mut T) {
+    if !value_out.is_null() {
+        unsafe { *value_out = std::ptr::null_mut() };
+    }
+}
+
+/// Clear one caller-provided unsigned 64-bit output slot to zero.
+/// 将调用方提供的无符号 64 位输出槽位清空为零。
+fn clear_out_u64(value_out: *mut u64) {
+    if !value_out.is_null() {
+        unsafe { *value_out = 0 };
+    }
+}
+
+/// Clear one caller-provided unsigned 8-bit output slot to zero.
+/// 将调用方提供的无符号 8 位输出槽位清空为零。
+fn clear_out_u8(value_out: *mut u8) {
+    if !value_out.is_null() {
+        unsafe { *value_out = 0 };
+    }
+}
+
 /// Convert one Rust string into one owned raw C string pointer.
 /// 将单个 Rust 字符串转换为一个拥有所有权的原生 C 字符串指针。
 fn alloc_c_string(value: impl AsRef<str>) -> *mut c_char {
@@ -918,7 +950,8 @@ unsafe fn free_help_node_descriptor(value: FfiRuntimeHelpNodeDescriptor) {
 
 /// Write one successful status code.
 /// 写入一个成功状态码。
-fn ffi_ok_status() -> i32 {
+fn ffi_ok_status(error_out: *mut *mut c_char) -> i32 {
+    clear_error_out(error_out);
     FFI_STATUS_OK
 }
 
@@ -1060,11 +1093,13 @@ pub extern "C" fn vulcan_luaskills_ffi_version(
     version_out: *mut *mut c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(version_out);
     if version_out.is_null() {
         return ffi_error_status(error_out, "version_out must not be null");
     }
     unsafe { *version_out = alloc_c_string("0.1.0") };
-    ffi_ok_status()
+    ffi_ok_status(error_out)
 }
 
 /// Return the exported FFI entrypoint names through the standard C ABI surface.
@@ -1074,46 +1109,14 @@ pub extern "C" fn vulcan_luaskills_ffi_describe(
     functions_out: *mut *mut FfiStringArray,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(functions_out);
     if functions_out.is_null() {
         return ffi_error_status(error_out, "functions_out must not be null");
     }
-    let names = crate::ffi::vulcan_luaskills_ffi_describe_json();
-    if names.is_null() {
-        return ffi_error_status(error_out, "Failed to describe FFI functions");
-    }
-    unsafe { crate::ffi::vulcan_luaskills_ffi_string_free(names) };
-    let values = vec![
-        "vulcan_luaskills_ffi_version".to_string(),
-        "vulcan_luaskills_ffi_describe".to_string(),
-        "vulcan_luaskills_ffi_engine_new".to_string(),
-        "vulcan_luaskills_ffi_engine_free".to_string(),
-        "vulcan_luaskills_ffi_load_from_dirs".to_string(),
-        "vulcan_luaskills_ffi_load_from_roots".to_string(),
-        "vulcan_luaskills_ffi_reload_from_dirs".to_string(),
-        "vulcan_luaskills_ffi_reload_from_roots".to_string(),
-        "vulcan_luaskills_ffi_list_entries".to_string(),
-        "vulcan_luaskills_ffi_list_skill_help".to_string(),
-        "vulcan_luaskills_ffi_render_skill_help_detail".to_string(),
-        "vulcan_luaskills_ffi_prompt_argument_completions".to_string(),
-        "vulcan_luaskills_ffi_is_skill".to_string(),
-        "vulcan_luaskills_ffi_skill_name_for_tool".to_string(),
-        "vulcan_luaskills_ffi_call_skill".to_string(),
-        "vulcan_luaskills_ffi_run_lua".to_string(),
-        "vulcan_luaskills_ffi_disable_skill_in_dirs".to_string(),
-        "vulcan_luaskills_ffi_disable_skill".to_string(),
-        "vulcan_luaskills_ffi_system_disable_skill_in_dirs".to_string(),
-        "vulcan_luaskills_ffi_system_disable_skill".to_string(),
-        "vulcan_luaskills_ffi_enable_skill".to_string(),
-        "vulcan_luaskills_ffi_system_enable_skill".to_string(),
-        "vulcan_luaskills_ffi_uninstall_skill".to_string(),
-        "vulcan_luaskills_ffi_system_uninstall_skill".to_string(),
-        "vulcan_luaskills_ffi_install_skill".to_string(),
-        "vulcan_luaskills_ffi_system_install_skill".to_string(),
-        "vulcan_luaskills_ffi_update_skill".to_string(),
-        "vulcan_luaskills_ffi_system_update_skill".to_string(),
-    ];
+    let values = crate::ffi::exported_ffi_function_names();
     unsafe { *functions_out = Box::into_raw(Box::new(alloc_string_array(&values))) };
-    ffi_ok_status()
+    ffi_ok_status(error_out)
 }
 
 /// Create one runtime engine through the standard C ABI surface.
@@ -1124,6 +1127,8 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_new(
     engine_id_out: *mut u64,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_u64(engine_id_out);
     if options.is_null() {
         return ffi_error_status(error_out, "options must not be null");
     }
@@ -1141,7 +1146,7 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_new(
                 Ok(mut registry) => {
                     registry.insert(engine_id, crate::ffi::FfiEngineSlot { engine });
                     unsafe { *engine_id_out = engine_id };
-                    ffi_ok_status()
+                    ffi_ok_status(error_out)
                 }
                 Err(_) => ffi_error_status(error_out, "FFI engine registry lock poisoned"),
             }
@@ -1157,12 +1162,13 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_free(
     engine_id: u64,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     match ffi_engine_registry().lock() {
         Ok(mut registry) => {
             if registry.remove(&engine_id).is_none() {
                 ffi_error_status(error_out, format!("FFI engine {} not found", engine_id))
             } else {
-                ffi_ok_status()
+                ffi_ok_status(error_out)
             }
         }
         Err(_) => ffi_error_status(error_out, "FFI engine registry lock poisoned"),
@@ -1178,6 +1184,7 @@ pub extern "C" fn vulcan_luaskills_ffi_load_from_dirs(
     override_dir: *const c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let base_dir = match parse_required_string(base_dir, "base_dir") {
         Ok(value) => PathBuf::from(value),
         Err(error) => return ffi_error_status(error_out, error),
@@ -1191,7 +1198,7 @@ pub extern "C" fn vulcan_luaskills_ffi_load_from_dirs(
             .load_from_dirs(&base_dir, override_dir.as_deref())
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1205,6 +1212,7 @@ pub extern "C" fn vulcan_luaskills_ffi_load_from_roots(
     skill_roots_len: usize,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
         Ok(skill_roots) => skill_roots,
         Err(error) => return ffi_error_status(error_out, error),
@@ -1214,7 +1222,7 @@ pub extern "C" fn vulcan_luaskills_ffi_load_from_roots(
             .load_from_roots(&skill_roots)
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1228,6 +1236,7 @@ pub extern "C" fn vulcan_luaskills_ffi_reload_from_dirs(
     override_dir: *const c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let base_dir = match parse_required_string(base_dir, "base_dir") {
         Ok(value) => PathBuf::from(value),
         Err(error) => return ffi_error_status(error_out, error),
@@ -1241,7 +1250,7 @@ pub extern "C" fn vulcan_luaskills_ffi_reload_from_dirs(
             .reload_from_dirs(&base_dir, override_dir.as_deref())
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1255,6 +1264,7 @@ pub extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
     skill_roots_len: usize,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
         Ok(skill_roots) => skill_roots,
         Err(error) => return ffi_error_status(error_out, error),
@@ -1264,7 +1274,7 @@ pub extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
             .reload_from_roots(&skill_roots)
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1277,6 +1287,8 @@ pub extern "C" fn vulcan_luaskills_ffi_list_entries(
     entries_out: *mut *mut FfiRuntimeEntryDescriptorList,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(entries_out);
     if entries_out.is_null() {
         return ffi_error_status(error_out, "entries_out must not be null");
     }
@@ -1290,7 +1302,7 @@ pub extern "C" fn vulcan_luaskills_ffi_list_entries(
             };
             std::mem::forget(items);
             unsafe { *entries_out = Box::into_raw(Box::new(list)) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1304,6 +1316,8 @@ pub extern "C" fn vulcan_luaskills_ffi_list_skill_help(
     help_out: *mut *mut FfiRuntimeSkillHelpDescriptorList,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(help_out);
     if help_out.is_null() {
         return ffi_error_status(error_out, "help_out must not be null");
     }
@@ -1317,7 +1331,7 @@ pub extern "C" fn vulcan_luaskills_ffi_list_skill_help(
             };
             std::mem::forget(items);
             unsafe { *help_out = Box::into_raw(Box::new(list)) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1334,6 +1348,8 @@ pub extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
     detail_out: *mut *mut FfiRuntimeHelpDetail,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(detail_out);
     if detail_out.is_null() {
         return ffi_error_status(error_out, "detail_out must not be null");
     }
@@ -1354,7 +1370,7 @@ pub extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
     }) {
         Ok(Some(detail)) => {
             unsafe { *detail_out = Box::into_raw(Box::new(alloc_help_detail(&detail))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Ok(None) => ffi_error_status(error_out, "Requested help detail was not found"),
         Err(error) => ffi_error_status(error_out, error),
@@ -1371,6 +1387,8 @@ pub extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions(
     values_out: *mut *mut FfiStringArray,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(values_out);
     if values_out.is_null() {
         return ffi_error_status(error_out, "values_out must not be null");
     }
@@ -1387,11 +1405,11 @@ pub extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions(
     }) {
         Ok(Some(values)) => {
             unsafe { *values_out = Box::into_raw(Box::new(alloc_string_array(&values))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Ok(None) => {
             unsafe { *values_out = Box::into_raw(Box::new(alloc_string_array(&[]))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1406,6 +1424,8 @@ pub extern "C" fn vulcan_luaskills_ffi_is_skill(
     value_out: *mut u8,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_u8(value_out);
     if value_out.is_null() {
         return ffi_error_status(error_out, "value_out must not be null");
     }
@@ -1416,7 +1436,7 @@ pub extern "C" fn vulcan_luaskills_ffi_is_skill(
     match with_engine(engine_id, |engine| Ok(engine.is_skill(&tool_name))) {
         Ok(value) => {
             unsafe { *value_out = u8::from(value) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1431,6 +1451,8 @@ pub extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
     skill_id_out: *mut *mut c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(skill_id_out);
     if skill_id_out.is_null() {
         return ffi_error_status(error_out, "skill_id_out must not be null");
     }
@@ -1443,7 +1465,7 @@ pub extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
     }) {
         Ok(skill_id) => {
             unsafe { *skill_id_out = alloc_optional_c_string(skill_id.as_deref()) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1460,6 +1482,8 @@ pub extern "C" fn vulcan_luaskills_ffi_call_skill(
     result_out: *mut *mut FfiRuntimeInvocationResult,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(result_out);
     if result_out.is_null() {
         return ffi_error_status(error_out, "result_out must not be null");
     }
@@ -1480,7 +1504,7 @@ pub extern "C" fn vulcan_luaskills_ffi_call_skill(
     }) {
         Ok(result) => {
             unsafe { *result_out = Box::into_raw(Box::new(alloc_invocation_result(&result))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1497,6 +1521,8 @@ pub extern "C" fn vulcan_luaskills_ffi_run_lua(
     result_json_out: *mut *mut c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(result_json_out);
     if result_json_out.is_null() {
         return ffi_error_status(error_out, "result_json_out must not be null");
     }
@@ -1518,7 +1544,7 @@ pub extern "C" fn vulcan_luaskills_ffi_run_lua(
         Ok(result) => match serde_json::to_string(&result) {
             Ok(result_json) => {
                 unsafe { *result_json_out = alloc_c_string(result_json) };
-                ffi_ok_status()
+                ffi_ok_status(error_out)
             }
             Err(error) => ffi_error_status(
                 error_out,
@@ -1540,6 +1566,7 @@ pub extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs(
     reason: *const c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let base_dir = match parse_required_string(base_dir, "base_dir") {
         Ok(value) => PathBuf::from(value),
         Err(error) => return ffi_error_status(error_out, error),
@@ -1566,7 +1593,7 @@ pub extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs(
             )
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1582,6 +1609,7 @@ pub extern "C" fn vulcan_luaskills_ffi_disable_skill(
     reason: *const c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
         Ok(skill_roots) => skill_roots,
         Err(error) => return ffi_error_status(error_out, error),
@@ -1599,7 +1627,7 @@ pub extern "C" fn vulcan_luaskills_ffi_disable_skill(
             .disable_skill_in_roots(&skill_roots, &skill_id, reason.as_deref())
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1615,6 +1643,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs(
     reason: *const c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let base_dir = match parse_required_string(base_dir, "base_dir") {
         Ok(value) => PathBuf::from(value),
         Err(error) => return ffi_error_status(error_out, error),
@@ -1641,7 +1670,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs(
             )
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1657,6 +1686,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill(
     reason: *const c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
         Ok(skill_roots) => skill_roots,
         Err(error) => return ffi_error_status(error_out, error),
@@ -1674,7 +1704,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill(
             .system_disable_skill_in_roots(&skill_roots, &skill_id, reason.as_deref())
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1689,6 +1719,7 @@ pub extern "C" fn vulcan_luaskills_ffi_enable_skill(
     skill_id: *const c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
         Ok(skill_roots) => skill_roots,
         Err(error) => return ffi_error_status(error_out, error),
@@ -1702,7 +1733,7 @@ pub extern "C" fn vulcan_luaskills_ffi_enable_skill(
             .enable_skill(&skill_roots, &skill_id)
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1717,6 +1748,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_enable_skill(
     skill_id: *const c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
         Ok(skill_roots) => skill_roots,
         Err(error) => return ffi_error_status(error_out, error),
@@ -1730,7 +1762,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_enable_skill(
             .system_enable_skill(&skill_roots, &skill_id)
             .map_err(|error| error.to_string())
     }) {
-        Ok(()) => ffi_ok_status(),
+        Ok(()) => ffi_ok_status(error_out),
         Err(error) => ffi_error_status(error_out, error),
     }
 }
@@ -1747,6 +1779,8 @@ pub extern "C" fn vulcan_luaskills_ffi_uninstall_skill(
     result_out: *mut *mut FfiSkillUninstallResult,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(result_out);
     if result_out.is_null() {
         return ffi_error_status(error_out, "result_out must not be null");
     }
@@ -1766,7 +1800,7 @@ pub extern "C" fn vulcan_luaskills_ffi_uninstall_skill(
     }) {
         Ok(result) => {
             unsafe { *result_out = Box::into_raw(Box::new(alloc_skill_uninstall_result(&result))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1784,6 +1818,8 @@ pub extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill(
     result_out: *mut *mut FfiSkillUninstallResult,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(result_out);
     if result_out.is_null() {
         return ffi_error_status(error_out, "result_out must not be null");
     }
@@ -1803,7 +1839,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill(
     }) {
         Ok(result) => {
             unsafe { *result_out = Box::into_raw(Box::new(alloc_skill_uninstall_result(&result))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1820,6 +1856,8 @@ pub extern "C" fn vulcan_luaskills_ffi_install_skill(
     result_out: *mut *mut FfiSkillApplyResult,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(result_out);
     if result_out.is_null() {
         return ffi_error_status(error_out, "result_out must not be null");
     }
@@ -1841,7 +1879,7 @@ pub extern "C" fn vulcan_luaskills_ffi_install_skill(
     }) {
         Ok(result) => {
             unsafe { *result_out = Box::into_raw(Box::new(alloc_skill_apply_result(&result))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1858,6 +1896,8 @@ pub extern "C" fn vulcan_luaskills_ffi_system_install_skill(
     result_out: *mut *mut FfiSkillApplyResult,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(result_out);
     if result_out.is_null() {
         return ffi_error_status(error_out, "result_out must not be null");
     }
@@ -1879,7 +1919,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_install_skill(
     }) {
         Ok(result) => {
             unsafe { *result_out = Box::into_raw(Box::new(alloc_skill_apply_result(&result))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1896,6 +1936,8 @@ pub extern "C" fn vulcan_luaskills_ffi_update_skill(
     result_out: *mut *mut FfiSkillApplyResult,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(result_out);
     if result_out.is_null() {
         return ffi_error_status(error_out, "result_out must not be null");
     }
@@ -1917,7 +1959,7 @@ pub extern "C" fn vulcan_luaskills_ffi_update_skill(
     }) {
         Ok(result) => {
             unsafe { *result_out = Box::into_raw(Box::new(alloc_skill_apply_result(&result))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }
@@ -1934,6 +1976,8 @@ pub extern "C" fn vulcan_luaskills_ffi_system_update_skill(
     result_out: *mut *mut FfiSkillApplyResult,
     error_out: *mut *mut c_char,
 ) -> i32 {
+    clear_error_out(error_out);
+    clear_out_ptr(result_out);
     if result_out.is_null() {
         return ffi_error_status(error_out, "result_out must not be null");
     }
@@ -1955,7 +1999,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_update_skill(
     }) {
         Ok(result) => {
             unsafe { *result_out = Box::into_raw(Box::new(alloc_skill_apply_result(&result))) };
-            ffi_ok_status()
+            ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
     }

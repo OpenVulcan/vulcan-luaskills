@@ -164,8 +164,8 @@ typedef struct FfiSkillUninstallResult {
     char *skill_id;
     uint8_t skill_removed;
     uint8_t sqlite_removed;
-    uint8_t sqlite_retained;
     uint8_t lancedb_removed;
+    uint8_t sqlite_retained;
     uint8_t lancedb_retained;
     char *message;
 } FfiSkillUninstallResult;
