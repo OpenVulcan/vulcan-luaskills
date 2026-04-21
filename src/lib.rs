@@ -9,9 +9,12 @@ pub mod skill;
 
 pub use host::callbacks::{
     RuntimeEntryRegistryCallback, RuntimeEntryRegistryDelta, RuntimeSkillLifecycleCallback,
-    RuntimeSkillLifecycleEvent, set_entry_registry_callback, set_skill_lifecycle_callback,
+    RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction, RuntimeSkillManagementCallback,
+    RuntimeSkillManagementRequest, set_entry_registry_callback, set_skill_lifecycle_callback,
+    set_skill_management_callback,
 };
 pub use host::options::{LuaInvocationContext, LuaRuntimeHostOptions, RuntimeSkillRoot};
+pub use host::options::LuaRuntimeCapabilityOptions;
 pub use runtime::cache::{
     DEFAULT_TOOL_CACHE_DEFAULT_TTL_SECS, DEFAULT_TOOL_CACHE_MAX_ENTRIES,
     DEFAULT_TOOL_CACHE_MAX_TTL_SECS, ToolCacheConfig,

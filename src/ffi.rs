@@ -1177,6 +1177,7 @@ mod tests {
                     lancedb_library_path: None,
                     cache_config: None,
                     reserved_entry_names: Vec::new(),
+                    capabilities: Default::default(),
                 },
             ),
         };

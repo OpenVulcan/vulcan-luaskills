@@ -12,7 +12,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::dependency::manager::{DependencyManager, DependencyManagerConfig, ensure_directory};
 use crate::entry_descriptor::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
-use crate::host::callbacks::{RuntimeEntryRegistryDelta, RuntimeSkillLifecycleEvent};
+use crate::host::callbacks::{
+    RuntimeEntryRegistryDelta, RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction,
+    RuntimeSkillManagementRequest, dispatch_skill_management_request,
+    try_has_skill_management_callback,
+};
 use crate::lancedb_host::{LanceDbSkillBinding, LanceDbSkillHost, disabled_skill_status_json};
 use crate::lua_skill::{SkillMeta, validate_luaskills_identifier, validate_luaskills_version};
 use crate::runtime_context::{RuntimeClientInfo, RuntimeRequestContext};
@@ -164,6 +168,37 @@ impl LoadedSkill {
             .get(local_name)
             .map(String::as_str)
     }
+}
+
+/// Create one Lua-facing runtime skill-management bridge function.
+/// 创建一个面向 Lua 的运行时技能管理桥接函数。
+fn create_runtime_skill_management_bridge_fn(
+    lua: &Lua,
+    enabled: bool,
+    action: RuntimeSkillManagementAction,
+    function_name: &'static str,
+) -> mlua::Result<Function> {
+    let action_name = function_name.to_string();
+    lua.create_function(move |lua, input: LuaValue| {
+        if !enabled {
+            return Err(mlua::Error::runtime(format!(
+                "vulcan.runtime.skills.{} is disabled by host policy",
+                action_name
+            )));
+        }
+
+        let payload = lua_value_to_json(&input).map_err(|error| {
+            mlua::Error::runtime(format!("vulcan.runtime.skills.{}: {}", action_name, error))
+        })?;
+        let result = dispatch_skill_management_request(&RuntimeSkillManagementRequest {
+            action: action.clone(),
+            input: payload,
+        })
+        .map_err(|error| {
+            mlua::Error::runtime(format!("vulcan.runtime.skills.{}: {}", action_name, error))
+        })?;
+        json_value_to_lua(lua, &result)
+    })
 }
 
 /// Return a stable human-readable Lua value type name.
@@ -5105,6 +5140,7 @@ end
     ) -> Result<(), Box<dyn std::error::Error>> {
         let vulcan = lua.create_table()?;
         let runtime = lua.create_table()?;
+        let runtime_skills = lua.create_table()?;
         let runtime_internal = lua.create_table()?;
         let runtime_lua = lua.create_table()?;
         let fs = lua.create_table()?;
@@ -5337,6 +5373,73 @@ end
         deps.set("lua_path", LuaValue::Nil)?;
         deps.set("ffi_path", LuaValue::Nil)?;
 
+        let skill_management_enabled = host_options.capabilities.enable_skill_management_bridge;
+        runtime_skills.set("enabled", skill_management_enabled)?;
+
+        let runtime_skills_status_fn = lua.create_function(move |lua, ()| {
+            let status = lua.create_table()?;
+            let callback_registered = try_has_skill_management_callback()
+                .map_err(mlua::Error::runtime)?;
+            status.set("enabled", skill_management_enabled)?;
+            status.set("callback_registered", callback_registered)?;
+            status.set("mode", "host_callback")?;
+            let message = if !skill_management_enabled {
+                "Skill management bridge is disabled by host policy"
+            } else if callback_registered {
+                "Skill management bridge is enabled and ready"
+            } else {
+                "Skill management bridge is enabled but no host callback is registered"
+            };
+            status.set("message", message)?;
+            Ok(status)
+        })?;
+        runtime_skills.set("status", runtime_skills_status_fn)?;
+        runtime_skills.set(
+            "install",
+            create_runtime_skill_management_bridge_fn(
+                lua,
+                skill_management_enabled,
+                RuntimeSkillManagementAction::Install,
+                "install",
+            )?,
+        )?;
+        runtime_skills.set(
+            "update",
+            create_runtime_skill_management_bridge_fn(
+                lua,
+                skill_management_enabled,
+                RuntimeSkillManagementAction::Update,
+                "update",
+            )?,
+        )?;
+        runtime_skills.set(
+            "uninstall",
+            create_runtime_skill_management_bridge_fn(
+                lua,
+                skill_management_enabled,
+                RuntimeSkillManagementAction::Uninstall,
+                "uninstall",
+            )?,
+        )?;
+        runtime_skills.set(
+            "enable",
+            create_runtime_skill_management_bridge_fn(
+                lua,
+                skill_management_enabled,
+                RuntimeSkillManagementAction::Enable,
+                "enable",
+            )?,
+        )?;
+        runtime_skills.set(
+            "disable",
+            create_runtime_skill_management_bridge_fn(
+                lua,
+                skill_management_enabled,
+                RuntimeSkillManagementAction::Disable,
+                "disable",
+            )?,
+        )?;
+
         let overflow_type = lua.create_table()?;
         overflow_type.set("truncate", "truncate")?;
         overflow_type.set("page", "page")?;
@@ -5347,6 +5450,7 @@ end
         runtime_internal.set("luaexec_active", false)?;
         runtime_internal.set("luaexec_caller_tool_name", LuaValue::Nil)?;
         runtime.set("internal", runtime_internal)?;
+        runtime.set("skills", runtime_skills)?;
         runtime.set("lua", runtime_lua)?;
 
         let call_stub = lua.create_function(|_, _: (LuaValue, LuaValue)| {

@@ -301,6 +301,17 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - GitHub base URL
 - SQLite / LanceDB 动态库路径
 - `reserved_entry_names`
+- `enable_skill_management_bridge`
+
+说明：
+
+- `enable_skill_management_bridge = false`
+  - Lua 侧仍可看到 `vulcan.runtime.skills` 命名空间，但安装、更新、启停、卸载桥接会被宿主策略直接拒绝
+- `enable_skill_management_bridge = true`
+  - 只表示宿主允许 Lua 使用这组桥接能力
+  - 真正执行仍依赖宿主已注册运行时技能管理回调
+- 如果宿主打开了开关但没有注册回调，Lua 会得到明确错误：
+  - `Runtime skill management bridge is enabled but no host callback is registered`
 
 ### 8.4 `FfiLuaEngineOptions`
 
@@ -659,6 +670,35 @@ JSON 接口：
 4. 注入 `vulcan.deps.*`
 5. 执行 Lua
 6. 结构化返回结果
+
+### 10.13.1 `vulcan.runtime.skills.*`
+
+作用：
+
+- 允许宿主把安装、更新、启停、卸载桥接为 Lua 可调用能力
+
+当前公开方法：
+
+- `vulcan.runtime.skills.status()`
+- `vulcan.runtime.skills.install(input)`
+- `vulcan.runtime.skills.update(input)`
+- `vulcan.runtime.skills.uninstall(input)`
+- `vulcan.runtime.skills.enable(input)`
+- `vulcan.runtime.skills.disable(input)`
+
+调用逻辑：
+
+1. 先检查宿主能力开关是否允许
+2. 再检查宿主是否注册技能管理回调
+3. 将 Lua 输入转换为 JSON
+4. 通过宿主回调转发结构化管理请求
+5. 将宿主回调结果再转换回 Lua
+
+设计意图：
+
+- skill 不直接操控底层安装器
+- 最终是否允许执行，由宿主策略决定
+- 适合拥有自己 TUI、GUI 或专用管理界面的宿主
 
 ### 10.13 `run_lua`
 

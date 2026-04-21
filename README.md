@@ -147,6 +147,7 @@ skill **不应该**：
 - skill help 详情
 - runtime lua 执行链
 - `vulcan.runtime.lua.exec`
+- 可选的 `vulcan.runtime.skills.*` 宿主管理桥接
 
 宿主可以自由把这些 system 能力映射成：
 
@@ -155,6 +156,18 @@ skill **不应该**：
 - slash command
 - UI 面板
 - 自动上下文注入
+
+其中 `vulcan.runtime.skills.*` 采用宿主显式授权模型：
+
+- 默认关闭
+- 由宿主通过 `LuaRuntimeHostOptions.capabilities.enable_skill_management_bridge` 决定是否开放
+- 即使开放，也必须由宿主注册技能管理回调后才会真正执行安装、更新、启停、卸载
+
+这意味着：
+
+- 拥有自己 TUI、GUI 或专用管理面的宿主，可以保持关闭
+- 愿意允许 skill 调起管理动作的宿主，可以显式打开
+- 未注册回调时，Lua 侧会收到明确错误，而不是静默成功
 
 ## 当前代码结构
 
@@ -307,7 +320,7 @@ FFI 设计规则如下：
 
 头文件位置：
 
-- [include/vulcan_luaskills_ffi.h](D:/projects/vulcan-luaskills/include/vulcan_luaskills_ffi.h)
+- [include/vulcan_luaskills_ffi.h](include/vulcan_luaskills_ffi.h)
 
 当前已导出的核心 FFI 能力包括：
 
@@ -324,14 +337,14 @@ FFI 设计规则如下：
 
 完整对接文档：
 
-- [docs/FFI_INTEGRATION_GUIDE.md](D:/projects/vulcan-luaskills/docs/FFI_INTEGRATION_GUIDE.md)
+- [docs/FFI_INTEGRATION_GUIDE.md](docs/FFI_INTEGRATION_GUIDE.md)
 
 语言示例：
 
-- [examples/ffi/python/demo.py](D:/projects/vulcan-luaskills/examples/ffi/python/demo.py)
-- [examples/ffi/go/demo.go](D:/projects/vulcan-luaskills/examples/ffi/go/demo.go)
-- [examples/ffi/typescript/demo.ts](D:/projects/vulcan-luaskills/examples/ffi/typescript/demo.ts)
-- [examples/ffi/demo_runtime/README.md](D:/projects/vulcan-luaskills/examples/ffi/demo_runtime/README.md)
+- [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
+- [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
+- [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
+- [examples/ffi/demo_runtime/README.md](examples/ffi/demo_runtime/README.md)
 
 这些示例当前都采用同一规则：
 

@@ -5,6 +5,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
 
+/// Host-controlled toggles for optional Lua-exposed runtime bridges.
+/// 宿主控制的可选 Lua 暴露运行时桥接开关集合。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LuaRuntimeCapabilityOptions {
+    /// Whether `vulcan.runtime.skills.*` management bridges are exposed to Lua.
+    /// 是否将 `vulcan.runtime.skills.*` 管理桥接暴露给 Lua。
+    pub enable_skill_management_bridge: bool,
+}
+
+impl Default for LuaRuntimeCapabilityOptions {
+    /// Return one secure-by-default capability set.
+    /// 返回一组默认安全的能力开关集合。
+    fn default() -> Self {
+        Self {
+            enable_skill_management_bridge: false,
+        }
+    }
+}
+
 /// One named skill root injected by the host, used to build ordered override environments.
 /// 由宿主注入的单个命名技能根，用于构建有序覆盖环境。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -78,6 +97,10 @@ pub struct LuaRuntimeHostOptions {
     /// Host-reserved public entry names that LuaSkills canonical name generation must never occupy directly.
     /// 宿主保留的公开入口名称集合，LuaSkills 在生成 canonical 名称时必须直接避开这些名称。
     pub reserved_entry_names: Vec<String>,
+    /// Host-controlled optional runtime capability toggles.
+    /// 由宿主控制的可选运行时能力开关集合。
+    #[serde(default)]
+    pub capabilities: LuaRuntimeCapabilityOptions,
 }
 
 /// Host-injected invocation context delivered alongside one skill or runlua call.

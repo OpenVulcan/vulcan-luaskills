@@ -9,7 +9,9 @@ use crate::runtime_context::RuntimeRequestContext;
 use crate::runtime_help::{
     RuntimeHelpDetail, RuntimeHelpNodeDescriptor, RuntimeSkillHelpDescriptor,
 };
-use crate::runtime_options::{LuaInvocationContext, LuaRuntimeHostOptions, RuntimeSkillRoot};
+use crate::runtime_options::{
+    LuaInvocationContext, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions, RuntimeSkillRoot,
+};
 use crate::skill::manager::{SkillInstallRequest, SkillUninstallOptions};
 use crate::skill::source::SkillInstallSourceType;
 use crate::tool_cache::ToolCacheConfig;
@@ -122,6 +124,9 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Number of reserved public entry names.
     /// 保留公开入口名称数组长度。
     pub reserved_entry_names_len: usize,
+    /// Whether Lua may use `vulcan.runtime.skills.*` management bridges.
+    /// Lua 是否允许使用 `vulcan.runtime.skills.*` 管理桥接。
+    pub enable_skill_management_bridge: u8,
 }
 
 /// Plain C ABI engine options used by standard non-JSON engine creation.
@@ -654,6 +659,9 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             value.reserved_entry_names_len,
             "reserved_entry_names",
         )?,
+        capabilities: LuaRuntimeCapabilityOptions {
+            enable_skill_management_bridge: value.enable_skill_management_bridge != 0,
+        },
     })
 }
 

@@ -1,6 +1,7 @@
 use crate::runtime::entry::RuntimeEntryDescriptor;
 use crate::skill::manager::{SkillLifecycleAction, SkillOperationPlane};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Callback type used by hosts to receive runtime skill-lifecycle events.
@@ -10,6 +11,45 @@ pub type RuntimeSkillLifecycleCallback = Arc<dyn Fn(&RuntimeSkillLifecycleEvent)
 /// Callback type used by hosts to receive runtime entry-registry change events.
 /// 宿主用于接收运行时入口注册表变化事件的回调类型。
 pub type RuntimeEntryRegistryCallback = Arc<dyn Fn(&RuntimeEntryRegistryDelta) + Send + Sync>;
+
+/// Callback type used by hosts to handle one Lua-triggered runtime skill-management request.
+/// 宿主用于处理单个由 Lua 触发的运行时技能管理请求的回调类型。
+pub type RuntimeSkillManagementCallback =
+    Arc<dyn Fn(&RuntimeSkillManagementRequest) -> Result<Value, String> + Send + Sync>;
+
+/// Structured management actions that one Lua-exposed runtime bridge may request from the host.
+/// Lua 暴露的运行时桥接可能向宿主请求的结构化管理动作集合。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeSkillManagementAction {
+    /// Request one managed install operation.
+    /// 请求执行一次受管安装操作。
+    Install,
+    /// Request one managed update operation.
+    /// 请求执行一次受管更新操作。
+    Update,
+    /// Request one uninstall operation.
+    /// 请求执行一次卸载操作。
+    Uninstall,
+    /// Request one enable operation.
+    /// 请求执行一次启用操作。
+    Enable,
+    /// Request one disable operation.
+    /// 请求执行一次停用操作。
+    Disable,
+}
+
+/// Structured Lua-triggered skill-management request forwarded to the host.
+/// 转发给宿主的结构化 Lua 触发技能管理请求。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeSkillManagementRequest {
+    /// Requested management action kind.
+    /// 请求的管理动作类型。
+    pub action: RuntimeSkillManagementAction,
+    /// Arbitrary JSON payload supplied by the Lua caller.
+    /// 由 Lua 调用方提供的任意 JSON 载荷。
+    pub input: Value,
+}
 
 /// Structured lifecycle event emitted after one skill-management operation is evaluated.
 /// 在评估一次技能管理操作后发出的结构化生命周期事件。
@@ -69,6 +109,14 @@ pub fn set_entry_registry_callback(callback: Option<RuntimeEntryRegistryCallback
     *guard = callback;
 }
 
+/// Install or clear the process-wide Lua-triggered skill-management callback used by the host.
+/// 安装或清理由宿主使用的进程级 Lua 触发技能管理回调。
+pub fn set_skill_management_callback(callback: Option<RuntimeSkillManagementCallback>) {
+    let registry = skill_management_callback_registry();
+    let mut guard = registry.lock().unwrap();
+    *guard = callback;
+}
+
 /// Emit one skill-lifecycle event to the currently registered host callback when it exists.
 /// 当宿主已注册回调时向其发送一条技能生命周期事件。
 pub(crate) fn emit_skill_lifecycle_event(event: &RuntimeSkillLifecycleEvent) {
@@ -95,6 +143,34 @@ pub(crate) fn emit_entry_registry_delta(delta: &RuntimeEntryRegistryDelta) {
     }
 }
 
+/// Dispatch one Lua-triggered skill-management request into the currently registered host callback.
+/// 将单个 Lua 触发的技能管理请求分发给当前已注册的宿主回调。
+pub(crate) fn dispatch_skill_management_request(
+    request: &RuntimeSkillManagementRequest,
+) -> Result<Value, String> {
+    let registry = skill_management_callback_registry();
+    let callback = {
+        let guard = registry
+            .lock()
+            .map_err(|_| "Skill management callback registry lock poisoned".to_string())?;
+        guard.clone()
+    };
+    let callback = callback.ok_or_else(|| {
+        "Runtime skill management bridge is enabled but no host callback is registered".to_string()
+    })?;
+    callback(request)
+}
+
+/// Return whether one host callback is currently registered for runtime skill-management dispatch.
+/// 返回当前是否已为运行时技能管理分发注册宿主回调。
+pub(crate) fn try_has_skill_management_callback() -> Result<bool, String> {
+    let registry = skill_management_callback_registry();
+    let guard = registry
+        .lock()
+        .map_err(|_| "Skill management callback registry lock poisoned".to_string())?;
+    Ok(guard.is_some())
+}
+
 /// Return the process-wide lifecycle callback storage.
 /// 返回进程级生命周期回调存储。
 fn skill_lifecycle_callback_registry() -> &'static Mutex<Option<RuntimeSkillLifecycleCallback>> {
@@ -106,5 +182,12 @@ fn skill_lifecycle_callback_registry() -> &'static Mutex<Option<RuntimeSkillLife
 /// 返回进程级入口注册表回调存储。
 fn entry_registry_callback_registry() -> &'static Mutex<Option<RuntimeEntryRegistryCallback>> {
     static REGISTRY: OnceLock<Mutex<Option<RuntimeEntryRegistryCallback>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(None))
+}
+
+/// Return the process-wide skill-management callback storage.
+/// 返回进程级技能管理回调存储。
+fn skill_management_callback_registry() -> &'static Mutex<Option<RuntimeSkillManagementCallback>> {
+    static REGISTRY: OnceLock<Mutex<Option<RuntimeSkillManagementCallback>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(None))
 }

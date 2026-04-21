@@ -56,6 +56,7 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("cache_config", ctypes.c_void_p),
         ("reserved_entry_names", ctypes.POINTER(ctypes.c_char_p)),
         ("reserved_entry_names_len", ctypes.c_size_t),
+        ("enable_skill_management_bridge", ctypes.c_uint8),
     ]
 
 
@@ -214,6 +215,7 @@ def build_engine_options(root: Path) -> FfiLuaEngineOptions:
     host.cache_config = None
     host.reserved_entry_names = None
     host.reserved_entry_names_len = 0
+    host.enable_skill_management_bridge = 0
 
     return FfiLuaEngineOptions(
         pool=FfiLuaVmPoolConfig(min_size=1, max_size=1, idle_ttl_secs=30),

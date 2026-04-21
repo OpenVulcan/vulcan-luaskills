@@ -47,6 +47,11 @@ typedef struct FfiLuaRuntimeHostOptions {
     const FfiToolCacheConfig *cache_config;
     const char **reserved_entry_names;
     size_t reserved_entry_names_len;
+    /*
+    Whether Lua may use `vulcan.runtime.skills.*` management bridges.
+    Lua 是否允许使用 `vulcan.runtime.skills.*` 管理桥接。
+    */
+    uint8_t enable_skill_management_bridge;
 } FfiLuaRuntimeHostOptions;
 
 typedef struct FfiLuaEngineOptions {

@@ -112,6 +112,7 @@ function main(): void {
     cache_config: "void*",
     reserved_entry_names: "void*",
     reserved_entry_names_len: "size_t",
+    enable_skill_management_bridge: "uint8_t",
   });
 
   const FfiLuaEngineOptions = koffi.struct("FfiLuaEngineOptions", {
@@ -156,6 +157,7 @@ function main(): void {
       cache_config: null,
       reserved_entry_names: null,
       reserved_entry_names_len: 0,
+      enable_skill_management_bridge: 0,
     },
   };
 
