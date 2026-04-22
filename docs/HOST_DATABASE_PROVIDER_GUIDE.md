@@ -201,6 +201,10 @@ lib 会一并提供稳定绑定上下文：
 
 - `vulcan_luaskills_ffi_set_sqlite_provider_callback`
 
+头文件：
+
+- [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
+
 回调签名：
 
 - 输入：
@@ -215,6 +219,10 @@ lib 会一并提供稳定绑定上下文：
 注册函数：
 
 - `vulcan_luaskills_ffi_set_lancedb_provider_callback`
+
+头文件：
+
+- [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
 
 回调签名：
 
@@ -279,11 +287,19 @@ lib 会一并提供稳定绑定上下文：
 
 - `vulcan_luaskills_ffi_set_sqlite_provider_json_callback`
 
+头文件：
+
+- [include/vulcan_luaskills_json_ffi.h](../include/vulcan_luaskills_json_ffi.h)
+
 ### LanceDB
 
 注册函数：
 
 - `vulcan_luaskills_ffi_set_lancedb_provider_json_callback`
+
+头文件：
+
+- [include/vulcan_luaskills_json_ffi.h](../include/vulcan_luaskills_json_ffi.h)
 
 ### JSON 回调规则
 

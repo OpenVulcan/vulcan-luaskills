@@ -281,7 +281,7 @@ vulcan-luaskills = { path = "../vulcan-luaskills" }
 
 #### FFI C ABI
 
-当前库已经提供两套并存的稳定 C ABI，用于让非 Rust 宿主通过：
+当前库对外提供两层 FFI 接入面，用于让非 Rust 宿主通过：
 
 - `cdylib`
 - `staticlib`
@@ -290,22 +290,26 @@ vulcan-luaskills = { path = "../vulcan-luaskills" }
 
 FFI 设计规则如下：
 
-- 所有直接集成的核心引擎接口都同时提供：
-  - 标准结构化接口
-  - `_json` 结尾的 JSON 通用接口
-- 结构明确、性能敏感的接入方应优先使用标准接口
-- 动态语言或快速集成场景可以使用 `_json` 接口
-- `_json` 接口统一使用 JSON 包络：
+- 标准 C ABI：
+  - 面向低层正式宿主契约
+  - 适合结构明确、性能敏感的接入方
+- 公共 `_json` FFI：
+  - 面向动态语言和快速集成场景
+  - 适合不想维护复杂 ABI 结构的宿主
+- 公共 `_json` FFI 统一使用 JSON 包络：
   - 成功：`{"ok":true,"result":...}`
   - 失败：`{"ok":false,"error":"..."}`
-- 返回的字符串必须通过：
-  - `vulcan_luaskills_ffi_string_free`
+- 返回的拥有型文本/字节缓冲必须通过：
+  - `vulcan_luaskills_ffi_buffer_free`
   释放
+- 结构化结果对象必须通过各自专用的 free 函数释放
+- 只有仍明确返回裸字符串指针的辅助接口，才使用：
+  - `vulcan_luaskills_ffi_string_free`
 
-标准接口当前采用：
+标准 C ABI 当前采用：
 
 - 原生 C ABI 参数
-- `error_out` 输出英文错误文本
+- `error_out` 输出拥有型 UTF-8 错误缓冲
 - 复杂列表/结果结构通过专用 free 函数释放
 - `source_type` 采用稳定整数协议：
   - `-1 = absent`
@@ -315,12 +319,15 @@ FFI 设计规则如下：
 说明：
 
 - 对于真正动态的值，例如 `run_lua` 的任意 JSON 返回值、`client_budget/tool_config` 一类上下文对象，
-  标准接口仍会使用 JSON 字符串承载内容
+  标准 C ABI 仍会使用 JSON 字符串承载内容
 - 这是为了避免把任意 JSON 树硬编码成脆弱的固定 C 结构
 
 头文件位置：
 
-- [include/vulcan_luaskills_ffi.h](include/vulcan_luaskills_ffi.h)
+- 标准 C ABI：
+  - [include/vulcan_luaskills_ffi.h](include/vulcan_luaskills_ffi.h)
+- 公共 JSON FFI：
+  - [include/vulcan_luaskills_json_ffi.h](include/vulcan_luaskills_json_ffi.h)
 
 当前已导出的核心 FFI 能力包括：
 
@@ -342,18 +349,25 @@ FFI 设计规则如下：
 
 语言示例：
 
+- [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
 - [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
 - [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
 - [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
+- [examples/ffi/c/README.md](examples/ffi/c/README.md)
+- [examples/ffi/standard_runtime/README.md](examples/ffi/standard_runtime/README.md)
 - [examples/ffi/demo_runtime/README.md](examples/ffi/demo_runtime/README.md)
 - [examples/ffi/host_provider_demo/README.md](examples/ffi/host_provider_demo/README.md)
 
-这些示例当前都采用同一规则：
+这些示例当前遵循两类接入方式：
 
-- 通过环境变量 `VULCAN_LUASKILLS_LIB` 指向动态库文件
-- 标准示例优先演示 `version / engine_new / engine_free`
+- `c/demo.c`
+  - 通过标准头文件与链接产物直接演示标准 C ABI 下的 `version / engine_new / load_from_roots / list_entries / engine_free`
+- Python / Go / TypeScript / standard_runtime / demo_runtime / host_provider_demo
+  - 通过环境变量 `VULCAN_LUASKILLS_LIB` 指向动态库文件
+- `standard_runtime` 目录提供标准 ABI 示例共用的最小 skill 夹具
+- Python / Go / TypeScript 标准示例当前也已覆盖 `load_from_roots + list_entries` 的结构化结果读取
 - `demo_runtime` 目录额外提供一条真实的安装与调用烟测链
-- 动态安装与调用部分通过 `_json` 接口完成
+- 动态安装与调用部分通过公共 `_json` FFI 完成
 - `host_provider_demo` 目录额外提供一条“宿主通过 host_callback 模式接管 SQLite 数据库落点”的独立烟测链
 
 #### 宿主数据库 Provider

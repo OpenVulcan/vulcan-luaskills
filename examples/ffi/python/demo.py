@@ -50,6 +50,10 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("lancedb_library_path", ctypes.c_char_p),
         ("lancedb_provider_mode", ctypes.c_int32),
         ("lancedb_callback_mode", ctypes.c_int32),
+        ("space_controller_endpoint", ctypes.c_char_p),
+        ("space_controller_auto_spawn", ctypes.c_uint8),
+        ("space_controller_executable_path", ctypes.c_char_p),
+        ("space_controller_process_mode", ctypes.c_int32),
         ("cache_config", ctypes.c_void_p),
         ("reserved_entry_names", ctypes.POINTER(ctypes.c_char_p)),
         ("reserved_entry_names_len", ctypes.c_size_t),
@@ -68,12 +72,68 @@ class FfiLuaEngineOptions(ctypes.Structure):
 
 class FfiOwnedBuffer(ctypes.Structure):
     """
-    Owned byte-buffer container returned by standard FFI error outputs.
-    标准 FFI 错误输出返回的拥有型字节缓冲容器。
+    Owned byte-buffer container returned by standard FFI outputs.
+    标准 FFI 输出返回的拥有型字节缓冲容器。
     """
 
     _fields_ = [
         ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
+class FfiRuntimeSkillRoot(ctypes.Structure):
+    """
+    Plain skill-root descriptor used by the standard root-chain loader.
+    标准根链加载器使用的原生技能根描述结构。
+    """
+
+    _fields_ = [
+        ("name", ctypes.c_char_p),
+        ("skills_dir", ctypes.c_char_p),
+    ]
+
+
+class FfiRuntimeEntryParameterDescriptor(ctypes.Structure):
+    """
+    Plain entry-parameter descriptor returned by the standard entry-list API.
+    标准入口列表接口返回的原生入口参数描述结构。
+    """
+
+    _fields_ = [
+        ("name", FfiOwnedBuffer),
+        ("param_type", FfiOwnedBuffer),
+        ("description", FfiOwnedBuffer),
+        ("required", ctypes.c_uint8),
+    ]
+
+
+class FfiRuntimeEntryDescriptor(ctypes.Structure):
+    """
+    Plain entry descriptor returned by the standard entry-list API.
+    标准入口列表接口返回的原生入口描述结构。
+    """
+
+    _fields_ = [
+        ("canonical_name", FfiOwnedBuffer),
+        ("skill_id", FfiOwnedBuffer),
+        ("local_name", FfiOwnedBuffer),
+        ("root_name", FfiOwnedBuffer),
+        ("skill_dir", FfiOwnedBuffer),
+        ("description", FfiOwnedBuffer),
+        ("parameters", ctypes.POINTER(FfiRuntimeEntryParameterDescriptor)),
+        ("parameters_len", ctypes.c_size_t),
+    ]
+
+
+class FfiRuntimeEntryDescriptorList(ctypes.Structure):
+    """
+    Plain entry-descriptor list returned by the standard entry-list API.
+    标准入口列表接口返回的原生入口描述列表结构。
+    """
+
+    _fields_ = [
+        ("items", ctypes.POINTER(FfiRuntimeEntryDescriptor)),
         ("len", ctypes.c_size_t),
     ]
 
@@ -90,16 +150,36 @@ def load_library() -> ctypes.CDLL:
     return ctypes.CDLL(str(Path(library_path)))
 
 
-def demo_runtime_root() -> Path:
+def standard_fixture_runtime_root() -> Path:
     """
-    Resolve the shared demo runtime root bundled under examples/ffi/demo_runtime.
-    解析位于 examples/ffi/demo_runtime 下的共享演示运行时根目录。
+    Resolve the dedicated standard-ABI fixture runtime root bundled under standard_runtime.
+    解析位于 standard_runtime 下供标准 ABI 示例共用的专用夹具运行时根目录。
     """
 
-    return Path(__file__).resolve().parent.parent / "demo_runtime" / "runtime_root"
+    return Path(__file__).resolve().parent.parent / "standard_runtime" / "runtime_root"
 
 
-def read_owned_buffer_text(buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> str:
+def ensure_standard_fixture_layout(root: Path) -> None:
+    """
+    Ensure the shared standard-ABI fixture runtime directory layout exists.
+    确保标准 ABI 共用夹具运行时目录结构存在。
+    """
+
+    for relative_path in [
+        "skills",
+        "dependencies",
+        "state",
+        "databases",
+        "temp",
+        "resources",
+        "lua_packages",
+        "bin/tools",
+        "libs",
+    ]:
+        (root / relative_path).mkdir(parents=True, exist_ok=True)
+
+
+def read_owned_buffer_text_and_free(buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> str:
     """
     Read one owned UTF-8 buffer into one Python string and free it.
     将一个拥有型 UTF-8 缓冲读取为 Python 字符串并释放。
@@ -112,6 +192,17 @@ def read_owned_buffer_text(buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> str:
     return text
 
 
+def read_owned_buffer_text(buffer: FfiOwnedBuffer) -> str:
+    """
+    Read one nested owned UTF-8 buffer without freeing it immediately.
+    读取一个嵌套拥有型 UTF-8 缓冲但不立即释放。
+    """
+
+    if not buffer.ptr:
+        return ""
+    return ctypes.string_at(buffer.ptr, buffer.len).decode("utf-8")
+
+
 def must_ok(status: int, error_buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> None:
     """
     Raise one Python exception when the standard FFI call reports failure.
@@ -120,14 +211,14 @@ def must_ok(status: int, error_buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> 
 
     if status == 0:
         return
-    message = read_owned_buffer_text(error_buffer, library) or "Unknown FFI error"
+    message = read_owned_buffer_text_and_free(error_buffer, library) or "Unknown FFI error"
     raise RuntimeError(message)
 
 
 def main() -> None:
     """
-    Demonstrate one version query and one engine create/free roundtrip.
-    演示一次版本查询以及一次引擎创建与释放往返调用。
+    Demonstrate version, engine lifecycle, root loading, and one structured entry-list read.
+    演示版本查询、引擎生命周期、根链加载以及一次结构化入口列表读取。
     """
 
     library = load_library()
@@ -142,10 +233,26 @@ def main() -> None:
         ctypes.POINTER(ctypes.c_uint64),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
+    library.vulcan_luaskills_ffi_load_from_roots.argtypes = [
+        ctypes.c_uint64,
+        ctypes.POINTER(FfiRuntimeSkillRoot),
+        ctypes.c_size_t,
+        ctypes.POINTER(FfiOwnedBuffer),
+    ]
+    library.vulcan_luaskills_ffi_list_entries.argtypes = [
+        ctypes.c_uint64,
+        ctypes.POINTER(ctypes.POINTER(FfiRuntimeEntryDescriptorList)),
+        ctypes.POINTER(FfiOwnedBuffer),
+    ]
+    library.vulcan_luaskills_ffi_entry_list_free.argtypes = [
+        ctypes.POINTER(FfiRuntimeEntryDescriptorList),
+    ]
+    library.vulcan_luaskills_ffi_entry_list_free.restype = None
     library.vulcan_luaskills_ffi_engine_free.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiOwnedBuffer),
     ]
+
     version_buffer = FfiOwnedBuffer()
     error_buffer = FfiOwnedBuffer()
     must_ok(
@@ -155,21 +262,10 @@ def main() -> None:
         error_buffer,
         library,
     )
-    print("Version:", read_owned_buffer_text(version_buffer, library))
+    print("Version:", read_owned_buffer_text_and_free(version_buffer, library))
 
-    root = demo_runtime_root()
-    for relative_path in [
-        "skills",
-        "dependencies",
-        "state",
-        "databases",
-        "temp",
-        "resources",
-        "lua_packages",
-        "bin/tools",
-        "libs",
-    ]:
-        (root / relative_path).mkdir(parents=True, exist_ok=True)
+    root = standard_fixture_runtime_root()
+    ensure_standard_fixture_layout(root)
 
     host = FfiLuaRuntimeHostOptions()
     host.temp_dir = str((root / "temp").resolve()).replace("\\", "/").encode("utf-8")
@@ -194,6 +290,10 @@ def main() -> None:
     host.lancedb_library_path = None
     host.lancedb_provider_mode = 0
     host.lancedb_callback_mode = 0
+    host.space_controller_endpoint = None
+    host.space_controller_auto_spawn = 0
+    host.space_controller_executable_path = None
+    host.space_controller_process_mode = 0
     host.cache_config = None
     host.reserved_entry_names = None
     host.reserved_entry_names_len = 0
@@ -213,6 +313,54 @@ def main() -> None:
         library,
     )
     print("Engine created:", engine_id.value)
+
+    skill_roots = (FfiRuntimeSkillRoot * 1)(
+        FfiRuntimeSkillRoot(
+            name=b"ROOT",
+            skills_dir=str((root / "skills").resolve()).replace("\\", "/").encode("utf-8"),
+        )
+    )
+    error_buffer = FfiOwnedBuffer()
+    must_ok(
+        library.vulcan_luaskills_ffi_load_from_roots(
+            engine_id.value, skill_roots, len(skill_roots), ctypes.byref(error_buffer)
+        ),
+        error_buffer,
+        library,
+    )
+    print("Loaded roots from:", root / "skills")
+
+    entries_ptr = ctypes.POINTER(FfiRuntimeEntryDescriptorList)()
+    error_buffer = FfiOwnedBuffer()
+    must_ok(
+        library.vulcan_luaskills_ffi_list_entries(
+            engine_id.value, ctypes.byref(entries_ptr), ctypes.byref(error_buffer)
+        ),
+        error_buffer,
+        library,
+    )
+    try:
+        entries_list = entries_ptr.contents
+        print("Entry count:", entries_list.len)
+        if entries_list.len > 0:
+            first_entry = entries_list.items[0]
+            print("First canonical entry:", read_owned_buffer_text(first_entry.canonical_name))
+            print("First entry skill id:", read_owned_buffer_text(first_entry.skill_id))
+            print("First entry description:", read_owned_buffer_text(first_entry.description))
+            print("First entry parameter count:", first_entry.parameters_len)
+            if first_entry.parameters_len > 0:
+                first_parameter = first_entry.parameters[0]
+                print("First parameter name:", read_owned_buffer_text(first_parameter.name))
+                print("First parameter type:", read_owned_buffer_text(first_parameter.param_type))
+                print(
+                    "First parameter required:",
+                    bool(first_parameter.required),
+                )
+        else:
+            print("No entries were returned by the current fixture root.")
+    finally:
+        if entries_ptr:
+            library.vulcan_luaskills_ffi_entry_list_free(entries_ptr)
 
     error_buffer = FfiOwnedBuffer()
     must_ok(

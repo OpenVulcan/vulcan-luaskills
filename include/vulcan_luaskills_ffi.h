@@ -5,20 +5,22 @@
 #include <stdint.h>
 
 /*
-Stable dual-surface C ABI exported by vulcan-luaskills.
-vulcan-luaskills 导出的稳定双接口 C ABI 接口面。
+Stable standard C ABI exported by vulcan-luaskills.
+vulcan-luaskills 导出的稳定标准 C ABI 接口面。
 */
 
 /*
 Beta integration contract for v0.1.0:
-- This header is a low-level ABI for controlled host integrations.
+- This header is the low-level standard ABI for controlled host integrations.
+- Public high-level JSON FFI declarations are provided by vulcan_luaskills_json_ffi.h.
 - Returned memory must be released only with the matching luaskills free function.
 - Host callbacks must be registered before engine creation when callback-based modes are used.
 - Callbacks must not unwind across the C ABI boundary.
 - Same-thread reentry into the same engine is not supported.
 - Skills are treated as trusted code by default; this ABI does not promise sandbox isolation.
 v0.1.0 beta 集成契约：
-- 当前头文件是面向受控宿主集成的低层 ABI。
+- 当前头文件是面向受控宿主集成的低层标准 ABI。
+- 公共高层 JSON FFI 声明位于 vulcan_luaskills_json_ffi.h。
 - 所有返回内存都只能使用匹配的 luaskills 释放函数处理。
 - 使用 callback 模式时，宿主必须先注册 callback，再创建 engine。
 - callback 不允许把异常跨越 C ABI 边界传播。
@@ -241,24 +243,24 @@ typedef struct FfiLanceDbProviderRequest {
 } FfiLanceDbProviderRequest;
 
 typedef struct FfiStringArray {
-    char **items;
+    FfiOwnedBuffer *items;
     size_t len;
 } FfiStringArray;
 
 typedef struct FfiRuntimeEntryParameterDescriptor {
-    char *name;
-    char *param_type;
-    char *description;
+    FfiOwnedBuffer name;
+    FfiOwnedBuffer param_type;
+    FfiOwnedBuffer description;
     uint8_t required;
 } FfiRuntimeEntryParameterDescriptor;
 
 typedef struct FfiRuntimeEntryDescriptor {
-    char *canonical_name;
-    char *skill_id;
-    char *local_name;
-    char *root_name;
-    char *skill_dir;
-    char *description;
+    FfiOwnedBuffer canonical_name;
+    FfiOwnedBuffer skill_id;
+    FfiOwnedBuffer local_name;
+    FfiOwnedBuffer root_name;
+    FfiOwnedBuffer skill_dir;
+    FfiOwnedBuffer description;
     struct FfiRuntimeEntryParameterDescriptor *parameters;
     size_t parameters_len;
 } FfiRuntimeEntryDescriptor;
@@ -269,19 +271,19 @@ typedef struct FfiRuntimeEntryDescriptorList {
 } FfiRuntimeEntryDescriptorList;
 
 typedef struct FfiRuntimeHelpNodeDescriptor {
-    char *flow_name;
-    char *description;
-    char **related_entries;
+    FfiOwnedBuffer flow_name;
+    FfiOwnedBuffer description;
+    FfiOwnedBuffer *related_entries;
     size_t related_entries_len;
     uint8_t is_main;
 } FfiRuntimeHelpNodeDescriptor;
 
 typedef struct FfiRuntimeSkillHelpDescriptor {
-    char *skill_id;
-    char *skill_name;
-    char *skill_version;
-    char *root_name;
-    char *skill_dir;
+    FfiOwnedBuffer skill_id;
+    FfiOwnedBuffer skill_name;
+    FfiOwnedBuffer skill_version;
+    FfiOwnedBuffer root_name;
+    FfiOwnedBuffer skill_dir;
     struct FfiRuntimeHelpNodeDescriptor main;
     struct FfiRuntimeHelpNodeDescriptor *flows;
     size_t flows_len;
@@ -293,59 +295,49 @@ typedef struct FfiRuntimeSkillHelpDescriptorList {
 } FfiRuntimeSkillHelpDescriptorList;
 
 typedef struct FfiRuntimeHelpDetail {
-    char *skill_id;
-    char *skill_name;
-    char *skill_version;
-    char *root_name;
-    char *skill_dir;
-    char *flow_name;
-    char *description;
-    char **related_entries;
+    FfiOwnedBuffer skill_id;
+    FfiOwnedBuffer skill_name;
+    FfiOwnedBuffer skill_version;
+    FfiOwnedBuffer root_name;
+    FfiOwnedBuffer skill_dir;
+    FfiOwnedBuffer flow_name;
+    FfiOwnedBuffer description;
+    FfiOwnedBuffer *related_entries;
     size_t related_entries_len;
     uint8_t is_main;
-    char *content_type;
-    char *content;
+    FfiOwnedBuffer content_type;
+    FfiOwnedBuffer content;
 } FfiRuntimeHelpDetail;
 
 typedef struct FfiRuntimeInvocationResult {
-    char *content;
+    FfiOwnedBuffer content;
     int32_t overflow_mode;
-    char *template_hint;
+    FfiOwnedBuffer template_hint;
     size_t content_bytes;
     size_t content_lines;
 } FfiRuntimeInvocationResult;
 
 typedef struct FfiSkillApplyResult {
-    char *skill_id;
-    char *status;
-    char *message;
-    char *version;
+    FfiOwnedBuffer skill_id;
+    FfiOwnedBuffer status;
+    FfiOwnedBuffer message;
+    FfiOwnedBuffer version;
     /* FFI_SOURCE_TYPE_ABSENT, FFI_SOURCE_TYPE_GITHUB, or FFI_SOURCE_TYPE_URL. */
     /* FFI_SOURCE_TYPE_ABSENT、FFI_SOURCE_TYPE_GITHUB 或 FFI_SOURCE_TYPE_URL。 */
     int32_t source_type;
-    char *source_locator;
+    FfiOwnedBuffer source_locator;
 } FfiSkillApplyResult;
 
 typedef struct FfiSkillUninstallResult {
-    char *skill_id;
+    FfiOwnedBuffer skill_id;
     uint8_t skill_removed;
     uint8_t sqlite_removed;
     uint8_t lancedb_removed;
     uint8_t sqlite_retained;
     uint8_t lancedb_retained;
-    char *message;
+    FfiOwnedBuffer message;
 } FfiSkillUninstallResult;
 
-/*
-JSON callback must consume one borrowed UTF-8 request buffer and fill one owned response buffer.
-JSON callback 必须消费一个借用 UTF-8 请求缓冲，并填充一个拥有型响应缓冲。
-*/
-typedef int32_t (*FfiJsonProviderCallback)(
-    FfiBorrowedBuffer request_json,
-    void *user_data,
-    FfiOwnedBuffer *response_out,
-    FfiOwnedBuffer *error_out
-);
 /*
 Standard callbacks must fill outputs with luaskills-owned allocations and must never unwind across the ABI boundary.
 标准 callback 必须写入 luaskills 所有的输出内存，且绝不能把异常跨越 ABI 边界传播。
@@ -419,25 +411,6 @@ int32_t vulcan_luaskills_ffi_set_lancedb_provider_callback(
     void *user_data,
     FfiOwnedBuffer *error_out
 );
-/*
-Register or clear the SQLite JSON callback before engine creation.
-在创建 engine 前注册或清理 SQLite JSON callback。
-*/
-int32_t vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
-    FfiJsonProviderCallback callback,
-    void *user_data,
-    FfiOwnedBuffer *error_out
-);
-/*
-Register or clear the LanceDB JSON callback before engine creation.
-在创建 engine 前注册或清理 LanceDB JSON callback。
-*/
-int32_t vulcan_luaskills_ffi_set_lancedb_provider_json_callback(
-    FfiJsonProviderCallback callback,
-    void *user_data,
-    FfiOwnedBuffer *error_out
-);
-
 /*
 Free one heap-allocated string-array result returned by the standard FFI layer.
 释放一段由标准 FFI 层返回并在堆上分配的字符串数组结果。
@@ -800,174 +773,6 @@ int32_t vulcan_luaskills_ffi_system_update_skill(
     FfiSkillApplyResult **result_out,
     FfiOwnedBuffer *error_out
 );
-
-/*
-Return one stable FFI version descriptor as JSON.
-以 JSON 形式返回稳定的 FFI 版本描述。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_version_json(void);
-
-/*
-Return one JSON description of exported FFI entrypoints.
-以 JSON 形式返回已导出 FFI 入口点说明。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_describe_json(void);
-
-/*
-Create one LuaSkills engine from one JSON request.
-通过一段 JSON 请求创建一个 LuaSkills 引擎。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_engine_new_json(FfiBorrowedBuffer input_json);
-
-/*
-Free one previously created LuaSkills engine handle.
-释放一个先前创建的 LuaSkills 引擎句柄。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_engine_free_json(FfiBorrowedBuffer input_json);
-
-/*
-Load skills from legacy directory-style roots.
-从旧目录风格根参数加载技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_load_from_dirs_json(FfiBorrowedBuffer input_json);
-
-/*
-Load skills from one ordered root chain.
-从一条有序根链加载技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_load_from_roots_json(FfiBorrowedBuffer input_json);
-
-/*
-Reload skills from legacy directory-style roots.
-从旧目录风格根参数重载技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_reload_from_dirs_json(FfiBorrowedBuffer input_json);
-
-/*
-Reload skills from one ordered root chain.
-从一条有序根链重载技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_reload_from_roots_json(FfiBorrowedBuffer input_json);
-
-/*
-List runtime entry descriptors as JSON.
-以 JSON 形式列出运行时入口描述。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_list_entries_json(FfiBorrowedBuffer input_json);
-
-/*
-List runtime help descriptors as JSON.
-以 JSON 形式列出运行时帮助描述。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_list_skill_help_json(FfiBorrowedBuffer input_json);
-
-/*
-Render one runtime help detail payload as JSON.
-以 JSON 形式渲染单个运行时帮助详情。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_render_skill_help_detail_json(FfiBorrowedBuffer input_json);
-
-/*
-Resolve prompt argument completions as JSON.
-以 JSON 形式解析提示词参数补全项。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_prompt_argument_completions_json(FfiBorrowedBuffer input_json);
-
-/*
-Check whether one canonical tool name belongs to a Lua skill.
-检查某个 canonical 工具名是否属于 Lua 技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_is_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Resolve the owning skill id of one canonical tool name.
-解析某个 canonical 工具名所属的技能标识符。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_skill_name_for_tool_json(FfiBorrowedBuffer input_json);
-
-/*
-Call one loaded skill entry using one JSON request.
-使用一段 JSON 请求调用单个已加载技能入口。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_call_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Execute arbitrary Lua code using one JSON request.
-使用一段 JSON 请求执行任意 Lua 代码。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_run_lua_json(FfiBorrowedBuffer input_json);
-
-/*
-Disable one skill through legacy directory-style roots.
-通过旧目录风格根参数停用单个技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_disable_skill_in_dirs_json(FfiBorrowedBuffer input_json);
-
-/*
-Disable one skill through one ordered root chain.
-通过一条有序根链停用单个技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_disable_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Disable one protected-capable skill through legacy directory-style roots.
-通过旧目录风格根参数在 system 平面停用单个技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_system_disable_skill_in_dirs_json(FfiBorrowedBuffer input_json);
-
-/*
-Disable one protected-capable skill through one ordered root chain.
-通过一条有序根链在 system 平面停用单个技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_system_disable_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Enable one skill through one ordered root chain.
-通过一条有序根链启用单个技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_enable_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Enable one protected-capable skill through one ordered root chain.
-通过一条有序根链在 system 平面启用单个技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_system_enable_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Uninstall one skill through one ordered root chain.
-通过一条有序根链卸载单个技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_uninstall_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Uninstall one protected-capable skill through one ordered root chain.
-通过一条有序根链在 system 平面卸载单个技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_system_uninstall_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Install one managed skill through one ordered root chain.
-通过一条有序根链安装单个受管技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_install_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Install one managed skill through one ordered root chain on the system plane.
-通过一条有序根链在 system 平面安装单个受管技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_system_install_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Update one managed skill through one ordered root chain.
-通过一条有序根链更新单个受管技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_update_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Update one managed skill through one ordered root chain on the system plane.
-通过一条有序根链在 system 平面更新单个受管技能。
-*/
-FfiOwnedBuffer vulcan_luaskills_ffi_system_update_skill_json(FfiBorrowedBuffer input_json);
 
 #ifdef __cplusplus
 }

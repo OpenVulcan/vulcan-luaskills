@@ -22,6 +22,7 @@
 2. 不重写当前 Rust runtime 主流程
 3. 优先收敛 callback ABI、所有权模型、错误模型
 4. 允许在 `beta / v0.1.x` 阶段做必要的破坏性 ABI 调整
+5. 保留标准 C ABI 与公共 JSON FFI 两层接口，但明确两者职责边界
 
 ## 3. 当前 FFI 的主要问题
 
@@ -93,6 +94,19 @@
 - `void *engine_handle`
 - 复杂 opaque runtime 对象
 
+### 4.4 分层交付而不是二选一
+
+当前更合理的对外交付方式不是删掉 JSON FFI，而是明确分层：
+
+- 标准 C ABI 负责低层正式契约
+- 公共 JSON FFI 负责动态语言和快速集成
+
+也就是说，后续收敛目标不是“只剩一种接口”，而是：
+
+- 让标准 C ABI 更稳定
+- 让公共 JSON FFI 更易用
+- 让两层交付物、头文件和文档边界更清晰
+
 ## 5. 当前阶段已经确定的收敛原则
 
 1. callback 应先注册，再创建 engine
@@ -132,6 +146,13 @@
 4. 普通 `_json` FFI 返回值统一改成 `FfiOwnedBuffer`
 5. 标准 SQLite / LanceDB provider 请求中的 `input_json` 也已改成 `FfiBorrowedBuffer`
 6. 头文件、Python smoke demo、host-provider demo、对接文档已同步到新 ABI
+7. 标准头文件与公共 JSON FFI 头文件已经开始拆分，避免交付面继续混淆
+8. 标准 `FfiRuntimeInvocationResult`、`FfiSkillApplyResult`、`FfiSkillUninstallResult` 的文本字段也开始收敛到 `FfiOwnedBuffer`
+9. 标准 `FfiRuntimeEntryParameterDescriptor`、`FfiRuntimeEntryDescriptor`、`FfiRuntimeHelpNodeDescriptor`、`FfiRuntimeSkillHelpDescriptor`、`FfiRuntimeHelpDetail` 的单值文本字段也开始收敛到 `FfiOwnedBuffer`
+10. 标准 `FfiStringArray` 与 `related_entries` 这类数组文本通道也开始收敛到 `FfiOwnedBuffer` 元素数组
+11. 标准 C / Python / Go / TypeScript 示例已经同步覆盖 `load_from_roots + list_entries` 的结构化结果读取
+12. 标准 FFI 已补充入口列表、帮助详情与帮助树结果的嵌套 `FfiOwnedBuffer` 回归测试
+13. 已新增 `standard_runtime` 最小夹具目录，避免标准 ABI 示例依赖 host-provider 或动态安装场景
 
 当前还没有完成的重点项主要是：
 

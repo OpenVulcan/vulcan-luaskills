@@ -1,0 +1,13 @@
+name: demo-standard-ffi-skill
+version: 0.1.0
+enable: true
+entries:
+  - name: ping
+    description: Return one stable standard FFI demo payload.
+    lua_entry: runtime/ping.lua
+    lua_module: demo_standard_ffi_ping
+    parameters:
+      - name: note
+        type: string
+        description: Optional note appended to the demo response.
+        required: false

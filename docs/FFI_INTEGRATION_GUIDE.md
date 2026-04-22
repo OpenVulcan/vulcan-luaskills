@@ -4,18 +4,18 @@
 
 本文档用于说明 `vulcan-luaskills` 当前导出的 FFI 接口设计、启动条件、参数模型、调用顺序、返回规则、内存释放方式，以及 install / update / uninstall 等整条链路的处理逻辑。
 
-本文档覆盖两套并存的 FFI 形式：
+本文档覆盖当前对外公开的两层 FFI：
 
-- 标准结构化接口
-- `_json` 结尾的 JSON 通用接口
+- 标准 C ABI
+- 公共 `_json` FFI
 
-两套接口位于同一个动态库或静态库中，能力一一对应。
+两层接口位于同一个动态库或静态库中，主能力基本一一对应，但定位并不相同。
 
 ## 2. 整体设计
 
 ### 2.1 同一套核心实现
 
-无论是标准接口还是 `_json` 接口，底层都调用同一套 `LuaEngine` 核运行时逻辑。  
+无论是标准 C ABI 还是公共 `_json` FFI，底层都调用同一套 `LuaEngine` 核运行时逻辑。  
 这意味着：
 
 - 行为一致
@@ -23,11 +23,11 @@
 - 错误语义一致
 - 事务语义一致
 
-### 2.2 两套 FFI 风格
+### 2.2 两层 FFI 角色
 
-#### 标准接口
+#### 标准 C ABI
 
-标准接口使用：
+标准 C ABI 使用：
 
 - C ABI 基本类型
 - 结构体指针
@@ -37,54 +37,69 @@
 
 适合：
 
+- C / C++
 - Go
-- Rust 以外但能稳定处理 C 结构的宿主
+- 能稳定处理 C 结构与 out 指针的宿主
 - 性能敏感场景
 - 希望避免双向 JSON 编解码的宿主
 
-#### `_json` 接口
+它是：
 
-`_json` 接口使用：
+- 低层正式契约
+- 结构更稳定的底层接入面
+- 后续社区生成绑定时的基础 ABI
 
-- 输入：JSON 字符串
+#### 公共 `_json` FFI
+
+公共 `_json` FFI 使用：
+
+- 输入：JSON 文本缓冲
 - 输出：统一 JSON 包络
 
 适合：
 
 - Python
 - TypeScript / Node.js
+- ctypes / cffi / ffi-napi 一类动态桥接
 - 原型验证
 - 快速接入
 - 不想维护复杂 ABI 结构的宿主
 
-### 2.3 为什么两套都保留
+它是：
+
+- 高层易用接口
+- 面向动态语言和快速集成的正式公共接口
+- 对标准 C ABI 的便利封装，而不是临时调试层
+
+### 2.3 为什么两层都保留
 
 原因很直接：
 
-- JSON 通用性高，但双向编解码成本更高
-- 标准接口性能更好，但对调用方要求更高
+- 标准 C ABI 更稳定，但接入门槛更高
+- 公共 `_json` FFI 更易用，但双向编解码成本更高
 
 因此当前协议定为：
 
-- 所有直接集成主接口，都必须提供标准接口
-- 所有直接集成主接口，也都必须提供 `_json` 版本
+- 对外继续同时维护两层能力
+- 标准 C ABI 负责承载低层正式契约
+- 公共 `_json` FFI 负责承载动态语言与快速接入入口
 
-### 2.4 宿主数据库 provider 也遵循双接口规则
+### 2.4 宿主数据库 provider 也遵循双层规则
 
 当宿主需要自己接管：
 
 - SQLite
 - LanceDB
 
-时，当前协议同样要求提供两套回调形式：
+时，当前协议同样保留两层回调形式：
 
 - 标准结构化回调
 - JSON 回调
 
 也就是说：
 
-- 宿主如果已经能稳定处理 C ABI 结构和 out 指针，应该优先接标准回调
-- 宿主如果是 Python / Node / 快速原型，则可以直接接 JSON 回调
+- 宿主如果已经能稳定处理 C ABI 结构和 out 指针，应优先接标准回调
+- 宿主如果是 Python / Node / 快速原型，则可直接接 JSON 回调
 
 数据库 provider 的详细对接说明见：
 
@@ -100,16 +115,22 @@
 
 核心文件：
 
-- 标准接口导出：
+- 标准 C ABI 导出：
   - [src/ffi_standard.rs](../src/ffi_standard.rs)
-- JSON 接口导出：
+- 公共 JSON FFI 导出：
   - [src/ffi.rs](../src/ffi.rs)
-- 头文件：
+- 标准头文件：
   - [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
+- JSON 头文件：
+  - [include/vulcan_luaskills_json_ffi.h](../include/vulcan_luaskills_json_ffi.h)
+  - 该头文件会复用标准头文件中的共享结构体与释放辅助函数
 - 示例：
+  - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
   - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
   - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
-- [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
+  - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
+  - [examples/ffi/c/README.md](../examples/ffi/c/README.md)
+  - [examples/ffi/standard_runtime/README.md](../examples/ffi/standard_runtime/README.md)
 
 当前 FFI 版本字符串统一派生自 crate 包版本：
 
@@ -117,8 +138,8 @@
 
 也就是说：
 
-- 标准接口 `vulcan_luaskills_ffi_version`
-- JSON 接口 `vulcan_luaskills_ffi_version_json`
+- 标准 C ABI `vulcan_luaskills_ffi_version`
+- 公共 JSON FFI `vulcan_luaskills_ffi_version_json`
 - 自描述结果中的 `ffi_version`
 
 都与 `Cargo.toml` 中的 `version` 保持同源。
@@ -184,6 +205,56 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 读取完成后应通过 `vulcan_luaskills_ffi_buffer_free` 释放
 - 标准接口中的直接文本输出也在逐步收敛到 `FfiOwnedBuffer`
 - 当前 `version_out`、`skill_id_out`、`result_json_out` 都应按拥有型缓冲读取与释放
+- 当前 `FfiRuntimeInvocationResult`
+  - `content`
+  - `template_hint`
+  也已改成 `FfiOwnedBuffer`
+- 当前 `FfiSkillApplyResult`
+  - `skill_id`
+  - `status`
+  - `message`
+  - `version`
+  - `source_locator`
+  也已改成 `FfiOwnedBuffer`
+- 当前 `FfiSkillUninstallResult`
+  - `skill_id`
+  - `message`
+  也已改成 `FfiOwnedBuffer`
+- 当前 `FfiRuntimeEntryParameterDescriptor`
+  - `name`
+  - `param_type`
+  - `description`
+  也已改成 `FfiOwnedBuffer`
+- 当前 `FfiRuntimeEntryDescriptor`
+  - `canonical_name`
+  - `skill_id`
+  - `local_name`
+  - `root_name`
+  - `skill_dir`
+  - `description`
+  也已改成 `FfiOwnedBuffer`
+- 当前 `FfiRuntimeHelpNodeDescriptor`
+  - `flow_name`
+  - `description`
+  也已改成 `FfiOwnedBuffer`
+- 当前 `FfiRuntimeSkillHelpDescriptor`
+  - `skill_id`
+  - `skill_name`
+  - `skill_version`
+  - `root_name`
+  - `skill_dir`
+  也已改成 `FfiOwnedBuffer`
+- 当前 `FfiRuntimeHelpDetail`
+  - `skill_id`
+  - `skill_name`
+  - `skill_version`
+  - `root_name`
+  - `skill_dir`
+  - `flow_name`
+  - `description`
+  - `content_type`
+  - `content`
+  也已改成 `FfiOwnedBuffer`
 
 ### 5.2 `_json` 接口统一规则
 
@@ -239,6 +310,12 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 - `vulcan_luaskills_ffi_string_array_free`
 
+说明：
+
+- `FfiStringArray.items` 当前已经收敛为 `FfiOwnedBuffer *`
+- 每个数组元素都是拥有型 UTF-8 文本缓冲
+- 但调用方仍然不应手动逐项释放，而应继续把整个数组交给 `vulcan_luaskills_ffi_string_array_free`
+
 ### 6.2.1 拥有型缓冲
 
 当 callback 或后续扩展接口返回 `FfiOwnedBuffer` 时：
@@ -270,11 +347,44 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `vulcan_luaskills_ffi_skill_apply_result_free`
 - `vulcan_luaskills_ffi_skill_uninstall_result_free`
 
+说明：
+
+- 这些结构体内部已经开始逐步采用 `FfiOwnedBuffer` 承载文本字段
+- 默认仍应把整个结构体交给对应专用 free 函数释放
+- 不要在调用专用 free 前手动释放结构体内嵌的 `FfiOwnedBuffer` 字段，否则会导致重复释放
+- `related_entries` 这类数组字段当前虽然仍以“数组 + 长度”形式存在，但数组元素本身也已经是 `FfiOwnedBuffer`
+- 这类数组字段仍应通过宿主最终调用结构体专用 free 函数统一回收
+
 规则只有一条：
 
 **凡是 FFI 分配出来的结果结构，必须使用对应 free 函数释放。**
 
-### 6.4 beta / v0.1.0 发布边界
+### 6.4 Beta 阶段 ABI 迁移要点
+
+当前 `v0.1.x / beta` 阶段已经对现有 FFI 做了一轮直接收敛。  
+如果宿主参考的是更早的示例或旧草稿，请优先按下面的对应关系理解：
+
+- 旧：标准接口大量使用 `char **error_out`
+  - 新：标准接口统一改成 `FfiOwnedBuffer *error_out`
+- 旧：`version_out` / `skill_id_out` / `result_json_out` 这类文本输出按裸字符串读取
+  - 新：这些文本输出都应按 `FfiOwnedBuffer` 读取，并通过 `vulcan_luaskills_ffi_buffer_free` 释放
+- 旧：`_json` 请求输入依赖 NUL 终止字符串
+  - 新：`_json` 请求输入统一改成 `FfiBorrowedBuffer`
+- 旧：JSON provider callback 通过裸字符串返回响应
+  - 新：JSON provider callback 通过 `FfiOwnedBuffer response_out / error_out` 返回
+- 旧：标准 SQLite / LanceDB provider callback 的 `input_json` 是裸字符串
+  - 新：标准 provider request 的 `input_json` 统一改成 `FfiBorrowedBuffer`
+- 旧：`FfiStringArray.items` 与 `related_entries` 数组元素按 `char **` 理解
+  - 新：这类数组元素已经统一收敛为 `FfiOwnedBuffer *`
+- 旧：结构体内部文本字段多数按裸 `char *` 处理
+  - 新：标准结果结构中的大量文本字段已改成 `FfiOwnedBuffer`
+
+迁移时最容易出错的只有两条：
+
+1. 不要继续把标准错误输出按 `char *` 读取。
+2. 不要手动释放结构体内嵌的 `FfiOwnedBuffer` 字段，仍应优先调用结构体专用 free 函数。
+
+### 6.5 beta / v0.1.0 发布边界
 
 当前 FFI 发布面应按以下定位理解：
 
@@ -283,7 +393,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - FFI 是低层 ABI，不承诺“误用后仍然安全”，宿主必须严格遵守本文档中的所有权、线程与回调规则
 - 当前运行时默认把 skill 当作**受信代码**看待，FFI 文档不提供 Lua skill 沙箱安全承诺
 
-### 6.5 必须遵守的 FFI 契约
+### 6.6 必须遵守的 FFI 契约
 
 以下规则应视为强约束，而不是最佳实践建议：
 
@@ -456,6 +566,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 约束：
 
 - 该结构用于 `_json` 接口返回值、callback 返回值与后续扩展接口
+- 该结构也已经用于标准结构体结果中的大量单值文本字段
 - 释放必须走 `vulcan_luaskills_ffi_buffer_free`
 - 如果 `len > 0`，则 `ptr` 不得为 null
 
@@ -1036,9 +1147,9 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 - 前面的优先级更高
 
-## 14. 标准接口与 `_json` 接口的选择建议
+## 14. 标准 C ABI 与公共 `_json` FFI 的选择建议
 
-### 14.1 优先使用标准接口的情况
+### 14.1 优先使用标准 C ABI 的情况
 
 - Go
 - C#
@@ -1046,7 +1157,7 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - 想减少 JSON 编解码
 - 想显式控制内存释放
 
-### 14.2 优先使用 `_json` 接口的情况
+### 14.2 优先使用公共 `_json` FFI 的情况
 
 - Python
 - TypeScript / Node.js
@@ -1058,15 +1169,17 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 完全可以采用：
 
-- 引擎创建 / load / list / 生命周期操作：标准接口
-- 动态调用 / 调试：`_json`
+- 引擎创建 / load / list / 生命周期操作：标准 C ABI
+- 动态调用 / 调试 / 跨语言壳层：公共 `_json` FFI
 
 当前协议允许这种混合使用。
 
-## 15. Python / Go / TypeScript 示例说明
+## 15. C / Python / Go / TypeScript 示例说明
 
 示例位置：
 
+- C：
+  - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
 - Python：
   - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
 - Go：
@@ -1078,13 +1191,18 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 - 查询版本
 - 创建引擎
+- 加载根链
+- 读取结构化 `list_entries` 结果
 - 释放引擎
 
-这是最小 smoke test。  
+其中：
+
+- `c/demo.c` 更贴近底层标准 C ABI 契约
+- Python / Go / TypeScript 示例更适合展示各语言桥接方式
+
+这是一组覆盖“版本 -> 引擎 -> 加载 -> 结构化枚举”的最小 smoke test。  
 后续如果宿主要做完整接入，建议直接按本文档把：
 
-- load
-- list_entries
 - call_skill
 - install / update / uninstall
 
@@ -1092,10 +1210,17 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 另外还提供一个可直接运行的完整烟测目录：
 
+- [examples/ffi/standard_runtime/README.md](../examples/ffi/standard_runtime/README.md)
 - [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
- - [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
 
-它会：
+其中：
+
+- `standard_runtime`
+  - 提供标准 ABI 示例共用的最小 skill 夹具
+- `demo_runtime`
+  - 提供动态安装与调用烟测链
+
+`demo_runtime` 会：
 
 - 使用仓库内空 runtime root
 - 动态安装 `OpenVulcan/luaskills-demo-skill`
@@ -1168,10 +1293,10 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 对这类值强行做固定 C ABI，收益很低，破坏性很高。
 
-### 18.2 `_json` 是正式接口，不是临时调试接口
+### 18.2 `_json` 是正式公共接口，不是临时调试接口
 
-`_json` 不是次级能力，而是正式接口风格。  
-只是它更偏通用性，不偏极致性能。
+`_json` 不是次级能力，而是正式的高层公共接口。  
+只是它更偏易用性与跨语言接入，不偏极致性能。
 
 ## 19. 对接建议结论
 
@@ -1181,7 +1306,7 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - 关注性能
 - 希望减少 JSON 编解码
 
-则优先用标准接口。
+则优先用标准 C ABI。
 
 如果宿主：
 
@@ -1189,11 +1314,11 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - 语言本身更偏动态
 - 希望先把链路打通
 
-则优先用 `_json` 接口。
+则优先用公共 `_json` FFI。
 
 最推荐的工程实践是：
 
-- 用标准接口承载稳定主链
-- 用 `_json` 接口承载动态扩展与调试能力
+- 用标准 C ABI 承载底层稳定主链
+- 用公共 `_json` FFI 承载动态语言接入、动态扩展与调试能力
 
 这也是当前 `vulcan-luaskills` FFI 设计的核心目的。

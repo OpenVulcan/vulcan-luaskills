@@ -378,9 +378,9 @@ pub struct FfiLanceDbProviderRequest {
 /// 原生 C ABI 字符串数组结果。
 #[repr(C)]
 pub struct FfiStringArray {
-    /// Owned UTF-8 string item pointers.
-    /// 拥有所有权的 UTF-8 字符串指针数组。
-    pub items: *mut *mut c_char,
+    /// Owned UTF-8 string buffers.
+    /// 拥有所有权的 UTF-8 字符串缓冲数组。
+    pub items: *mut FfiOwnedBuffer,
     /// Number of string items.
     /// 字符串条目数量。
     pub len: usize,
@@ -392,13 +392,13 @@ pub struct FfiStringArray {
 pub struct FfiRuntimeEntryParameterDescriptor {
     /// Stable parameter name.
     /// 稳定参数名。
-    pub name: *mut c_char,
+    pub name: FfiOwnedBuffer,
     /// Runtime parameter type string.
     /// 运行时参数类型字符串。
-    pub param_type: *mut c_char,
+    pub param_type: FfiOwnedBuffer,
     /// Human-readable parameter description.
     /// 人类可读参数说明。
-    pub description: *mut c_char,
+    pub description: FfiOwnedBuffer,
     /// Whether the parameter is required.
     /// 当前参数是否必填。
     pub required: u8,
@@ -410,22 +410,22 @@ pub struct FfiRuntimeEntryParameterDescriptor {
 pub struct FfiRuntimeEntryDescriptor {
     /// Canonical runtime entry name.
     /// canonical 运行时入口名称。
-    pub canonical_name: *mut c_char,
+    pub canonical_name: FfiOwnedBuffer,
     /// Owning skill id.
     /// 所属技能标识符。
-    pub skill_id: *mut c_char,
+    pub skill_id: FfiOwnedBuffer,
     /// Local entry name declared by the skill.
     /// 技能声明的局部入口名。
-    pub local_name: *mut c_char,
+    pub local_name: FfiOwnedBuffer,
     /// Effective root name.
     /// 生效根名称。
-    pub root_name: *mut c_char,
+    pub root_name: FfiOwnedBuffer,
     /// Effective physical skill directory.
     /// 生效物理技能目录。
-    pub skill_dir: *mut c_char,
+    pub skill_dir: FfiOwnedBuffer,
     /// Human-readable entry description.
     /// 人类可读入口描述。
-    pub description: *mut c_char,
+    pub description: FfiOwnedBuffer,
     /// Parameter descriptor array.
     /// 参数描述数组。
     pub parameters: *mut FfiRuntimeEntryParameterDescriptor,
@@ -452,13 +452,13 @@ pub struct FfiRuntimeEntryDescriptorList {
 pub struct FfiRuntimeHelpNodeDescriptor {
     /// Help flow name.
     /// 帮助流程名。
-    pub flow_name: *mut c_char,
+    pub flow_name: FfiOwnedBuffer,
     /// Human-readable node description.
     /// 人类可读节点描述。
-    pub description: *mut c_char,
+    pub description: FfiOwnedBuffer,
     /// Related canonical runtime entry names.
     /// 关联的 canonical 运行时入口名称。
-    pub related_entries: *mut *mut c_char,
+    pub related_entries: *mut FfiOwnedBuffer,
     /// Number of related canonical runtime entry names.
     /// 关联 canonical 运行时入口名称数量。
     pub related_entries_len: usize,
@@ -473,19 +473,19 @@ pub struct FfiRuntimeHelpNodeDescriptor {
 pub struct FfiRuntimeSkillHelpDescriptor {
     /// Stable skill id.
     /// 稳定技能标识符。
-    pub skill_id: *mut c_char,
+    pub skill_id: FfiOwnedBuffer,
     /// Human-readable skill name.
     /// 人类可读技能名称。
-    pub skill_name: *mut c_char,
+    pub skill_name: FfiOwnedBuffer,
     /// Semantic skill version.
     /// 语义化技能版本。
-    pub skill_version: *mut c_char,
+    pub skill_version: FfiOwnedBuffer,
     /// Effective root name.
     /// 生效根名称。
-    pub root_name: *mut c_char,
+    pub root_name: FfiOwnedBuffer,
     /// Effective physical skill directory.
     /// 生效物理技能目录。
-    pub skill_dir: *mut c_char,
+    pub skill_dir: FfiOwnedBuffer,
     /// Main help node descriptor.
     /// 主帮助节点描述。
     pub main: FfiRuntimeHelpNodeDescriptor,
@@ -515,28 +515,28 @@ pub struct FfiRuntimeSkillHelpDescriptorList {
 pub struct FfiRuntimeHelpDetail {
     /// Stable skill id.
     /// 稳定技能标识符。
-    pub skill_id: *mut c_char,
+    pub skill_id: FfiOwnedBuffer,
     /// Human-readable skill name.
     /// 人类可读技能名称。
-    pub skill_name: *mut c_char,
+    pub skill_name: FfiOwnedBuffer,
     /// Semantic skill version.
     /// 语义化技能版本。
-    pub skill_version: *mut c_char,
+    pub skill_version: FfiOwnedBuffer,
     /// Effective root name.
     /// 生效根名称。
-    pub root_name: *mut c_char,
+    pub root_name: FfiOwnedBuffer,
     /// Effective physical skill directory.
     /// 生效物理技能目录。
-    pub skill_dir: *mut c_char,
+    pub skill_dir: FfiOwnedBuffer,
     /// Flow name.
     /// 流程名称。
-    pub flow_name: *mut c_char,
+    pub flow_name: FfiOwnedBuffer,
     /// Human-readable description.
     /// 人类可读描述。
-    pub description: *mut c_char,
+    pub description: FfiOwnedBuffer,
     /// Related canonical runtime entries.
     /// 关联的 canonical 运行时入口。
-    pub related_entries: *mut *mut c_char,
+    pub related_entries: *mut FfiOwnedBuffer,
     /// Number of related canonical runtime entries.
     /// 关联 canonical 运行时入口数量。
     pub related_entries_len: usize,
@@ -545,10 +545,10 @@ pub struct FfiRuntimeHelpDetail {
     pub is_main: u8,
     /// Structured content type.
     /// 结构化内容类型。
-    pub content_type: *mut c_char,
+    pub content_type: FfiOwnedBuffer,
     /// Final rendered help content.
     /// 最终渲染出的帮助内容。
-    pub content: *mut c_char,
+    pub content: FfiOwnedBuffer,
 }
 
 /// Plain C ABI invocation result.
@@ -557,13 +557,13 @@ pub struct FfiRuntimeHelpDetail {
 pub struct FfiRuntimeInvocationResult {
     /// Tool body content.
     /// 工具正文内容。
-    pub content: *mut c_char,
+    pub content: FfiOwnedBuffer,
     /// Overflow mode encoded as 0 none, 1 truncate, 2 page.
     /// 以 0 无、1 截断、2 分页编码的超限模式。
     pub overflow_mode: i32,
     /// Optional template hint.
     /// 可选模板提示名。
-    pub template_hint: *mut c_char,
+    pub template_hint: FfiOwnedBuffer,
     /// Content byte count.
     /// 内容字节数。
     pub content_bytes: usize,
@@ -578,22 +578,22 @@ pub struct FfiRuntimeInvocationResult {
 pub struct FfiSkillApplyResult {
     /// Stable skill id.
     /// 稳定技能标识符。
-    pub skill_id: *mut c_char,
+    pub skill_id: FfiOwnedBuffer,
     /// High-level result status.
     /// 高层结果状态。
-    pub status: *mut c_char,
+    pub status: FfiOwnedBuffer,
     /// Human-readable message.
     /// 人类可读消息。
-    pub message: *mut c_char,
+    pub message: FfiOwnedBuffer,
     /// Optional semantic version.
     /// 可选语义化版本。
-    pub version: *mut c_char,
+    pub version: FfiOwnedBuffer,
     /// Optional source type encoded as integer, where -1 means absent.
     /// 以整数编码的可选来源类型，-1 表示不存在。
     pub source_type: i32,
     /// Optional source locator.
     /// 可选来源定位值。
-    pub source_locator: *mut c_char,
+    pub source_locator: FfiOwnedBuffer,
 }
 
 /// Plain C ABI uninstall result.
@@ -602,7 +602,7 @@ pub struct FfiSkillApplyResult {
 pub struct FfiSkillUninstallResult {
     /// Stable skill id.
     /// 稳定技能标识符。
-    pub skill_id: *mut c_char,
+    pub skill_id: FfiOwnedBuffer,
     /// Whether the skill directory was removed.
     /// 技能目录是否已被删除。
     pub skill_removed: u8,
@@ -620,7 +620,7 @@ pub struct FfiSkillUninstallResult {
     pub lancedb_retained: u8,
     /// Human-readable message.
     /// 人类可读消息。
-    pub message: *mut c_char,
+    pub message: FfiOwnedBuffer,
 }
 
 /// Write one owned UTF-8 error buffer into the caller-provided error output slot.
@@ -712,12 +712,6 @@ fn alloc_owned_buffer_from_string(value: impl AsRef<str>) -> FfiOwnedBuffer {
 /// 将一个 Rust 字符串转换为拥有所有权的 C 字符串，并拒绝内部 NUL 字节。
 fn to_cstring(value: impl AsRef<str>, field_name: &str) -> Result<CString, String> {
     CString::new(value.as_ref()).map_err(|_| format!("{} contains interior NUL bytes", field_name))
-}
-
-/// Convert one optional Rust string into one nullable owned raw C string pointer.
-/// 将单个可选 Rust 字符串转换为一个可空拥有所有权的原生 C 字符串指针。
-fn alloc_optional_c_string(value: Option<&str>) -> *mut c_char {
-    value.map_or(std::ptr::null_mut(), alloc_c_string)
 }
 
 /// Convert one optional Rust string into one optional owned UTF-8 FFI buffer.
@@ -1066,7 +1060,8 @@ fn parse_uninstall_options(value: Option<&FfiSkillUninstallOptions>) -> SkillUni
 /// Convert one string vector into one owned C string array.
 /// 将一个字符串向量转换为一个拥有所有权的 C 字符串数组。
 fn alloc_string_array(values: &[String]) -> FfiStringArray {
-    let mut items: Vec<*mut c_char> = values.iter().map(alloc_c_string).collect();
+    let mut items: Vec<FfiOwnedBuffer> =
+        values.iter().map(alloc_owned_buffer_from_string).collect();
     let result = FfiStringArray {
         items: items.as_mut_ptr(),
         len: items.len(),
@@ -1081,9 +1076,9 @@ fn alloc_entry_parameter_descriptor(
     value: &RuntimeEntryParameterDescriptor,
 ) -> FfiRuntimeEntryParameterDescriptor {
     FfiRuntimeEntryParameterDescriptor {
-        name: alloc_c_string(&value.name),
-        param_type: alloc_c_string(&value.param_type),
-        description: alloc_c_string(&value.description),
+        name: alloc_owned_buffer_from_string(&value.name),
+        param_type: alloc_owned_buffer_from_string(&value.param_type),
+        description: alloc_owned_buffer_from_string(&value.description),
         required: u8::from(value.required),
     }
 }
@@ -1100,12 +1095,12 @@ fn alloc_entry_descriptor(value: &RuntimeEntryDescriptor) -> FfiRuntimeEntryDesc
     let parameters_len = parameters.len();
     std::mem::forget(parameters);
     FfiRuntimeEntryDescriptor {
-        canonical_name: alloc_c_string(&value.canonical_name),
-        skill_id: alloc_c_string(&value.skill_id),
-        local_name: alloc_c_string(&value.local_name),
-        root_name: alloc_c_string(&value.root_name),
-        skill_dir: alloc_c_string(&value.skill_dir),
-        description: alloc_c_string(&value.description),
+        canonical_name: alloc_owned_buffer_from_string(&value.canonical_name),
+        skill_id: alloc_owned_buffer_from_string(&value.skill_id),
+        local_name: alloc_owned_buffer_from_string(&value.local_name),
+        root_name: alloc_owned_buffer_from_string(&value.root_name),
+        skill_dir: alloc_owned_buffer_from_string(&value.skill_dir),
+        description: alloc_owned_buffer_from_string(&value.description),
         parameters: parameters_ptr,
         parameters_len,
     }
@@ -1116,8 +1111,8 @@ fn alloc_entry_descriptor(value: &RuntimeEntryDescriptor) -> FfiRuntimeEntryDesc
 fn alloc_help_node_descriptor(value: &RuntimeHelpNodeDescriptor) -> FfiRuntimeHelpNodeDescriptor {
     let related_entries = alloc_string_array(&value.related_entries);
     FfiRuntimeHelpNodeDescriptor {
-        flow_name: alloc_c_string(&value.flow_name),
-        description: alloc_c_string(&value.description),
+        flow_name: alloc_owned_buffer_from_string(&value.flow_name),
+        description: alloc_owned_buffer_from_string(&value.description),
         related_entries: related_entries.items,
         related_entries_len: related_entries.len,
         is_main: u8::from(value.is_main),
@@ -1133,11 +1128,11 @@ fn alloc_help_descriptor(value: &RuntimeSkillHelpDescriptor) -> FfiRuntimeSkillH
     let flows_len = flows.len();
     std::mem::forget(flows);
     FfiRuntimeSkillHelpDescriptor {
-        skill_id: alloc_c_string(&value.skill_id),
-        skill_name: alloc_c_string(&value.skill_name),
-        skill_version: alloc_c_string(&value.skill_version),
-        root_name: alloc_c_string(&value.root_name),
-        skill_dir: alloc_c_string(&value.skill_dir),
+        skill_id: alloc_owned_buffer_from_string(&value.skill_id),
+        skill_name: alloc_owned_buffer_from_string(&value.skill_name),
+        skill_version: alloc_owned_buffer_from_string(&value.skill_version),
+        root_name: alloc_owned_buffer_from_string(&value.root_name),
+        skill_dir: alloc_owned_buffer_from_string(&value.skill_dir),
         main: alloc_help_node_descriptor(&value.main),
         flows: flows_ptr,
         flows_len,
@@ -1149,18 +1144,18 @@ fn alloc_help_descriptor(value: &RuntimeSkillHelpDescriptor) -> FfiRuntimeSkillH
 fn alloc_help_detail(value: &RuntimeHelpDetail) -> FfiRuntimeHelpDetail {
     let related_entries = alloc_string_array(&value.related_entries);
     FfiRuntimeHelpDetail {
-        skill_id: alloc_c_string(&value.skill_id),
-        skill_name: alloc_c_string(&value.skill_name),
-        skill_version: alloc_c_string(&value.skill_version),
-        root_name: alloc_c_string(&value.root_name),
-        skill_dir: alloc_c_string(&value.skill_dir),
-        flow_name: alloc_c_string(&value.flow_name),
-        description: alloc_c_string(&value.description),
+        skill_id: alloc_owned_buffer_from_string(&value.skill_id),
+        skill_name: alloc_owned_buffer_from_string(&value.skill_name),
+        skill_version: alloc_owned_buffer_from_string(&value.skill_version),
+        root_name: alloc_owned_buffer_from_string(&value.root_name),
+        skill_dir: alloc_owned_buffer_from_string(&value.skill_dir),
+        flow_name: alloc_owned_buffer_from_string(&value.flow_name),
+        description: alloc_owned_buffer_from_string(&value.description),
         related_entries: related_entries.items,
         related_entries_len: related_entries.len,
         is_main: u8::from(value.is_main),
-        content_type: alloc_c_string(&value.content_type),
-        content: alloc_c_string(&value.content),
+        content_type: alloc_owned_buffer_from_string(&value.content_type),
+        content: alloc_owned_buffer_from_string(&value.content),
     }
 }
 
@@ -1173,9 +1168,9 @@ fn alloc_invocation_result(value: &RuntimeInvocationResult) -> FfiRuntimeInvocat
         Some(crate::ToolOverflowMode::Page) => 2,
     };
     FfiRuntimeInvocationResult {
-        content: alloc_c_string(&value.content),
+        content: alloc_owned_buffer_from_string(&value.content),
         overflow_mode,
-        template_hint: alloc_optional_c_string(value.template_hint.as_deref()),
+        template_hint: alloc_optional_owned_buffer_from_string(value.template_hint.as_deref()),
         content_bytes: value.content_bytes,
         content_lines: value.content_lines,
     }
@@ -1190,12 +1185,12 @@ fn alloc_skill_apply_result(value: &SkillApplyResult) -> FfiSkillApplyResult {
         Some(SkillInstallSourceType::Url) => FFI_SOURCE_TYPE_URL,
     };
     FfiSkillApplyResult {
-        skill_id: alloc_c_string(&value.skill_id),
-        status: alloc_c_string(&value.status),
-        message: alloc_c_string(&value.message),
-        version: alloc_optional_c_string(value.version.as_deref()),
+        skill_id: alloc_owned_buffer_from_string(&value.skill_id),
+        status: alloc_owned_buffer_from_string(&value.status),
+        message: alloc_owned_buffer_from_string(&value.message),
+        version: alloc_optional_owned_buffer_from_string(value.version.as_deref()),
         source_type,
-        source_locator: alloc_optional_c_string(value.source_locator.as_deref()),
+        source_locator: alloc_optional_owned_buffer_from_string(value.source_locator.as_deref()),
     }
 }
 
@@ -1203,13 +1198,13 @@ fn alloc_skill_apply_result(value: &SkillApplyResult) -> FfiSkillApplyResult {
 /// 将单个卸载结果转换为一个 C ABI 结果结构。
 fn alloc_skill_uninstall_result(value: &SkillUninstallResult) -> FfiSkillUninstallResult {
     FfiSkillUninstallResult {
-        skill_id: alloc_c_string(&value.skill_id),
+        skill_id: alloc_owned_buffer_from_string(&value.skill_id),
         skill_removed: u8::from(value.skill_removed),
         sqlite_removed: u8::from(value.sqlite_removed),
         lancedb_removed: u8::from(value.lancedb_removed),
         sqlite_retained: u8::from(value.sqlite_retained),
         lancedb_retained: u8::from(value.lancedb_retained),
-        message: alloc_c_string(&value.message),
+        message: alloc_owned_buffer_from_string(&value.message),
     }
 }
 
@@ -1457,14 +1452,6 @@ fn ffi_lancedb_provider_action_code(value: &RuntimeLanceDbProviderAction) -> i32
     }
 }
 
-/// Free one owned C string pointer if it is not null.
-/// 如果单个拥有所有权的 C 字符串指针非空，则释放它。
-unsafe fn free_c_string(value: *mut c_char) {
-    if !value.is_null() {
-        let _ = unsafe { CString::from_raw(value) };
-    }
-}
-
 /// Invoke one host-supplied JSON provider callback and copy the returned string into Rust ownership.
 /// 调用宿主提供的 JSON provider 回调，并把返回字符串复制到 Rust 所有权下。
 fn invoke_json_provider_callback(
@@ -1684,33 +1671,33 @@ unsafe fn free_ffi_bytes(value: *mut u8, len: usize) {
 
 /// Free one owned string array and all nested string items.
 /// 释放单个拥有所有权的字符串数组以及其嵌套字符串条目。
-unsafe fn free_string_array_parts(items: *mut *mut c_char, len: usize) {
+unsafe fn free_string_array_parts(items: *mut FfiOwnedBuffer, len: usize) {
     if items.is_null() || len == 0 {
         return;
     }
     let values = unsafe { Vec::from_raw_parts(items, len, len) };
     for value in values {
-        unsafe { free_c_string(value) };
+        unsafe { vulcan_luaskills_ffi_buffer_free(value) };
     }
 }
 
 /// Free one owned entry parameter descriptor.
 /// 释放单个拥有所有权的入口参数描述结构。
 unsafe fn free_entry_parameter_descriptor(value: FfiRuntimeEntryParameterDescriptor) {
-    unsafe { free_c_string(value.name) };
-    unsafe { free_c_string(value.param_type) };
-    unsafe { free_c_string(value.description) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.name) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.param_type) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.description) };
 }
 
 /// Free one owned entry descriptor.
 /// 释放单个拥有所有权的入口描述结构。
 unsafe fn free_entry_descriptor(value: FfiRuntimeEntryDescriptor) {
-    unsafe { free_c_string(value.canonical_name) };
-    unsafe { free_c_string(value.skill_id) };
-    unsafe { free_c_string(value.local_name) };
-    unsafe { free_c_string(value.root_name) };
-    unsafe { free_c_string(value.skill_dir) };
-    unsafe { free_c_string(value.description) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.canonical_name) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_id) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.local_name) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.root_name) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_dir) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.description) };
     if !value.parameters.is_null() && value.parameters_len > 0 {
         let parameters = unsafe {
             Vec::from_raw_parts(value.parameters, value.parameters_len, value.parameters_len)
@@ -1724,8 +1711,8 @@ unsafe fn free_entry_descriptor(value: FfiRuntimeEntryDescriptor) {
 /// Free one owned help node descriptor.
 /// 释放单个拥有所有权的帮助节点描述结构。
 unsafe fn free_help_node_descriptor(value: FfiRuntimeHelpNodeDescriptor) {
-    unsafe { free_c_string(value.flow_name) };
-    unsafe { free_c_string(value.description) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.flow_name) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.description) };
     unsafe { free_string_array_parts(value.related_entries, value.related_entries_len) };
 }
 
@@ -1930,11 +1917,11 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_help_list_free(
     if !value.items.is_null() && value.len > 0 {
         let items = unsafe { Vec::from_raw_parts(value.items, value.len, value.len) };
         for item in items {
-            unsafe { free_c_string(item.skill_id) };
-            unsafe { free_c_string(item.skill_name) };
-            unsafe { free_c_string(item.skill_version) };
-            unsafe { free_c_string(item.root_name) };
-            unsafe { free_c_string(item.skill_dir) };
+            unsafe { vulcan_luaskills_ffi_buffer_free(item.skill_id) };
+            unsafe { vulcan_luaskills_ffi_buffer_free(item.skill_name) };
+            unsafe { vulcan_luaskills_ffi_buffer_free(item.skill_version) };
+            unsafe { vulcan_luaskills_ffi_buffer_free(item.root_name) };
+            unsafe { vulcan_luaskills_ffi_buffer_free(item.skill_dir) };
             unsafe { free_help_node_descriptor(item.main) };
             if !item.flows.is_null() && item.flows_len > 0 {
                 let flows =
@@ -1954,17 +1941,17 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_help_detail_free(value: *mut FfiRu
     if value.is_null() {
         return;
     }
-    let value = unsafe { Box::from_raw(value) };
-    unsafe { free_c_string(value.skill_id) };
-    unsafe { free_c_string(value.skill_name) };
-    unsafe { free_c_string(value.skill_version) };
-    unsafe { free_c_string(value.root_name) };
-    unsafe { free_c_string(value.skill_dir) };
-    unsafe { free_c_string(value.flow_name) };
-    unsafe { free_c_string(value.description) };
+    let value = unsafe { *Box::from_raw(value) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_id) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_name) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_version) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.root_name) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_dir) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.flow_name) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.description) };
     unsafe { free_string_array_parts(value.related_entries, value.related_entries_len) };
-    unsafe { free_c_string(value.content_type) };
-    unsafe { free_c_string(value.content) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.content_type) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.content) };
 }
 
 /// Free one invocation result allocated by the standard FFI layer.
@@ -1976,9 +1963,9 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_invocation_result_free(
     if value.is_null() {
         return;
     }
-    let value = unsafe { Box::from_raw(value) };
-    unsafe { free_c_string(value.content) };
-    unsafe { free_c_string(value.template_hint) };
+    let value = unsafe { *Box::from_raw(value) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.content) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.template_hint) };
 }
 
 /// Free one install or update result allocated by the standard FFI layer.
@@ -1990,12 +1977,12 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_apply_result_free(
     if value.is_null() {
         return;
     }
-    let value = unsafe { Box::from_raw(value) };
-    unsafe { free_c_string(value.skill_id) };
-    unsafe { free_c_string(value.status) };
-    unsafe { free_c_string(value.message) };
-    unsafe { free_c_string(value.version) };
-    unsafe { free_c_string(value.source_locator) };
+    let value = unsafe { *Box::from_raw(value) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_id) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.status) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.message) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.version) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.source_locator) };
 }
 
 /// Free one uninstall result allocated by the standard FFI layer.
@@ -2007,9 +1994,9 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_uninstall_result_free(
     if value.is_null() {
         return;
     }
-    let value = unsafe { Box::from_raw(value) };
-    unsafe { free_c_string(value.skill_id) };
-    unsafe { free_c_string(value.message) };
+    let value = unsafe { *Box::from_raw(value) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_id) };
+    unsafe { vulcan_luaskills_ffi_buffer_free(value.message) };
 }
 
 /// Return the stable FFI version string through the standard C ABI surface.
@@ -2934,6 +2921,25 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_update_skill(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_help::{
+        RuntimeHelpDetail as RuntimeHelpDetailModel,
+        RuntimeHelpNodeDescriptor as RuntimeHelpNodeDescriptorModel,
+        RuntimeSkillHelpDescriptor as RuntimeSkillHelpDescriptorModel,
+    };
+    use crate::{
+        RuntimeEntryDescriptor as RuntimeEntryDescriptorModel,
+        RuntimeEntryParameterDescriptor as RuntimeEntryParameterDescriptorModel,
+    };
+
+    /// Read one owned UTF-8 buffer into one Rust string without freeing it.
+    /// 将一个拥有型 UTF-8 缓冲读取为 Rust 字符串但不执行释放。
+    fn read_owned_buffer_text(buffer: &FfiOwnedBuffer) -> String {
+        if buffer.ptr.is_null() || buffer.len == 0 {
+            return String::new();
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) };
+        String::from_utf8(bytes.to_vec()).expect("buffer text must be utf-8")
+    }
 
     /// Verify buffer_clone copies one byte payload into luaskills-owned storage.
     /// 验证 buffer_clone 会把单个字节载荷复制到 luaskills 自主管理存储中。
@@ -2991,5 +2997,315 @@ mod tests {
         let response = invoke_json_provider_callback(callback, 0, "{\"value\":1}")
             .expect("callback bridge should succeed");
         assert_eq!(response, "{\"echo\":{\"value\":1}}");
+    }
+
+    /// Verify one entry list allocates nested owned buffers for entry and parameter text fields.
+    /// 验证入口列表会为入口及参数文本字段分配嵌套拥有型缓冲。
+    #[test]
+    fn entry_list_free_handles_nested_owned_buffers() {
+        let runtime_entry = RuntimeEntryDescriptorModel {
+            canonical_name: "demo-entry".to_string(),
+            skill_id: "demo-skill".to_string(),
+            local_name: "entry".to_string(),
+            root_name: "ROOT".to_string(),
+            skill_dir: "/tmp/demo-skill".to_string(),
+            description: "Demo entry description".to_string(),
+            parameters: vec![RuntimeEntryParameterDescriptorModel {
+                name: "note".to_string(),
+                param_type: "string".to_string(),
+                description: "Optional note".to_string(),
+                required: false,
+            }],
+        };
+
+        let mut items = vec![alloc_entry_descriptor(&runtime_entry)];
+        let list = FfiRuntimeEntryDescriptorList {
+            items: items.as_mut_ptr(),
+            len: items.len(),
+        };
+        std::mem::forget(items);
+        let list_ptr = Box::into_raw(Box::new(list));
+
+        let list_ref = unsafe { &*list_ptr };
+        assert_eq!(list_ref.len, 1);
+        let first_entry = unsafe { &*list_ref.items };
+        assert_eq!(
+            read_owned_buffer_text(&first_entry.canonical_name),
+            "demo-entry"
+        );
+        assert_eq!(read_owned_buffer_text(&first_entry.skill_id), "demo-skill");
+        assert_eq!(
+            read_owned_buffer_text(&first_entry.description),
+            "Demo entry description"
+        );
+        assert_eq!(first_entry.parameters_len, 1);
+
+        let first_parameter = unsafe { &*first_entry.parameters };
+        assert_eq!(read_owned_buffer_text(&first_parameter.name), "note");
+        assert_eq!(
+            read_owned_buffer_text(&first_parameter.param_type),
+            "string"
+        );
+        assert_eq!(
+            read_owned_buffer_text(&first_parameter.description),
+            "Optional note"
+        );
+        assert_eq!(first_parameter.required, 0);
+
+        unsafe { vulcan_luaskills_ffi_entry_list_free(list_ptr) };
+    }
+
+    /// Verify one help detail and one help list allocate nested owned buffers for text and related-entry arrays.
+    /// 验证帮助详情与帮助列表会为文本字段和关联入口数组分配嵌套拥有型缓冲。
+    #[test]
+    fn help_results_free_handle_nested_owned_buffers() {
+        let help_detail = RuntimeHelpDetailModel {
+            skill_id: "demo-skill".to_string(),
+            skill_name: "Demo Skill".to_string(),
+            skill_version: "0.1.0".to_string(),
+            root_name: "ROOT".to_string(),
+            skill_dir: "/tmp/demo-skill".to_string(),
+            flow_name: "main".to_string(),
+            description: "Demo help detail".to_string(),
+            related_entries: vec!["demo-entry".to_string(), "demo-entry-2".to_string()],
+            is_main: true,
+            content_type: "markdown".to_string(),
+            content: "# Demo".to_string(),
+        };
+        let detail_ptr = Box::into_raw(Box::new(alloc_help_detail(&help_detail)));
+
+        let detail_ref = unsafe { &*detail_ptr };
+        assert_eq!(read_owned_buffer_text(&detail_ref.skill_id), "demo-skill");
+        assert_eq!(read_owned_buffer_text(&detail_ref.flow_name), "main");
+        assert_eq!(detail_ref.related_entries_len, 2);
+        let related_entries = unsafe {
+            std::slice::from_raw_parts(detail_ref.related_entries, detail_ref.related_entries_len)
+        };
+        assert_eq!(read_owned_buffer_text(&related_entries[0]), "demo-entry");
+        assert_eq!(read_owned_buffer_text(&related_entries[1]), "demo-entry-2");
+
+        unsafe { vulcan_luaskills_ffi_help_detail_free(detail_ptr) };
+
+        let help_descriptor = RuntimeSkillHelpDescriptorModel {
+            skill_id: "demo-skill".to_string(),
+            skill_name: "Demo Skill".to_string(),
+            skill_version: "0.1.0".to_string(),
+            root_name: "ROOT".to_string(),
+            skill_dir: "/tmp/demo-skill".to_string(),
+            main: RuntimeHelpNodeDescriptorModel {
+                flow_name: "main".to_string(),
+                description: "Main help node".to_string(),
+                related_entries: vec!["demo-entry".to_string()],
+                is_main: true,
+            },
+            flows: vec![RuntimeHelpNodeDescriptorModel {
+                flow_name: "secondary".to_string(),
+                description: "Secondary node".to_string(),
+                related_entries: vec!["demo-entry-2".to_string()],
+                is_main: false,
+            }],
+        };
+
+        let mut items = vec![alloc_help_descriptor(&help_descriptor)];
+        let list = FfiRuntimeSkillHelpDescriptorList {
+            items: items.as_mut_ptr(),
+            len: items.len(),
+        };
+        std::mem::forget(items);
+        let list_ptr = Box::into_raw(Box::new(list));
+
+        let list_ref = unsafe { &*list_ptr };
+        assert_eq!(list_ref.len, 1);
+        let first_help = unsafe { &*list_ref.items };
+        assert_eq!(read_owned_buffer_text(&first_help.skill_name), "Demo Skill");
+        assert_eq!(read_owned_buffer_text(&first_help.main.flow_name), "main");
+        assert_eq!(first_help.main.related_entries_len, 1);
+        let main_related_entries = unsafe {
+            std::slice::from_raw_parts(
+                first_help.main.related_entries,
+                first_help.main.related_entries_len,
+            )
+        };
+        assert_eq!(
+            read_owned_buffer_text(&main_related_entries[0]),
+            "demo-entry"
+        );
+        assert_eq!(first_help.flows_len, 1);
+        let first_flow = unsafe { &*first_help.flows };
+        assert_eq!(read_owned_buffer_text(&first_flow.flow_name), "secondary");
+
+        unsafe { vulcan_luaskills_ffi_help_list_free(list_ptr) };
+    }
+
+    /// Verify the standard FFI load/list pipeline returns one entry for one minimal temporary skill root.
+    /// 验证标准 FFI 的加载与列举链路会为最小临时技能根返回一个入口。
+    #[test]
+    fn standard_ffi_load_and_list_entries_round_trip() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_standard_ffi_entry_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+
+        let skills_root = temp_root.join("skills");
+        let skill_dir = skills_root.join("demo-skill");
+        std::fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime directory");
+        std::fs::create_dir_all(temp_root.join("temp")).expect("create temp directory");
+        std::fs::create_dir_all(temp_root.join("resources")).expect("create resources directory");
+        std::fs::create_dir_all(temp_root.join("lua_packages"))
+            .expect("create lua_packages directory");
+        std::fs::create_dir_all(temp_root.join("bin").join("tools"))
+            .expect("create tools directory");
+        std::fs::create_dir_all(temp_root.join("libs")).expect("create libs directory");
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: demo-skill\nversion: 0.1.0\nenable: true\nentries:\n  - name: ping\n    description: Ping entry.\n    lua_entry: runtime/ping.lua\n    lua_module: demo_skill_ping\n    parameters:\n      - name: note\n        type: string\n        description: Optional note.\n        required: false\n",
+        )
+        .expect("write skill yaml");
+        std::fs::write(
+            skill_dir.join("runtime").join("ping.lua"),
+            "return function(args)\n  return 'ok'\nend\n",
+        )
+        .expect("write runtime lua");
+
+        let temp_dir_text =
+            CString::new(temp_root.join("temp").display().to_string()).expect("temp_dir cstring");
+        let resources_dir_text = CString::new(temp_root.join("resources").display().to_string())
+            .expect("resources_dir cstring");
+        let lua_packages_dir_text =
+            CString::new(temp_root.join("lua_packages").display().to_string())
+                .expect("lua_packages_dir cstring");
+        let tool_root_dir_text =
+            CString::new(temp_root.join("bin").join("tools").display().to_string())
+                .expect("tool_root_dir cstring");
+        let ffi_root_dir_text =
+            CString::new(temp_root.join("libs").display().to_string()).expect("ffi_root cstring");
+        let dependency_dir_name = CString::new("dependencies").expect("dependencies cstring");
+        let state_dir_name = CString::new("state").expect("state cstring");
+        let database_dir_name = CString::new("databases").expect("databases cstring");
+        let root_name = CString::new("ROOT").expect("root name cstring");
+        let skills_root_text =
+            CString::new(skills_root.display().to_string()).expect("skills root cstring");
+
+        let host_options = FfiLuaRuntimeHostOptions {
+            temp_dir: temp_dir_text.as_ptr(),
+            resources_dir: resources_dir_text.as_ptr(),
+            lua_packages_dir: lua_packages_dir_text.as_ptr(),
+            luaexec_program: ptr::null(),
+            host_provided_tool_root: tool_root_dir_text.as_ptr(),
+            host_provided_lua_root: lua_packages_dir_text.as_ptr(),
+            host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            download_cache_root: ptr::null(),
+            dependency_dir_name: dependency_dir_name.as_ptr(),
+            state_dir_name: state_dir_name.as_ptr(),
+            database_dir_name: database_dir_name.as_ptr(),
+            protected_skill_ids: ptr::null(),
+            protected_skill_ids_len: 0,
+            allow_network_download: 0,
+            github_base_url: ptr::null(),
+            github_api_base_url: ptr::null(),
+            sqlite_library_path: ptr::null(),
+            sqlite_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            sqlite_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            lancedb_library_path: ptr::null(),
+            lancedb_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            lancedb_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            space_controller_endpoint: ptr::null(),
+            space_controller_auto_spawn: 0,
+            space_controller_executable_path: ptr::null(),
+            space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
+            cache_config: ptr::null(),
+            reserved_entry_names: ptr::null(),
+            reserved_entry_names_len: 0,
+            enable_skill_management_bridge: 0,
+        };
+        let engine_options = FfiLuaEngineOptions {
+            pool: FfiLuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 30,
+            },
+            host: host_options,
+        };
+
+        let mut engine_id = 0_u64;
+        let mut error_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let engine_status = unsafe {
+            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
+        };
+        assert_eq!(engine_status, FFI_STATUS_OK);
+        assert!(error_out.ptr.is_null());
+
+        let ffi_skill_roots = [FfiRuntimeSkillRoot {
+            name: root_name.as_ptr(),
+            skills_dir: skills_root_text.as_ptr(),
+        }];
+        let mut load_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let load_status = unsafe {
+            vulcan_luaskills_ffi_load_from_roots(
+                engine_id,
+                ffi_skill_roots.as_ptr(),
+                ffi_skill_roots.len(),
+                &mut load_error,
+            )
+        };
+        assert_eq!(load_status, FFI_STATUS_OK);
+        assert!(load_error.ptr.is_null());
+
+        let mut entries_out: *mut FfiRuntimeEntryDescriptorList = ptr::null_mut();
+        let mut list_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let list_status = unsafe {
+            vulcan_luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error)
+        };
+        assert_eq!(list_status, FFI_STATUS_OK);
+        assert!(list_error.ptr.is_null());
+        assert!(!entries_out.is_null());
+
+        let entries_ref = unsafe { &*entries_out };
+        assert_eq!(entries_ref.len, 1);
+        let entry_ref = unsafe { &*entries_ref.items };
+        assert_eq!(
+            read_owned_buffer_text(&entry_ref.canonical_name),
+            "demo-skill-ping"
+        );
+        assert_eq!(read_owned_buffer_text(&entry_ref.skill_id), "demo-skill");
+        assert_eq!(read_owned_buffer_text(&entry_ref.local_name), "ping");
+        assert_eq!(read_owned_buffer_text(&entry_ref.root_name), "ROOT");
+        assert_eq!(
+            read_owned_buffer_text(&entry_ref.description),
+            "Ping entry."
+        );
+        assert_eq!(entry_ref.parameters_len, 1);
+        let parameter_ref = unsafe { &*entry_ref.parameters };
+        assert_eq!(read_owned_buffer_text(&parameter_ref.name), "note");
+        assert_eq!(read_owned_buffer_text(&parameter_ref.param_type), "string");
+        assert_eq!(
+            read_owned_buffer_text(&parameter_ref.description),
+            "Optional note."
+        );
+        assert_eq!(parameter_ref.required, 0);
+
+        unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+
+        let mut free_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        assert_eq!(free_status, FFI_STATUS_OK);
+        assert!(free_error.ptr.is_null());
+
+        let _ = std::fs::remove_dir_all(&temp_root);
     }
 }
