@@ -19,5 +19,5 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 tar = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread"] }
-vldb-controller-client = { git = "https://github.com/OpenVulcan/vldb-controller.git", rev = "b4d93c4e91b27a44226cc0d3cd6efe3220257616", package = "vldb-controller-client" }
+vldb-controller-client = { git = "https://github.com/OpenVulcan/vldb-controller.git", tag = "v0.1.0", package = "vldb-controller-client" }
 zip = { version = "2", default-features = false, features = ["deflate"] }

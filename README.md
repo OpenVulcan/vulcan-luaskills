@@ -375,7 +375,7 @@ FFI 设计规则如下：
   - lib 把数据库请求和稳定绑定上下文回调给宿主
 - `space_controller`
   - 由 lib 把数据库请求转发给外部空间控制器
-  - 代码层通过 `git + rev` 固定依赖 `vldb-controller-client`
+  - 代码层通过 `git + tag v0.1.0` 固定依赖 `vldb-controller-client`
   - 服务进程本体不走 Cargo 依赖注入，而是由宿主复制本地 controller 可执行文件后，通过 `space_controller.executable_path` 指定启动路径
   - 宿主不指定 `endpoint` 时，默认连接共享端点 `http://127.0.0.1:19801`
   - 宿主指定独立端点时，可切换到独占 controller 实例
