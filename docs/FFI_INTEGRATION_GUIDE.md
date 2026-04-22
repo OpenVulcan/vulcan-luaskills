@@ -182,6 +182,8 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 标准接口的失败信息不再通过裸 `char **` 传出
 - 调用方应把 `error_out` 当作 UTF-8 错误缓冲读取
 - 读取完成后应通过 `vulcan_luaskills_ffi_buffer_free` 释放
+- 标准接口中的直接文本输出也在逐步收敛到 `FfiOwnedBuffer`
+- 当前 `version_out`、`skill_id_out`、`result_json_out` 都应按拥有型缓冲读取与释放
 
 ### 5.2 `_json` 接口统一规则
 
@@ -223,13 +225,13 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 ### 6.1 字符串
 
-由 FFI 返回的堆分配字符串必须由调用方释放：
+由 FFI 返回的独立堆分配字符串必须由调用方释放：
 
 - `vulcan_luaskills_ffi_string_free`
 
 适用于：
 
-- 标准接口中 `char**` 输出的字符串
+- `vulcan_luaskills_ffi_string_clone` 这类字符串辅助函数返回值
 
 ### 6.2 字符串数组
 
@@ -246,6 +248,9 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 适用于：
 
+- 标准接口中的 `version_out`
+- 标准接口中的 `skill_id_out`
+- 标准接口中的 `result_json_out`
 - `_json` 接口返回值
 - JSON callback 的 `response_out`
 - JSON callback 的 `error_out`

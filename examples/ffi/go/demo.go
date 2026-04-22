@@ -65,11 +65,11 @@ func ensureDemoRuntimeLayout(root string) {
 // main demonstrates one version query and one engine create/free roundtrip.
 // main 演示一次版本查询以及一次引擎创建与释放往返调用。
 func main() {
-	var version *C.char
+	var version C.FfiOwnedBuffer
 	var errorOut C.FfiOwnedBuffer
 	mustOK(C.vulcan_luaskills_ffi_version(&version, &errorOut), errorOut)
-	fmt.Println("Version:", C.GoString(version))
-	C.vulcan_luaskills_ffi_string_free(version)
+	fmt.Println("Version:", string(C.GoBytes(unsafe.Pointer(version.ptr), C.int(version.len))))
+	C.vulcan_luaskills_ffi_buffer_free(version)
 
 	root := demoRuntimeRoot()
 	ensureDemoRuntimeLayout(root)

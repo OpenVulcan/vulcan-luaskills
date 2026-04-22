@@ -702,6 +702,12 @@ fn alloc_owned_buffer_from_bytes(value: &[u8]) -> FfiOwnedBuffer {
     FfiOwnedBuffer { ptr: pointer, len }
 }
 
+/// Convert one Rust string into one owned UTF-8 FFI buffer.
+/// 将单个 Rust 字符串转换为一个拥有所有权的 UTF-8 FFI 缓冲。
+fn alloc_owned_buffer_from_string(value: impl AsRef<str>) -> FfiOwnedBuffer {
+    alloc_owned_buffer_from_bytes(value.as_ref().as_bytes())
+}
+
 /// Convert one Rust string into one owned C string while rejecting interior NUL bytes.
 /// 将一个 Rust 字符串转换为拥有所有权的 C 字符串，并拒绝内部 NUL 字节。
 fn to_cstring(value: impl AsRef<str>, field_name: &str) -> Result<CString, String> {
@@ -712,6 +718,18 @@ fn to_cstring(value: impl AsRef<str>, field_name: &str) -> Result<CString, Strin
 /// 将单个可选 Rust 字符串转换为一个可空拥有所有权的原生 C 字符串指针。
 fn alloc_optional_c_string(value: Option<&str>) -> *mut c_char {
     value.map_or(std::ptr::null_mut(), alloc_c_string)
+}
+
+/// Convert one optional Rust string into one optional owned UTF-8 FFI buffer.
+/// 将单个可选 Rust 字符串转换为一个可选拥有所有权的 UTF-8 FFI 缓冲。
+fn alloc_optional_owned_buffer_from_string(value: Option<&str>) -> FfiOwnedBuffer {
+    value.map_or(
+        FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        },
+        alloc_owned_buffer_from_string,
+    )
 }
 
 /// Parse one required UTF-8 string pointer.
@@ -1998,15 +2016,15 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_uninstall_result_free(
 /// 通过标准 C ABI 接口返回稳定的 FFI 版本字符串。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_version(
-    version_out: *mut *mut c_char,
+    version_out: *mut FfiOwnedBuffer,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
-    clear_out_ptr(version_out);
+    clear_out_buffer(version_out);
     if version_out.is_null() {
         return ffi_error_status(error_out, "version_out must not be null");
     }
-    unsafe { *version_out = alloc_c_string(crate::ffi::FFI_VERSION) };
+    unsafe { *version_out = alloc_owned_buffer_from_string(crate::ffi::FFI_VERSION) };
     ffi_ok_status(error_out)
 }
 
@@ -2356,11 +2374,11 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_is_skill(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
     engine_id: u64,
     tool_name: *const c_char,
-    skill_id_out: *mut *mut c_char,
+    skill_id_out: *mut FfiOwnedBuffer,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
-    clear_out_ptr(skill_id_out);
+    clear_out_buffer(skill_id_out);
     if skill_id_out.is_null() {
         return ffi_error_status(error_out, "skill_id_out must not be null");
     }
@@ -2372,7 +2390,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
         Ok(engine.skill_name_for_tool(&tool_name))
     }) {
         Ok(skill_id) => {
-            unsafe { *skill_id_out = alloc_optional_c_string(skill_id.as_deref()) };
+            unsafe { *skill_id_out = alloc_optional_owned_buffer_from_string(skill_id.as_deref()) };
             ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
@@ -2426,11 +2444,11 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua(
     code: *const c_char,
     args_json: *const c_char,
     invocation_context: *const FfiLuaInvocationContext,
-    result_json_out: *mut *mut c_char,
+    result_json_out: *mut FfiOwnedBuffer,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
-    clear_out_ptr(result_json_out);
+    clear_out_buffer(result_json_out);
     if result_json_out.is_null() {
         return ffi_error_status(error_out, "result_json_out must not be null");
     }
@@ -2451,7 +2469,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua(
     }) {
         Ok(result) => match serde_json::to_string(&result) {
             Ok(result_json) => {
-                unsafe { *result_json_out = alloc_c_string(result_json) };
+                unsafe { *result_json_out = alloc_owned_buffer_from_string(result_json) };
                 ffi_ok_status(error_out)
             }
             Err(error) => ffi_error_status(

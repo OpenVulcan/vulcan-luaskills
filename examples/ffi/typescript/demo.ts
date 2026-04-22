@@ -144,18 +144,17 @@ function main(): void {
     len: "size_t",
   });
 
-  const freeString = library.func("void vulcan_luaskills_ffi_string_free(char *value)");
   const freeBuffer = library.func("void vulcan_luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
-  const version = library.func("int vulcan_luaskills_ffi_version(char **version_out, FfiOwnedBuffer *error_out)");
+  const version = library.func("int vulcan_luaskills_ffi_version(FfiOwnedBuffer *version_out, FfiOwnedBuffer *error_out)");
   const engineNew = library.func("int vulcan_luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
   const engineFree = library.func("int vulcan_luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
 
-  const versionOut = [null];
+  const versionOut = [{ ptr: null, len: 0 }];
   const versionError = [{ ptr: null, len: 0 }];
   mustOK(version(versionOut, versionError), versionError[0], freeBuffer);
-  console.log("Version:", readCString(versionOut[0]));
+  console.log("Version:", readOwnedBuffer(versionOut[0]));
   if (versionOut[0]) {
-    freeString(versionOut[0]);
+    freeBuffer(versionOut[0]);
   }
 
   const options = {

@@ -286,11 +286,10 @@ def main() -> None:
     reset_demo_skill_state(root)
 
     library = load_library()
-    library.vulcan_luaskills_ffi_string_free.argtypes = [ctypes.c_void_p]
     library.vulcan_luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
     library.vulcan_luaskills_ffi_buffer_free.restype = None
     library.vulcan_luaskills_ffi_version.argtypes = [
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(FfiOwnedBuffer),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.vulcan_luaskills_ffi_engine_new.argtypes = [
@@ -303,17 +302,16 @@ def main() -> None:
         ctypes.POINTER(FfiOwnedBuffer),
     ]
 
-    version_ptr = ctypes.c_void_p()
+    version_buffer = FfiOwnedBuffer()
     error_buffer = FfiOwnedBuffer()
     must_ok(
         library.vulcan_luaskills_ffi_version(
-            ctypes.byref(version_ptr), ctypes.byref(error_buffer)
+            ctypes.byref(version_buffer), ctypes.byref(error_buffer)
         ),
         error_buffer,
         library,
     )
-    print("FFI version:", ctypes.string_at(version_ptr).decode("utf-8"))
-    library.vulcan_luaskills_ffi_string_free(version_ptr)
+    print("FFI version:", read_owned_buffer_text(version_buffer, library))
 
     engine_id = ctypes.c_uint64()
     options = build_engine_options(root)

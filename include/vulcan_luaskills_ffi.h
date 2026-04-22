@@ -484,7 +484,7 @@ void vulcan_luaskills_ffi_skill_uninstall_result_free(FfiSkillUninstallResult *v
 Return one stable FFI version string through the standard C ABI surface.
 通过标准 C ABI 接口返回稳定的 FFI 版本字符串。
 */
-int32_t vulcan_luaskills_ffi_version(char **version_out, FfiOwnedBuffer *error_out);
+int32_t vulcan_luaskills_ffi_version(FfiOwnedBuffer *version_out, FfiOwnedBuffer *error_out);
 
 /*
 Return exported FFI entrypoint names through the standard C ABI surface.
@@ -615,7 +615,7 @@ Resolve the owning skill id of one tool through the standard C ABI surface.
 int32_t vulcan_luaskills_ffi_skill_name_for_tool(
     uint64_t engine_id,
     const char *tool_name,
-    char **skill_id_out,
+    FfiOwnedBuffer *skill_id_out,
     FfiOwnedBuffer *error_out
 );
 
@@ -641,7 +641,7 @@ int32_t vulcan_luaskills_ffi_run_lua(
     const char *code,
     const char *args_json,
     const FfiLuaInvocationContext *invocation_context,
-    char **result_json_out,
+    FfiOwnedBuffer *result_json_out,
     FfiOwnedBuffer *error_out
 );
 
