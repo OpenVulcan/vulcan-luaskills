@@ -97,6 +97,30 @@ pub struct FfiToolCacheConfig {
     pub max_ttl_secs: u64,
 }
 
+/// Borrowed byte-buffer view used by the refactored FFI callback surface.
+/// 重构后 FFI 回调接口面使用的借用字节缓冲视图。
+#[repr(C)]
+pub struct FfiBorrowedBuffer {
+    /// Borrowed pointer valid only for the duration of the current callback.
+    /// 仅在当前回调执行期间有效的借用指针。
+    pub ptr: *const u8,
+    /// Number of readable bytes starting at `ptr`.
+    /// 从 `ptr` 开始可读的字节数。
+    pub len: usize,
+}
+
+/// Owned byte-buffer container transferred across the FFI boundary.
+/// 跨 FFI 边界传递的拥有型字节缓冲容器。
+#[repr(C)]
+pub struct FfiOwnedBuffer {
+    /// Owned heap pointer allocated by `luaskills` helper functions.
+    /// 由 `luaskills` 辅助函数分配的拥有型堆指针。
+    pub ptr: *mut u8,
+    /// Number of owned bytes starting at `ptr`.
+    /// 从 `ptr` 开始拥有的字节数。
+    pub len: usize,
+}
+
 /// Plain C ABI host options used by standard non-JSON engine creation.
 /// 标准非 JSON 引擎创建使用的原生 C ABI 宿主选项。
 #[repr(C)]
@@ -195,16 +219,20 @@ pub struct FfiLuaRuntimeHostOptions {
 
 /// C ABI JSON provider callback used by non-Rust hosts to bridge database requests.
 /// 供非 Rust 宿主桥接数据库请求使用的 C ABI JSON provider 回调。
-pub type FfiJsonProviderCallback =
-    unsafe extern "C" fn(request_json: *const c_char, user_data: *mut c_void) -> *mut c_char;
+pub type FfiJsonProviderCallback = unsafe extern "C" fn(
+    request_json: FfiBorrowedBuffer,
+    user_data: *mut c_void,
+    response_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32;
 
 /// C ABI SQLite provider callback used by standard host integration.
 /// 标准宿主集成使用的 C ABI SQLite provider 回调。
 pub type FfiSqliteProviderCallback = unsafe extern "C" fn(
     request: *const FfiSqliteProviderRequest,
     user_data: *mut c_void,
-    response_json_out: *mut *mut c_char,
-    error_out: *mut *mut c_char,
+    response_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32;
 
 /// C ABI LanceDB provider callback used by standard host integration.
@@ -212,10 +240,9 @@ pub type FfiSqliteProviderCallback = unsafe extern "C" fn(
 pub type FfiLanceDbProviderCallback = unsafe extern "C" fn(
     request: *const FfiLanceDbProviderRequest,
     user_data: *mut c_void,
-    meta_json_out: *mut *mut c_char,
-    data_out: *mut *mut u8,
-    data_len_out: *mut usize,
-    error_out: *mut *mut c_char,
+    meta_json_out: *mut FfiOwnedBuffer,
+    data_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32;
 
 /// Plain C ABI engine options used by standard non-JSON engine creation.
@@ -327,9 +354,9 @@ pub struct FfiSqliteProviderRequest {
     /// Stable binding context of the current skill-scoped database.
     /// 当前 skill 级数据库的稳定绑定上下文。
     pub binding: FfiRuntimeDatabaseBindingContext,
-    /// Action-specific input payload encoded as JSON text.
-    /// 以 JSON 文本编码的动作专属输入载荷。
-    pub input_json: *const c_char,
+    /// Action-specific input payload encoded as one borrowed JSON byte buffer.
+    /// 以借用 JSON 字节缓冲编码的动作专属输入载荷。
+    pub input_json: FfiBorrowedBuffer,
 }
 
 /// Plain C ABI LanceDB provider request delivered to one host callback.
@@ -342,9 +369,9 @@ pub struct FfiLanceDbProviderRequest {
     /// Stable binding context of the current skill-scoped database.
     /// 当前 skill 级数据库的稳定绑定上下文。
     pub binding: FfiRuntimeDatabaseBindingContext,
-    /// Action-specific input payload encoded as JSON text.
-    /// 以 JSON 文本编码的动作专属输入载荷。
-    pub input_json: *const c_char,
+    /// Action-specific input payload encoded as one borrowed JSON byte buffer.
+    /// 以借用 JSON 字节缓冲编码的动作专属输入载荷。
+    pub input_json: FfiBorrowedBuffer,
 }
 
 /// Plain C ABI string-array result.
@@ -596,22 +623,22 @@ pub struct FfiSkillUninstallResult {
     pub message: *mut c_char,
 }
 
-/// Write one optional owned error string into the caller-provided error output pointer.
-/// 将一段可选拥有所有权的错误字符串写入调用方提供的错误输出指针。
-fn set_error_out(error_out: *mut *mut c_char, message: impl Into<String>) {
-    if !error_out.is_null() {
-        let text = CString::new(message.into())
-            .unwrap_or_else(|_| CString::new("FFI error contains NUL byte").expect("static text"));
-        unsafe { *error_out = text.into_raw() };
+/// Write one owned UTF-8 error buffer into the caller-provided error output slot.
+/// 将一段拥有型 UTF-8 错误缓冲写入调用方提供的错误输出槽位。
+fn set_error_out(error_out: *mut FfiOwnedBuffer, message: impl Into<String>) {
+    if error_out.is_null() {
+        return;
+    }
+    let text = message.into();
+    unsafe {
+        *error_out = alloc_owned_buffer_from_bytes(text.as_bytes());
     }
 }
 
-/// Clear one caller-provided error output pointer to null.
-/// 将调用方提供的错误输出指针清空为 null。
-fn clear_error_out(error_out: *mut *mut c_char) {
-    if !error_out.is_null() {
-        unsafe { *error_out = std::ptr::null_mut() };
-    }
+/// Clear one caller-provided error output slot to an empty buffer.
+/// 将调用方提供的错误输出槽位清空为空缓冲。
+fn clear_error_out(error_out: *mut FfiOwnedBuffer) {
+    clear_out_buffer(error_out);
 }
 
 /// Clear one caller-provided pointer output slot to null.
@@ -619,6 +646,19 @@ fn clear_error_out(error_out: *mut *mut c_char) {
 fn clear_out_ptr<T>(value_out: *mut *mut T) {
     if !value_out.is_null() {
         unsafe { *value_out = std::ptr::null_mut() };
+    }
+}
+
+/// Clear one caller-provided owned-buffer output slot to an empty buffer.
+/// 将调用方提供的拥有型缓冲输出槽位清空为空缓冲。
+fn clear_out_buffer(value_out: *mut FfiOwnedBuffer) {
+    if !value_out.is_null() {
+        unsafe {
+            *value_out = FfiOwnedBuffer {
+                ptr: ptr::null_mut(),
+                len: 0,
+            }
+        };
     }
 }
 
@@ -644,6 +684,22 @@ fn alloc_c_string(value: impl AsRef<str>) -> *mut c_char {
     CString::new(value.as_ref())
         .unwrap_or_else(|_| CString::new("FFI string contains NUL byte").expect("static text"))
         .into_raw()
+}
+
+/// Convert one byte slice into one owned FFI buffer.
+/// 将单个字节切片转换为一个拥有所有权的 FFI 缓冲。
+fn alloc_owned_buffer_from_bytes(value: &[u8]) -> FfiOwnedBuffer {
+    if value.is_empty() {
+        return FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+    }
+    let mut bytes = value.to_vec();
+    let pointer = bytes.as_mut_ptr();
+    let len = bytes.len();
+    std::mem::forget(bytes);
+    FfiOwnedBuffer { ptr: pointer, len }
 }
 
 /// Convert one Rust string into one owned C string while rejecting interior NUL bytes.
@@ -1226,15 +1282,30 @@ impl OwnedFfiRuntimeDatabaseBindingContext {
     }
 }
 
+/// Build one borrowed buffer view over one owned byte slice kept alive by the caller.
+/// 基于调用方持有存活期的拥有型字节切片构造一个借用缓冲视图。
+fn borrowed_buffer_from_bytes(bytes: &[u8]) -> FfiBorrowedBuffer {
+    if bytes.is_empty() {
+        return FfiBorrowedBuffer {
+            ptr: ptr::null(),
+            len: 0,
+        };
+    }
+    FfiBorrowedBuffer {
+        ptr: bytes.as_ptr(),
+        len: bytes.len(),
+    }
+}
+
 /// Owned SQLite provider request wrapper used during one standard callback invocation.
 /// 在单次标准回调调用期间使用的拥有型 SQLite provider 请求包装器。
 struct OwnedFfiSqliteProviderRequest {
     /// Owned binding context backing the request.
     /// 为请求提供支撑的拥有型绑定上下文。
     _binding: OwnedFfiRuntimeDatabaseBindingContext,
-    /// JSON-encoded action input payload.
-    /// 以 JSON 编码的动作输入载荷。
-    _input_json: CString,
+    /// JSON-encoded action input payload bytes.
+    /// 以 JSON 编码的动作输入载荷字节。
+    _input_json: Vec<u8>,
     /// Borrowed C ABI request view.
     /// 借用式 C ABI 请求视图。
     ffi: FfiSqliteProviderRequest,
@@ -1245,15 +1316,12 @@ impl OwnedFfiSqliteProviderRequest {
     /// 基于运行时请求构造一个拥有型 SQLite provider 请求包装器。
     fn from_runtime(value: &RuntimeSqliteProviderRequest) -> Result<Self, String> {
         let binding = OwnedFfiRuntimeDatabaseBindingContext::from_runtime(&value.binding)?;
-        let input_json = to_cstring(
-            &serde_json::to_string(&value.input)
-                .map_err(|error| format!("failed to encode sqlite input json: {}", error))?,
-            "input_json",
-        )?;
+        let input_json = serde_json::to_vec(&value.input)
+            .map_err(|error| format!("failed to encode sqlite input json: {}", error))?;
         let ffi = FfiSqliteProviderRequest {
             action: ffi_sqlite_provider_action_code(&value.action),
             binding: binding.as_ffi(),
-            input_json: input_json.as_ptr(),
+            input_json: borrowed_buffer_from_bytes(&input_json),
         };
         Ok(Self {
             _binding: binding,
@@ -1275,9 +1343,9 @@ struct OwnedFfiLanceDbProviderRequest {
     /// Owned binding context backing the request.
     /// 为请求提供支撑的拥有型绑定上下文。
     _binding: OwnedFfiRuntimeDatabaseBindingContext,
-    /// JSON-encoded action input payload.
-    /// 以 JSON 编码的动作输入载荷。
-    _input_json: CString,
+    /// JSON-encoded action input payload bytes.
+    /// 以 JSON 编码的动作输入载荷字节。
+    _input_json: Vec<u8>,
     /// Borrowed C ABI request view.
     /// 借用式 C ABI 请求视图。
     ffi: FfiLanceDbProviderRequest,
@@ -1288,15 +1356,12 @@ impl OwnedFfiLanceDbProviderRequest {
     /// 基于运行时请求构造一个拥有型 LanceDB provider 请求包装器。
     fn from_runtime(value: &RuntimeLanceDbProviderRequest) -> Result<Self, String> {
         let binding = OwnedFfiRuntimeDatabaseBindingContext::from_runtime(&value.binding)?;
-        let input_json = to_cstring(
-            &serde_json::to_string(&value.input)
-                .map_err(|error| format!("failed to encode lancedb input json: {}", error))?,
-            "input_json",
-        )?;
+        let input_json = serde_json::to_vec(&value.input)
+            .map_err(|error| format!("failed to encode lancedb input json: {}", error))?;
         let ffi = FfiLanceDbProviderRequest {
             action: ffi_lancedb_provider_action_code(&value.action),
             binding: binding.as_ffi(),
-            input_json: input_json.as_ptr(),
+            input_json: borrowed_buffer_from_bytes(&input_json),
         };
         Ok(Self {
             _binding: binding,
@@ -1389,16 +1454,47 @@ fn invoke_json_provider_callback(
     user_data: usize,
     request_json: &str,
 ) -> Result<String, String> {
-    let request_cstr = CString::new(request_json)
-        .map_err(|_| "request_json contains interior NUL bytes".to_string())?;
-    let response_ptr = unsafe { callback(request_cstr.as_ptr(), user_data as *mut c_void) };
-    if response_ptr.is_null() {
-        return Err("host provider callback returned null".to_string());
+    let request_bytes = request_json.as_bytes();
+    let mut response_out = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
+    let mut error_out = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
+    let status = unsafe {
+        callback(
+            FfiBorrowedBuffer {
+                ptr: request_bytes.as_ptr(),
+                len: request_bytes.len(),
+            },
+            user_data as *mut c_void,
+            &mut response_out,
+            &mut error_out,
+        )
+    };
+    let callback_error =
+        take_optional_owned_ffi_string_buffer(error_out, "json host provider callback error_out")?;
+    if status != FFI_STATUS_OK {
+        unsafe { free_ffi_bytes(response_out.ptr, response_out.len) };
+        return Err(callback_error.unwrap_or_else(|| {
+            "json host provider callback returned failure without error message".to_string()
+        }));
     }
-    let response = unsafe { CStr::from_ptr(response_ptr) }
-        .to_string_lossy()
-        .to_string();
-    unsafe { free_c_string(response_ptr) };
+    let response = take_optional_owned_ffi_string_buffer(
+        response_out,
+        "json host provider callback response_out",
+    )?
+    .ok_or_else(|| "json host provider callback returned empty response_out".to_string())?;
+    if let Some(message) = callback_error {
+        if !message.is_empty() {
+            return Err(format!(
+                "json host provider callback returned unexpected error text on success: {}",
+                message
+            ));
+        }
+    }
     Ok(response)
 }
 
@@ -1410,26 +1506,37 @@ fn invoke_standard_sqlite_provider_callback(
     request: &RuntimeSqliteProviderRequest,
 ) -> Result<Value, String> {
     let request = OwnedFfiSqliteProviderRequest::from_runtime(request)?;
-    let mut response_json_ptr: *mut c_char = ptr::null_mut();
-    let mut error_ptr: *mut c_char = ptr::null_mut();
+    let mut response_json_out = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
+    let mut error_out = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
     let status = unsafe {
         callback(
             request.as_ptr(),
             user_data as *mut c_void,
-            &mut response_json_ptr,
-            &mut error_ptr,
+            &mut response_json_out,
+            &mut error_out,
         )
     };
-    let callback_error = take_owned_ffi_string(error_ptr);
+    let callback_error = take_optional_owned_ffi_string_buffer(
+        error_out,
+        "sqlite host provider callback error_out",
+    )?;
     if status != FFI_STATUS_OK {
-        unsafe { free_c_string(response_json_ptr) };
+        unsafe { free_ffi_bytes(response_json_out.ptr, response_json_out.len) };
         return Err(callback_error.unwrap_or_else(|| {
             "sqlite host provider callback returned failure without error message".to_string()
         }));
     }
-    let response_json = take_owned_ffi_string(response_json_ptr).ok_or_else(|| {
-        "sqlite host provider callback returned null response_json_out".to_string()
-    })?;
+    let response_json = take_optional_owned_ffi_string_buffer(
+        response_json_out,
+        "sqlite host provider callback response_json_out",
+    )?
+    .ok_or_else(|| "sqlite host provider callback returned empty response_json_out".to_string())?;
     if let Some(message) = callback_error {
         if !message.is_empty() {
             return Err(format!(
@@ -1454,38 +1561,54 @@ fn invoke_standard_lancedb_provider_callback(
     request: &RuntimeLanceDbProviderRequest,
 ) -> Result<RuntimeLanceDbProviderResult, String> {
     let request = OwnedFfiLanceDbProviderRequest::from_runtime(request)?;
-    let mut meta_json_ptr: *mut c_char = ptr::null_mut();
-    let mut data_ptr: *mut u8 = ptr::null_mut();
-    let mut data_len: usize = 0;
-    let mut error_ptr: *mut c_char = ptr::null_mut();
+    let mut meta_json_out = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
+    let mut data_out = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
+    let mut error_out = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
     let status = unsafe {
         callback(
             request.as_ptr(),
             user_data as *mut c_void,
-            &mut meta_json_ptr,
-            &mut data_ptr,
-            &mut data_len,
-            &mut error_ptr,
+            &mut meta_json_out,
+            &mut data_out,
+            &mut error_out,
         )
     };
-    let callback_error = take_owned_ffi_string(error_ptr);
+    let callback_error = take_optional_owned_ffi_string_buffer(
+        error_out,
+        "lancedb host provider callback error_out",
+    )?;
     if status != FFI_STATUS_OK {
         unsafe {
-            free_c_string(meta_json_ptr);
-            free_ffi_bytes(data_ptr, data_len);
+            free_ffi_bytes(meta_json_out.ptr, meta_json_out.len);
+            free_ffi_bytes(data_out.ptr, data_out.len);
         }
         return Err(callback_error.unwrap_or_else(|| {
             "lancedb host provider callback returned failure without error message".to_string()
         }));
     }
-    let meta_json = take_owned_ffi_string(meta_json_ptr).unwrap_or_else(|| "{}".to_string());
+    let meta_json = take_optional_owned_ffi_string_buffer(
+        meta_json_out,
+        "lancedb host provider callback meta_json_out",
+    )?
+    .unwrap_or_else(|| "{}".to_string());
     let meta = serde_json::from_str::<Value>(&meta_json).map_err(|error| {
         format!(
             "failed to parse lancedb provider callback meta json: {}",
             error
         )
     })?;
-    let bytes = take_owned_ffi_bytes(data_ptr, data_len)?;
+    let bytes =
+        take_optional_owned_ffi_buffer(data_out, "lancedb host provider callback data_out")?
+            .unwrap_or_default();
     if let Some(message) = callback_error {
         if !message.is_empty() {
             return Err(format!(
@@ -1497,34 +1620,39 @@ fn invoke_standard_lancedb_provider_callback(
     Ok(RuntimeLanceDbProviderResult::binary(meta, bytes))
 }
 
-/// Copy one owned FFI string into Rust ownership and free the original allocation.
-/// 将拥有型 FFI 字符串复制到 Rust 所有权，并释放原始分配。
-fn take_owned_ffi_string(value: *mut c_char) -> Option<String> {
-    if value.is_null() {
-        return None;
+/// Copy one optional owned FFI buffer into Rust ownership and free the original allocation.
+/// 将单个可选拥有型 FFI 缓冲复制到 Rust 所有权，并释放原始分配。
+fn take_optional_owned_ffi_buffer(
+    value: FfiOwnedBuffer,
+    field_name: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    if value.ptr.is_null() {
+        if value.len == 0 {
+            return Ok(None);
+        }
+        return Err(format!(
+            "{} returned null ptr with non-zero len",
+            field_name
+        ));
     }
-    let text = unsafe { CStr::from_ptr(value) }
-        .to_string_lossy()
-        .to_string();
-    unsafe { free_c_string(value) };
-    Some(text)
+    let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) }.to_vec();
+    unsafe { free_ffi_bytes(value.ptr, value.len) };
+    Ok(Some(bytes))
 }
 
-/// Copy one owned FFI byte buffer into Rust ownership and free the original allocation.
-/// 将拥有型 FFI 字节缓冲复制到 Rust 所有权，并释放原始分配。
-fn take_owned_ffi_bytes(value: *mut u8, len: usize) -> Result<Vec<u8>, String> {
-    if value.is_null() {
-        if len == 0 {
-            return Ok(Vec::new());
-        }
-        return Err(
-            "lancedb provider callback returned null data_out with non-zero data_len_out"
-                .to_string(),
-        );
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(value, len) }.to_vec();
-    unsafe { free_ffi_bytes(value, len) };
-    Ok(bytes)
+/// Copy one optional owned UTF-8 buffer into Rust string ownership and free the original allocation.
+/// 将单个可选拥有型 UTF-8 缓冲复制到 Rust 字符串所有权，并释放原始分配。
+fn take_optional_owned_ffi_string_buffer(
+    value: FfiOwnedBuffer,
+    field_name: &str,
+) -> Result<Option<String>, String> {
+    let bytes = match take_optional_owned_ffi_buffer(value, field_name)? {
+        Some(bytes) => bytes,
+        None => return Ok(None),
+    };
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| format!("{} returned non-utf8 bytes: {}", field_name, error))
 }
 
 /// Free one owned byte buffer allocated by one FFI callback helper.
@@ -1585,14 +1713,14 @@ unsafe fn free_help_node_descriptor(value: FfiRuntimeHelpNodeDescriptor) {
 
 /// Write one successful status code.
 /// 写入一个成功状态码。
-fn ffi_ok_status(error_out: *mut *mut c_char) -> i32 {
+fn ffi_ok_status(error_out: *mut FfiOwnedBuffer) -> i32 {
     clear_error_out(error_out);
     FFI_STATUS_OK
 }
 
 /// Write one failed status code and error text.
 /// 写入一个失败状态码与错误文本。
-fn ffi_error_status(error_out: *mut *mut c_char, message: impl Into<String>) -> i32 {
+fn ffi_error_status(error_out: *mut FfiOwnedBuffer, message: impl Into<String>) -> i32 {
     set_error_out(error_out, message);
     FFI_STATUS_ERROR
 }
@@ -1608,6 +1736,34 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_string_clone(value: *const c_char)
         .to_string_lossy()
         .to_string();
     alloc_c_string(&text)
+}
+
+/// Clone one host buffer into one LuaSkills-owned buffer container for callback returns.
+/// 将宿主缓冲克隆到 LuaSkills 管理的缓冲容器，便于 callback 返回。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_buffer_clone(
+    value: *const u8,
+    len: usize,
+    buffer_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    clear_out_buffer(buffer_out);
+    if buffer_out.is_null() {
+        return ffi_error_status(error_out, "buffer_out must not be null");
+    }
+    if value.is_null() && len != 0 {
+        return ffi_error_status(error_out, "value must not be null when len > 0");
+    }
+    let slice = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(value, len) }
+    };
+    unsafe {
+        *buffer_out = alloc_owned_buffer_from_bytes(slice);
+    }
+    ffi_ok_status(error_out)
 }
 
 /// Clone one host byte buffer into one LuaSkills-owned heap buffer for standard callback returns.
@@ -1631,13 +1787,20 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_bytes_free(value: *mut u8, len: us
     unsafe { free_ffi_bytes(value, len) };
 }
 
+/// Free one LuaSkills-owned buffer container created by `vulcan_luaskills_ffi_buffer_clone`.
+/// 释放由 `vulcan_luaskills_ffi_buffer_clone` 创建的 LuaSkills 自主管理缓冲容器。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_buffer_free(value: FfiOwnedBuffer) {
+    unsafe { free_ffi_bytes(value.ptr, value.len) };
+}
+
 /// Register or clear one SQLite standard provider callback for host-managed database integration.
 /// 为宿主管理数据库集成注册或清理一个 SQLite 标准 provider 回调。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_callback(
     callback: Option<FfiSqliteProviderCallback>,
     user_data: *mut c_void,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let wrapped = callback.map(|callback_fn| {
@@ -1656,7 +1819,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_callback(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_callback(
     callback: Option<FfiLanceDbProviderCallback>,
     user_data: *mut c_void,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let wrapped = callback.map(|callback_fn| {
@@ -1675,7 +1838,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_callback(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
     callback: Option<FfiJsonProviderCallback>,
     user_data: *mut c_void,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let wrapped = callback.map(|callback_fn| {
@@ -1694,7 +1857,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_json_callback(
     callback: Option<FfiJsonProviderCallback>,
     user_data: *mut c_void,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let wrapped = callback.map(|callback_fn| {
@@ -1836,7 +1999,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_uninstall_result_free(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_version(
     version_out: *mut *mut c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(version_out);
@@ -1852,7 +2015,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_version(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_describe(
     functions_out: *mut *mut FfiStringArray,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(functions_out);
@@ -1870,7 +2033,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_describe(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_new(
     options: *const FfiLuaEngineOptions,
     engine_id_out: *mut u64,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_u64(engine_id_out);
@@ -1905,7 +2068,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_new(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_free(
     engine_id: u64,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     match ffi_engine_registry().lock() {
@@ -1927,7 +2090,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let base_dir = match parse_required_string(base_dir, "base_dir") {
@@ -1955,7 +2118,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_roots(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
@@ -1979,7 +2142,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let base_dir = match parse_required_string(base_dir, "base_dir") {
@@ -2007,7 +2170,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
@@ -2030,7 +2193,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_list_entries(
     engine_id: u64,
     entries_out: *mut *mut FfiRuntimeEntryDescriptorList,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(entries_out);
@@ -2059,7 +2222,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_list_entries(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_list_skill_help(
     engine_id: u64,
     help_out: *mut *mut FfiRuntimeSkillHelpDescriptorList,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(help_out);
@@ -2091,7 +2254,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
     flow_name: *const c_char,
     request_context_json: *const c_char,
     detail_out: *mut *mut FfiRuntimeHelpDetail,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(detail_out);
@@ -2130,7 +2293,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions(
     prompt_name: *const c_char,
     argument_name: *const c_char,
     values_out: *mut *mut FfiStringArray,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(values_out);
@@ -2167,7 +2330,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_is_skill(
     engine_id: u64,
     tool_name: *const c_char,
     value_out: *mut u8,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_u8(value_out);
@@ -2194,7 +2357,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
     engine_id: u64,
     tool_name: *const c_char,
     skill_id_out: *mut *mut c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(skill_id_out);
@@ -2225,7 +2388,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill(
     args_json: *const c_char,
     invocation_context: *const FfiLuaInvocationContext,
     result_out: *mut *mut FfiRuntimeInvocationResult,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(result_out);
@@ -2264,7 +2427,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua(
     args_json: *const c_char,
     invocation_context: *const FfiLuaInvocationContext,
     result_json_out: *mut *mut c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(result_json_out);
@@ -2309,7 +2472,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs(
     override_dir: *const c_char,
     skill_id: *const c_char,
     reason: *const c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let base_dir = match parse_required_string(base_dir, "base_dir") {
@@ -2352,7 +2515,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill(
     skill_roots_len: usize,
     skill_id: *const c_char,
     reason: *const c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
@@ -2386,7 +2549,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs(
     override_dir: *const c_char,
     skill_id: *const c_char,
     reason: *const c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let base_dir = match parse_required_string(base_dir, "base_dir") {
@@ -2429,7 +2592,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill(
     skill_roots_len: usize,
     skill_id: *const c_char,
     reason: *const c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
@@ -2462,7 +2625,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_enable_skill(
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
     skill_id: *const c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
@@ -2491,7 +2654,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_enable_skill(
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
     skill_id: *const c_char,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     let skill_roots = match parse_skill_roots(skill_roots, skill_roots_len) {
@@ -2522,7 +2685,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_uninstall_skill(
     skill_id: *const c_char,
     options: *const FfiSkillUninstallOptions,
     result_out: *mut *mut FfiSkillUninstallResult,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(result_out);
@@ -2561,7 +2724,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill(
     skill_id: *const c_char,
     options: *const FfiSkillUninstallOptions,
     result_out: *mut *mut FfiSkillUninstallResult,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(result_out);
@@ -2599,7 +2762,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_install_skill(
     skill_roots_len: usize,
     request: *const FfiSkillInstallRequest,
     result_out: *mut *mut FfiSkillApplyResult,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(result_out);
@@ -2639,7 +2802,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_install_skill(
     skill_roots_len: usize,
     request: *const FfiSkillInstallRequest,
     result_out: *mut *mut FfiSkillApplyResult,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(result_out);
@@ -2679,7 +2842,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_update_skill(
     skill_roots_len: usize,
     request: *const FfiSkillInstallRequest,
     result_out: *mut *mut FfiSkillApplyResult,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(result_out);
@@ -2719,7 +2882,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_update_skill(
     skill_roots_len: usize,
     request: *const FfiSkillInstallRequest,
     result_out: *mut *mut FfiSkillApplyResult,
-    error_out: *mut *mut c_char,
+    error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
     clear_error_out(error_out);
     clear_out_ptr(result_out);
@@ -2747,5 +2910,68 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_update_skill(
             ffi_ok_status(error_out)
         }
         Err(error) => ffi_error_status(error_out, error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify buffer_clone copies one byte payload into luaskills-owned storage.
+    /// 验证 buffer_clone 会把单个字节载荷复制到 luaskills 自主管理存储中。
+    #[test]
+    fn buffer_clone_copies_payload_into_owned_storage() {
+        let input = b"ffi-buffer-demo";
+        let mut buffer_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut error_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let status = unsafe {
+            vulcan_luaskills_ffi_buffer_clone(
+                input.as_ptr(),
+                input.len(),
+                &mut buffer_out,
+                &mut error_out,
+            )
+        };
+        assert_eq!(status, FFI_STATUS_OK);
+        assert!(error_out.ptr.is_null());
+        assert_eq!(error_out.len, 0);
+        let copied = unsafe { std::slice::from_raw_parts(buffer_out.ptr, buffer_out.len) };
+        assert_eq!(copied, input);
+        unsafe { vulcan_luaskills_ffi_buffer_free(buffer_out) };
+    }
+
+    /// Verify JSON provider callback bridge accepts borrowed buffers and owned-buffer responses.
+    /// 验证 JSON provider callback 桥接可接受借用缓冲输入并处理拥有型缓冲输出。
+    #[test]
+    fn json_provider_callback_bridge_round_trips_owned_buffers() {
+        unsafe extern "C" fn callback(
+            request_json: FfiBorrowedBuffer,
+            _user_data: *mut c_void,
+            response_out: *mut FfiOwnedBuffer,
+            error_out: *mut FfiOwnedBuffer,
+        ) -> i32 {
+            let request_bytes =
+                unsafe { std::slice::from_raw_parts(request_json.ptr, request_json.len) };
+            let request_text = std::str::from_utf8(request_bytes).expect("request must be utf-8");
+            let response_text = format!("{{\"echo\":{}}}", request_text);
+            unsafe {
+                *response_out = alloc_owned_buffer_from_bytes(response_text.as_bytes());
+                *error_out = FfiOwnedBuffer {
+                    ptr: ptr::null_mut(),
+                    len: 0,
+                };
+            }
+            FFI_STATUS_OK
+        }
+
+        let response = invoke_json_provider_callback(callback, 0, "{\"value\":1}")
+            .expect("callback bridge should succeed");
+        assert_eq!(response, "{\"echo\":{\"value\":1}}");
     }
 }

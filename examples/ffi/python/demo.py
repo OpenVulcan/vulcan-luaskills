@@ -66,6 +66,18 @@ class FfiLuaEngineOptions(ctypes.Structure):
     _fields_ = [("pool", FfiLuaVmPoolConfig), ("host", FfiLuaRuntimeHostOptions)]
 
 
+class FfiOwnedBuffer(ctypes.Structure):
+    """
+    Owned byte-buffer container returned by standard FFI error outputs.
+    标准 FFI 错误输出返回的拥有型字节缓冲容器。
+    """
+
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
 def load_library() -> ctypes.CDLL:
     """
     Load the vulcan-luaskills dynamic library from one explicit environment variable.
@@ -87,7 +99,20 @@ def demo_runtime_root() -> Path:
     return Path(__file__).resolve().parent.parent / "demo_runtime" / "runtime_root"
 
 
-def must_ok(status: int, error_ptr: ctypes.c_void_p, library: ctypes.CDLL) -> None:
+def read_owned_buffer_text(buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> str:
+    """
+    Read one owned UTF-8 buffer into one Python string and free it.
+    将一个拥有型 UTF-8 缓冲读取为 Python 字符串并释放。
+    """
+
+    if not buffer.ptr:
+        return ""
+    text = ctypes.string_at(buffer.ptr, buffer.len).decode("utf-8")
+    library.vulcan_luaskills_ffi_buffer_free(buffer)
+    return text
+
+
+def must_ok(status: int, error_buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> None:
     """
     Raise one Python exception when the standard FFI call reports failure.
     当标准 FFI 调用报告失败时抛出一个 Python 异常。
@@ -95,9 +120,7 @@ def must_ok(status: int, error_ptr: ctypes.c_void_p, library: ctypes.CDLL) -> No
 
     if status == 0:
         return
-    message = ctypes.string_at(error_ptr).decode("utf-8") if error_ptr else "Unknown FFI error"
-    if error_ptr:
-        library.vulcan_luaskills_ffi_string_free(error_ptr)
+    message = read_owned_buffer_text(error_buffer, library) or "Unknown FFI error"
     raise RuntimeError(message)
 
 
@@ -108,28 +131,30 @@ def main() -> None:
     """
 
     library = load_library()
+    library.vulcan_luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
+    library.vulcan_luaskills_ffi_buffer_free.restype = None
     library.vulcan_luaskills_ffi_version.argtypes = [
         ctypes.POINTER(ctypes.c_void_p),
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.vulcan_luaskills_ffi_engine_new.argtypes = [
         ctypes.POINTER(FfiLuaEngineOptions),
         ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.vulcan_luaskills_ffi_engine_free.argtypes = [
         ctypes.c_uint64,
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.vulcan_luaskills_ffi_string_free.argtypes = [ctypes.c_void_p]
 
     version_ptr = ctypes.c_void_p()
-    error_ptr = ctypes.c_void_p()
+    error_buffer = FfiOwnedBuffer()
     must_ok(
         library.vulcan_luaskills_ffi_version(
-            ctypes.byref(version_ptr), ctypes.byref(error_ptr)
+            ctypes.byref(version_ptr), ctypes.byref(error_buffer)
         ),
-        error_ptr,
+        error_buffer,
         library,
     )
     print("Version:", ctypes.string_at(version_ptr).decode("utf-8"))
@@ -182,20 +207,20 @@ def main() -> None:
         host=host,
     )
     engine_id = ctypes.c_uint64()
-    error_ptr = ctypes.c_void_p()
+    error_buffer = FfiOwnedBuffer()
     must_ok(
         library.vulcan_luaskills_ffi_engine_new(
-            ctypes.byref(options), ctypes.byref(engine_id), ctypes.byref(error_ptr)
+            ctypes.byref(options), ctypes.byref(engine_id), ctypes.byref(error_buffer)
         ),
-        error_ptr,
+        error_buffer,
         library,
     )
     print("Engine created:", engine_id.value)
 
-    error_ptr = ctypes.c_void_p()
+    error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_engine_free(engine_id, ctypes.byref(error_ptr)),
-        error_ptr,
+        library.vulcan_luaskills_ffi_engine_free(engine_id, ctypes.byref(error_buffer)),
+        error_buffer,
         library,
     )
     print("Engine freed")

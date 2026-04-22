@@ -170,16 +170,22 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 返回值：`int32_t`
 - 成功：`0`
 - 失败：非 `0`
-- 错误消息：通过 `char** error_out`
+- 错误消息：通过 `FfiOwnedBuffer *error_out`
 
 若接口需要输出结构化结果，则使用：
 
 - `*_out`
 - 再配套 free 函数释放
 
+也就是说：
+
+- 标准接口的失败信息不再通过裸 `char **` 传出
+- 调用方应把 `error_out` 当作 UTF-8 错误缓冲读取
+- 读取完成后应通过 `vulcan_luaskills_ffi_buffer_free` 释放
+
 ### 5.2 `_json` 接口统一规则
 
-`_json` 接口统一返回一个 JSON 字符串：
+`_json` 接口统一返回一个 JSON 包络缓冲：
 
 ```json
 {"ok":true,"result":{...}}
@@ -191,11 +197,27 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 {"ok":false,"error":"..."}
 ```
 
-字符串统一通过：
+返回值统一通过：
 
-- `vulcan_luaskills_ffi_string_free`
+- `FfiOwnedBuffer`
+
+承载，并通过：
+
+- `vulcan_luaskills_ffi_buffer_free`
 
 释放。
+
+请求输入统一通过：
+
+- `FfiBorrowedBuffer`
+
+传入。
+
+也就是说：
+
+- `_json` 接口的请求输入不再依赖 NUL 终止字符串
+- 调用方必须显式提供 `ptr + len`
+- `ptr` 只需在当前调用期间保持有效
 
 ## 6. 内存所有权与释放规则
 
@@ -207,7 +229,6 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 适用于：
 
-- `_json` 接口返回值
 - 标准接口中 `char**` 输出的字符串
 
 ### 6.2 字符串数组
@@ -215,6 +236,23 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 释放函数：
 
 - `vulcan_luaskills_ffi_string_array_free`
+
+### 6.2.1 拥有型缓冲
+
+当 callback 或后续扩展接口返回 `FfiOwnedBuffer` 时：
+
+- 分配应优先使用 `vulcan_luaskills_ffi_buffer_clone`
+- 释放应使用 `vulcan_luaskills_ffi_buffer_free`
+
+适用于：
+
+- `_json` 接口返回值
+- JSON callback 的 `response_out`
+- JSON callback 的 `error_out`
+- 标准 provider callback 的 `response_json_out`
+- 标准 provider callback 的 `meta_json_out`
+- 标准 provider callback 的 `data_out`
+- 标准 provider callback 的 `error_out`
 
 ### 6.3 结构化列表与结果
 
@@ -245,12 +283,14 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 以下规则应视为强约束，而不是最佳实践建议：
 
 - `vulcan_luaskills_ffi_string_free` 只能释放 **luaskills 自己分配并返回** 的字符串
-- `vulcan_luaskills_ffi_string_clone` / `vulcan_luaskills_ffi_bytes_clone` 用于把宿主自己的内存复制成 luaskills 自主管理的返回值
+- `vulcan_luaskills_ffi_string_clone` / `vulcan_luaskills_ffi_bytes_clone` / `vulcan_luaskills_ffi_buffer_clone` 用于把宿主自己的内存复制成 luaskills 自主管理的返回值
 - 宿主不能把自己分配的 `malloc/new/string buffer` 直接交给 `vulcan_luaskills_ffi_string_free`
+- 宿主不能把自己分配的裸缓冲伪装成 `FfiOwnedBuffer` 交给运行时
 - 所有传入 FFI 的裸指针、切片指针、输出指针都必须在调用期间保持有效
 - 标准 callback 与 JSON callback 都**不能**把 Rust panic、C++ exception 或其他异常机制穿过 C ABI 边界
 - 同一线程内，不支持在一个 engine 的 FFI 调用尚未返回时再次重入同一个 engine
 - 若宿主需要数据库 callback 或运行时技能管理 callback，必须先注册 callback，再创建 engine
+- callback 返回文本时，文本必须是合法 UTF-8；其中 JSON callback 与标准 provider callback 的 JSON 载荷还必须是合法 JSON 文本
 
 ### 6.6 回调与快照规则
 
@@ -380,6 +420,39 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `max_entries`
 - `default_ttl_secs`
 - `max_ttl_secs`
+
+### 8.2.1 `FfiBorrowedBuffer`
+
+作用：
+
+- 描述一段借用输入缓冲
+
+字段：
+
+- `ptr`
+- `len`
+
+约束：
+
+- `ptr` 只在当前 FFI 调用期间有效
+- `len > 0` 时，`ptr` 不得为 null
+
+### 8.2.2 `FfiOwnedBuffer`
+
+作用：
+
+- 描述一段由 `luaskills` 拥有并负责释放的输出缓冲
+
+字段：
+
+- `ptr`
+- `len`
+
+约束：
+
+- 该结构用于 `_json` 接口返回值、callback 返回值与后续扩展接口
+- 释放必须走 `vulcan_luaskills_ffi_buffer_free`
+- 如果 `len > 0`，则 `ptr` 不得为 null
 
 ### 8.3 `FfiLuaRuntimeHostOptions`
 

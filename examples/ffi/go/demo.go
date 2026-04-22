@@ -17,12 +17,18 @@ import (
 
 // mustOK raises one panic when the standard FFI call reports failure.
 // mustOK 在标准 FFI 调用报告失败时抛出一个 panic。
-func mustOK(status C.int32_t, errorOut *C.char) {
+func mustOK(status C.int32_t, errorOut C.FfiOwnedBuffer) {
 	if status == 0 {
 		return
 	}
-	message := C.GoString(errorOut)
-	C.vulcan_luaskills_ffi_string_free(errorOut)
+	var message string
+	if errorOut.ptr != nil && errorOut.len > 0 {
+		message = string(C.GoBytes(unsafe.Pointer(errorOut.ptr), C.int(errorOut.len)))
+	}
+	C.vulcan_luaskills_ffi_buffer_free(errorOut)
+	if message == "" {
+		message = "Unknown FFI error"
+	}
 	panic(message)
 }
 
@@ -60,7 +66,7 @@ func ensureDemoRuntimeLayout(root string) {
 // main 演示一次版本查询以及一次引擎创建与释放往返调用。
 func main() {
 	var version *C.char
-	var errorOut *C.char
+	var errorOut C.FfiOwnedBuffer
 	mustOK(C.vulcan_luaskills_ffi_version(&version, &errorOut), errorOut)
 	fmt.Println("Version:", C.GoString(version))
 	C.vulcan_luaskills_ffi_string_free(version)
@@ -116,11 +122,11 @@ func main() {
 	}
 
 	var engineID C.uint64_t
-	errorOut = nil
+	errorOut = C.FfiOwnedBuffer{}
 	mustOK(C.vulcan_luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
 	fmt.Println("Engine created:", uint64(engineID))
 
-	errorOut = nil
+	errorOut = C.FfiOwnedBuffer{}
 	mustOK(C.vulcan_luaskills_ffi_engine_free(engineID, &errorOut), errorOut)
 	fmt.Println("Engine freed")
 }

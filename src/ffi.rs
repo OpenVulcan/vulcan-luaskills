@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CString, c_char};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::ffi_standard::{FfiBorrowedBuffer, FfiOwnedBuffer};
 
 use crate::runtime_context::RuntimeRequestContext;
 use crate::runtime_help::{RuntimeHelpDetail, RuntimeSkillHelpDescriptor};
@@ -403,27 +405,38 @@ fn clone_engine_handle(engine_id: u64) -> Result<Arc<Mutex<LuaEngine>>, String> 
         .ok_or_else(|| format!("FFI engine {} not found", engine_id))
 }
 
-/// Convert one Rust value into one heap-allocated UTF-8 JSON string for foreign callers.
-/// 将单个 Rust 值转换为一段堆分配的 UTF-8 JSON 字符串，供外部调用方释放。
-fn encode_json_string<T: Serialize>(value: &T) -> *mut c_char {
+/// Convert one owned byte slice into one LuaSkills-owned FFI buffer container.
+/// 将一段拥有型字节切片转换为一个由 LuaSkills 管理的 FFI 缓冲容器。
+fn owned_buffer_from_bytes(bytes: &[u8]) -> FfiOwnedBuffer {
+    if bytes.is_empty() {
+        return FfiOwnedBuffer {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+    }
+    let mut owned = bytes.to_vec();
+    let pointer = owned.as_mut_ptr();
+    let len = owned.len();
+    std::mem::forget(owned);
+    FfiOwnedBuffer { ptr: pointer, len }
+}
+
+/// Convert one Rust value into one LuaSkills-owned UTF-8 JSON response buffer.
+/// 将单个 Rust 值转换为一个由 LuaSkills 管理的 UTF-8 JSON 响应缓冲。
+fn encode_json_buffer<T: Serialize>(value: &T) -> FfiOwnedBuffer {
     let json_text = serde_json::to_string(value).unwrap_or_else(|error| {
         format!(
             "{{\"ok\":false,\"error\":\"Failed to serialize FFI response: {}\"}}",
             error
         )
     });
-    CString::new(json_text)
-        .unwrap_or_else(|_| {
-            CString::new("{\"ok\":false,\"error\":\"FFI response contains NUL byte\"}")
-                .expect("static JSON must be valid")
-        })
-        .into_raw()
+    owned_buffer_from_bytes(json_text.as_bytes())
 }
 
 /// Build one successful FFI JSON envelope.
 /// 构造一个成功的 FFI JSON 响应包络。
-fn ffi_ok<T: Serialize>(result: T) -> *mut c_char {
-    encode_json_string(&FfiJsonEnvelope {
+fn ffi_ok<T: Serialize>(result: T) -> FfiOwnedBuffer {
+    encode_json_buffer(&FfiJsonEnvelope {
         ok: true,
         result: Some(result),
         error: None::<String>,
@@ -432,8 +445,8 @@ fn ffi_ok<T: Serialize>(result: T) -> *mut c_char {
 
 /// Build one failed FFI JSON envelope.
 /// 构造一个失败的 FFI JSON 响应包络。
-fn ffi_error(message: impl Into<String>) -> *mut c_char {
-    encode_json_string(&FfiJsonEnvelope::<Value> {
+fn ffi_error(message: impl Into<String>) -> FfiOwnedBuffer {
+    encode_json_buffer(&FfiJsonEnvelope::<Value> {
         ok: false,
         result: None,
         error: Some(message.into()),
@@ -443,17 +456,23 @@ fn ffi_error(message: impl Into<String>) -> *mut c_char {
 /// Parse one UTF-8 JSON request from one foreign string pointer.
 /// 从外部字符串指针解析一段 UTF-8 JSON 请求。
 fn decode_json_request<T: DeserializeOwned>(
-    input_json: *const c_char,
+    input_json: FfiBorrowedBuffer,
     function_name: &str,
 ) -> Result<T, String> {
-    if input_json.is_null() {
+    if input_json.ptr.is_null() {
+        if input_json.len == 0 {
+            return Err(format!(
+                "{} requires one non-null JSON buffer",
+                function_name
+            ));
+        }
         return Err(format!(
-            "{} requires one non-null JSON string",
+            "{} received null JSON buffer with non-zero len",
             function_name
         ));
     }
-    let text = unsafe { CStr::from_ptr(input_json) }
-        .to_str()
+    let bytes = unsafe { std::slice::from_raw_parts(input_json.ptr, input_json.len) };
+    let text = std::str::from_utf8(bytes)
         .map_err(|error| format!("{} received invalid UTF-8 input: {}", function_name, error))?;
     serde_json::from_str(text)
         .map_err(|error| format!("{} received invalid JSON input: {}", function_name, error))
@@ -555,6 +574,8 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "vulcan_luaskills_ffi_string_free",
         "vulcan_luaskills_ffi_bytes_clone",
         "vulcan_luaskills_ffi_bytes_free",
+        "vulcan_luaskills_ffi_buffer_clone",
+        "vulcan_luaskills_ffi_buffer_free",
         "vulcan_luaskills_ffi_string_array_free",
         "vulcan_luaskills_ffi_entry_list_free",
         "vulcan_luaskills_ffi_help_list_free",
@@ -580,7 +601,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_string_free(value: *mut c_char) {
 /// Return the stable FFI version descriptor as one JSON envelope.
 /// 以 JSON 响应包络形式返回稳定的 FFI 版本描述。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_version_json() -> *mut c_char {
+pub extern "C" fn vulcan_luaskills_ffi_version_json() -> FfiOwnedBuffer {
     ffi_ok(json!({
         "ffi_version": FFI_VERSION,
         "protocol": "json-cabi"
@@ -590,7 +611,7 @@ pub extern "C" fn vulcan_luaskills_ffi_version_json() -> *mut c_char {
 /// Return the exported JSON FFI entrypoint list as one JSON envelope.
 /// 以 JSON 响应包络形式返回已导出的 JSON FFI 入口列表。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_describe_json() -> *mut c_char {
+pub extern "C" fn vulcan_luaskills_ffi_describe_json() -> FfiOwnedBuffer {
     ffi_ok(FfiDescribeJsonResult {
         ffi_version: FFI_VERSION.to_string(),
         exported_functions: exported_ffi_function_names(),
@@ -601,8 +622,8 @@ pub extern "C" fn vulcan_luaskills_ffi_describe_json() -> *mut c_char {
 /// 创建一个新的 LuaSkills 引擎实例，并返回其稳定的 FFI 句柄标识。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_new_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EngineNewJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_engine_new_json",
@@ -628,8 +649,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_new_json(
 /// 释放一个现有的 LuaSkills 引擎句柄。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_free_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EngineIdJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_engine_free_json",
@@ -651,8 +672,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_free_json(
 /// 通过 JSON FFI 入口按旧目录风格根参数加载技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_dirs_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EngineDirsJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_load_from_dirs_json",
@@ -674,8 +695,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_dirs_json(
 /// 通过 JSON FFI 入口按有序根链加载技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_roots_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EngineRootsJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_load_from_roots_json",
@@ -697,8 +718,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_roots_json(
 /// 通过 JSON FFI 入口按旧目录风格根参数重载技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_dirs_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EngineDirsJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_reload_from_dirs_json",
@@ -720,8 +741,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_dirs_json(
 /// 通过 JSON FFI 入口按有序根链重载技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_roots_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EngineRootsJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_reload_from_roots_json",
@@ -743,8 +764,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_roots_json(
 /// 通过 JSON FFI 入口列出运行时入口描述。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_list_entries_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EngineIdJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_list_entries_json",
@@ -762,8 +783,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_list_entries_json(
 /// 通过 JSON FFI 入口列出结构化帮助树。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_list_skill_help_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EngineIdJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_list_skill_help_json",
@@ -781,8 +802,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_list_skill_help_json(
 /// 通过 JSON FFI 入口渲染单个结构化帮助详情载荷。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RenderHelpJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_render_skill_help_detail_json",
@@ -806,8 +827,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail_json(
 /// 通过 JSON FFI 入口解析提示词参数补全候选项。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<PromptCompletionJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_prompt_argument_completions_json",
@@ -827,8 +848,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions_json(
 /// 检查某个 canonical 工具名是否属于 Lua 技能入口。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_is_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<IsSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_is_skill_json",
@@ -848,8 +869,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_is_skill_json(
 /// 通过 JSON FFI 入口解析某个 canonical 工具名所属的技能标识符。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<SkillNameForToolJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_skill_name_for_tool_json",
@@ -869,8 +890,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool_json(
 /// 通过 JSON FFI 入口调用单个已加载技能入口。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<CallSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_call_skill_json",
@@ -894,8 +915,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill_json(
 /// 通过 JSON FFI 入口执行任意 Lua 代码。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RunLuaJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_run_lua_json",
@@ -919,8 +940,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua_json(
 /// 通过 JSON FFI 入口在普通 skills 平面停用单个技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<DisableSkillDirsJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_disable_skill_in_dirs_json",
@@ -947,8 +968,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs_json(
 /// 通过 JSON FFI 入口在普通 skills 平面停用单个技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<DisableSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_disable_skill_json",
@@ -974,8 +995,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_json(
 /// 通过 JSON FFI 入口在 system 平面停用单个技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<DisableSkillDirsJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_system_disable_skill_in_dirs_json",
@@ -1002,8 +1023,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs_json(
 /// 通过 JSON FFI 入口在 system 平面停用单个技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<DisableSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_system_disable_skill_json",
@@ -1029,8 +1050,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_json(
 /// 通过 JSON FFI 入口在普通 skills 平面启用单个技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_enable_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EnableSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_enable_skill_json",
@@ -1052,8 +1073,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_enable_skill_json(
 /// 通过 JSON FFI 入口在 system 平面启用单个技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_system_enable_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<EnableSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_system_enable_skill_json",
@@ -1075,8 +1096,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_enable_skill_json(
 /// 通过 JSON FFI 入口在普通 skills 平面卸载单个技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_uninstall_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<UninstallSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_uninstall_skill_json",
@@ -1098,8 +1119,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_uninstall_skill_json(
 /// 通过 JSON FFI 入口在 system 平面卸载单个技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<UninstallSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_system_uninstall_skill_json",
@@ -1121,8 +1142,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill_json(
 /// 通过 JSON FFI 入口在普通 skills 平面安装单个受管技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_install_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<ApplySkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_install_skill_json",
@@ -1144,8 +1165,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_install_skill_json(
 /// 通过 JSON FFI 入口在 system 平面安装单个受管技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_system_install_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<ApplySkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_system_install_skill_json",
@@ -1167,8 +1188,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_install_skill_json(
 /// 通过 JSON FFI 入口在普通 skills 平面更新单个受管技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_update_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<ApplySkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_update_skill_json",
@@ -1190,8 +1211,8 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_update_skill_json(
 /// 通过 JSON FFI 入口在 system 平面更新单个受管技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vulcan_luaskills_ffi_system_update_skill_json(
-    input_json: *const c_char,
-) -> *mut c_char {
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
     let request = match decode_json_request::<ApplySkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_system_update_skill_json",
@@ -1214,21 +1235,38 @@ mod tests {
     use super::{
         EngineHandleJsonResult, EngineIdJsonRequest, EngineNewJsonRequest, FFI_ENGINE_COUNTER,
         FfiEngineSlot, ffi_engine_registry, vulcan_luaskills_ffi_engine_free_json,
-        vulcan_luaskills_ffi_engine_new_json, vulcan_luaskills_ffi_string_free, with_engine,
+        vulcan_luaskills_ffi_engine_new_json, with_engine,
+    };
+    use crate::ffi_standard::{
+        FfiBorrowedBuffer, FfiOwnedBuffer, vulcan_luaskills_ffi_buffer_free,
     };
     use crate::{LuaEngine, LuaEngineOptions, LuaVmPoolConfig};
-    use std::ffi::{CStr, CString};
+    use std::ffi::CString;
     use std::sync::atomic::Ordering;
 
     /// Read one FFI JSON response string back into one serde_json value.
     /// 将单个 FFI JSON 响应字符串回读为一个 serde_json 值。
-    unsafe fn decode_response_json(ptr: *mut std::ffi::c_char) -> serde_json::Value {
-        let text = unsafe { CStr::from_ptr(ptr) }
-            .to_str()
-            .expect("ffi json must be utf-8");
+    unsafe fn decode_response_json(buffer: FfiOwnedBuffer) -> serde_json::Value {
+        let bytes = if buffer.ptr.is_null() {
+            assert_eq!(buffer.len, 0, "null response pointer must have zero len");
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) }
+        };
+        let text = std::str::from_utf8(bytes).expect("ffi json must be utf-8");
         let value = serde_json::from_str(text).expect("ffi json must parse");
-        unsafe { vulcan_luaskills_ffi_string_free(ptr) };
+        unsafe { vulcan_luaskills_ffi_buffer_free(buffer) };
         value
+    }
+
+    /// Build one borrowed buffer view over one CString JSON payload for JSON FFI tests.
+    /// 为 JSON FFI 测试中的单个 CString JSON 载荷构造一个借用缓冲视图。
+    fn borrowed_json_buffer(value: &CString) -> FfiBorrowedBuffer {
+        let bytes = value.as_bytes();
+        FfiBorrowedBuffer {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        }
     }
 
     /// One test-only registered engine handle that cleans itself from the global registry on drop.
@@ -1311,8 +1349,11 @@ mod tests {
         };
         let input = CString::new(serde_json::to_string(&request).expect("request json"))
             .expect("request cstring");
-        let response =
-            unsafe { decode_response_json(vulcan_luaskills_ffi_engine_new_json(input.as_ptr())) };
+        let response = unsafe {
+            decode_response_json(vulcan_luaskills_ffi_engine_new_json(borrowed_json_buffer(
+                &input,
+            )))
+        };
         assert_eq!(response["ok"], true);
         let result: EngineHandleJsonResult =
             serde_json::from_value(response["result"].clone()).expect("engine result should parse");
@@ -1325,7 +1366,9 @@ mod tests {
         )
         .expect("free request cstring");
         let free_response = unsafe {
-            decode_response_json(vulcan_luaskills_ffi_engine_free_json(free_request.as_ptr()))
+            decode_response_json(vulcan_luaskills_ffi_engine_free_json(borrowed_json_buffer(
+                &free_request,
+            )))
         };
         assert_eq!(free_response["ok"], true);
     }

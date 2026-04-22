@@ -8,6 +8,17 @@
 2. `luaskills` 在 `host_callback` 模式下把数据库请求回调给宿主
 3. 宿主不复用 lib 默认数据库路径，而是基于稳定 `binding_tag` 自己决定数据库文件位置
 
+当前示例基于新的 callback ABI：
+
+- JSON 请求输入走 `FfiBorrowedBuffer`
+- JSON 响应输出走 `FfiOwnedBuffer`
+- callback 通过状态码返回成功或失败
+
+同时，示例中的 `_json` FFI 普通调用也已改为：
+
+- 请求输入走 `FfiBorrowedBuffer`
+- 返回值走 `FfiOwnedBuffer`
+
 ## 当前示例结构
 
 - `run_python_host_provider_demo.py`

@@ -74,7 +74,37 @@ class FfiLuaEngineOptions(ctypes.Structure):
     _fields_ = [("pool", FfiLuaVmPoolConfig), ("host", FfiLuaRuntimeHostOptions)]
 
 
-CALLBACK_TYPE = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p)
+class FfiBorrowedBuffer(ctypes.Structure):
+    """
+    Borrowed byte-buffer view passed into the callback surface.
+    传入 callback 接口面的借用字节缓冲视图。
+    """
+
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
+class FfiOwnedBuffer(ctypes.Structure):
+    """
+    Owned byte-buffer container returned through the callback surface.
+    通过 callback 接口面返回的拥有型字节缓冲容器。
+    """
+
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
+CALLBACK_TYPE = ctypes.CFUNCTYPE(
+    ctypes.c_int32,
+    FfiBorrowedBuffer,
+    ctypes.c_void_p,
+    ctypes.POINTER(FfiOwnedBuffer),
+    ctypes.POINTER(FfiOwnedBuffer),
+)
 
 
 def resolve_demo_root() -> Path:
@@ -93,6 +123,56 @@ def resolve_runtime_root() -> Path:
     """
 
     return resolve_demo_root() / "runtime_root"
+
+
+def make_borrowed_json_buffer(payload: bytes):
+    """
+    Build one borrowed-buffer view over one JSON payload while keeping backing storage alive.
+    在保持底层存储存活的前提下，为单个 JSON 载荷构造借用缓冲视图。
+    """
+
+    if payload:
+        payload_array = (ctypes.c_uint8 * len(payload)).from_buffer_copy(payload)
+        payload_ptr = ctypes.cast(payload_array, ctypes.POINTER(ctypes.c_uint8))
+    else:
+        payload_array = None
+        payload_ptr = None
+    return payload_array, FfiBorrowedBuffer(ptr=payload_ptr, len=len(payload))
+
+
+def clone_bytes_into_owned_buffer(
+    library: ctypes.CDLL,
+    payload: bytes,
+    buffer_out: ctypes.POINTER(FfiOwnedBuffer),
+) -> None:
+    """
+    Clone one Python byte payload into one luaskills-owned FFI buffer.
+    将单个 Python 字节载荷克隆到一个 luaskills 自主管理的 FFI 缓冲。
+    """
+
+    error_buffer = FfiOwnedBuffer()
+    if payload:
+        payload_array = (ctypes.c_uint8 * len(payload)).from_buffer_copy(payload)
+        payload_ptr = ctypes.cast(payload_array, ctypes.POINTER(ctypes.c_uint8))
+    else:
+        payload_array = None
+        payload_ptr = None
+    status = library.vulcan_luaskills_ffi_buffer_clone(
+        payload_ptr,
+        len(payload),
+        buffer_out,
+        ctypes.byref(error_buffer),
+    )
+    if status == 0:
+        return
+    message = (
+        ctypes.string_at(error_buffer.ptr, error_buffer.len).decode("utf-8")
+        if error_buffer.ptr
+        else "Unknown buffer clone error"
+    )
+    if error_buffer.ptr:
+        library.vulcan_luaskills_ffi_buffer_free(error_buffer)
+    raise RuntimeError(message)
 
 
 def ensure_runtime_layout(root: Path) -> None:
@@ -165,16 +245,20 @@ def resolve_vldb_sqlite_library() -> Path:
     )
 
 
-def read_json_envelope(library: ctypes.CDLL, raw_ptr: ctypes.c_void_p) -> dict:
+def read_json_envelope(library: ctypes.CDLL, raw_buffer: FfiOwnedBuffer) -> dict:
     """
-    Read one LuaSkills JSON envelope and free the owned pointer.
-    读取一份 LuaSkills JSON 包络并释放拥有型指针。
+    Read one LuaSkills JSON envelope and free the owned buffer.
+    读取一份 LuaSkills JSON 包络并释放拥有型缓冲。
     """
 
-    if not raw_ptr:
-        raise RuntimeError("LuaSkills JSON FFI returned null")
-    text = ctypes.string_at(raw_ptr).decode("utf-8")
-    library.vulcan_luaskills_ffi_string_free(raw_ptr)
+    if not raw_buffer.ptr and raw_buffer.len != 0:
+        raise RuntimeError("LuaSkills JSON FFI returned one null buffer with non-zero len")
+    text = (
+        ctypes.string_at(raw_buffer.ptr, raw_buffer.len).decode("utf-8")
+        if raw_buffer.len
+        else ""
+    )
+    library.vulcan_luaskills_ffi_buffer_free(raw_buffer)
     return json.loads(text)
 
 
@@ -286,20 +370,29 @@ def main() -> None:
     library.vulcan_luaskills_ffi_string_clone.restype = ctypes.c_void_p
     library.vulcan_luaskills_ffi_string_free.argtypes = [ctypes.c_void_p]
     library.vulcan_luaskills_ffi_string_free.restype = None
+    library.vulcan_luaskills_ffi_buffer_clone.argtypes = [
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+        ctypes.POINTER(FfiOwnedBuffer),
+        ctypes.POINTER(FfiOwnedBuffer),
+    ]
+    library.vulcan_luaskills_ffi_buffer_clone.restype = ctypes.c_int32
+    library.vulcan_luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
+    library.vulcan_luaskills_ffi_buffer_free.restype = None
     library.vulcan_luaskills_ffi_set_sqlite_provider_json_callback.argtypes = [
         CALLBACK_TYPE,
         ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.vulcan_luaskills_ffi_set_sqlite_provider_json_callback.restype = ctypes.c_int32
-    library.vulcan_luaskills_ffi_engine_new_json.argtypes = [ctypes.c_char_p]
-    library.vulcan_luaskills_ffi_engine_new_json.restype = ctypes.c_void_p
-    library.vulcan_luaskills_ffi_load_from_roots_json.argtypes = [ctypes.c_char_p]
-    library.vulcan_luaskills_ffi_load_from_roots_json.restype = ctypes.c_void_p
-    library.vulcan_luaskills_ffi_call_skill_json.argtypes = [ctypes.c_char_p]
-    library.vulcan_luaskills_ffi_call_skill_json.restype = ctypes.c_void_p
-    library.vulcan_luaskills_ffi_engine_free_json.argtypes = [ctypes.c_char_p]
-    library.vulcan_luaskills_ffi_engine_free_json.restype = ctypes.c_void_p
+    library.vulcan_luaskills_ffi_engine_new_json.argtypes = [FfiBorrowedBuffer]
+    library.vulcan_luaskills_ffi_engine_new_json.restype = FfiOwnedBuffer
+    library.vulcan_luaskills_ffi_load_from_roots_json.argtypes = [FfiBorrowedBuffer]
+    library.vulcan_luaskills_ffi_load_from_roots_json.restype = FfiOwnedBuffer
+    library.vulcan_luaskills_ffi_call_skill_json.argtypes = [FfiBorrowedBuffer]
+    library.vulcan_luaskills_ffi_call_skill_json.restype = FfiOwnedBuffer
+    library.vulcan_luaskills_ffi_engine_free_json.argtypes = [FfiBorrowedBuffer]
+    library.vulcan_luaskills_ffi_engine_free_json.restype = FfiOwnedBuffer
 
     bridge = VldbSqliteJsonBridge(
         vldb_sqlite_library_path,
@@ -307,25 +400,46 @@ def main() -> None:
     )
 
     @CALLBACK_TYPE
-    def sqlite_callback(request_json_ptr, _user_data):
+    def sqlite_callback(request_json, _user_data, response_out, error_out):
         try:
-            request_json = ctypes.string_at(request_json_ptr).decode("utf-8")
-            response_json = bridge.handle_request_json(request_json)
-            return library.vulcan_luaskills_ffi_string_clone(response_json.encode("utf-8"))
+            request_bytes = (
+                ctypes.string_at(request_json.ptr, request_json.len)
+                if request_json.len
+                else b""
+            )
+            request_json_text = request_bytes.decode("utf-8")
+            response_json = bridge.handle_request_json(request_json_text).encode("utf-8")
+            clone_bytes_into_owned_buffer(library, response_json, response_out)
+            return 0
         except Exception as error:
             print(f"sqlite_callback failed: {error}", file=sys.stderr)
-            return None
+            try:
+                clone_bytes_into_owned_buffer(
+                    library,
+                    str(error).encode("utf-8"),
+                    error_out,
+                )
+            except Exception as clone_error:
+                print(
+                    f"sqlite_callback failed to clone error payload: {clone_error}",
+                    file=sys.stderr,
+                )
+            return 1
 
-    error_ptr = ctypes.c_void_p()
+    error_buffer = FfiOwnedBuffer()
     status = library.vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
         sqlite_callback,
         None,
-        ctypes.byref(error_ptr),
+        ctypes.byref(error_buffer),
     )
     if status != 0:
-        message = ctypes.string_at(error_ptr).decode("utf-8") if error_ptr.value else "Unknown callback registration error"
-        if error_ptr.value:
-            library.vulcan_luaskills_ffi_string_free(error_ptr)
+        message = (
+            ctypes.string_at(error_buffer.ptr, error_buffer.len).decode("utf-8")
+            if error_buffer.ptr
+            else "Unknown callback registration error"
+        )
+        if error_buffer.ptr:
+            library.vulcan_luaskills_ffi_buffer_free(error_buffer)
         raise RuntimeError(message)
 
     host = FfiLuaRuntimeHostOptions()
@@ -396,14 +510,17 @@ def main() -> None:
         }
     }
 
+    engine_request_bytes = json.dumps(engine_request).encode("utf-8")
+    engine_request_storage, engine_request_buffer = make_borrowed_json_buffer(
+        engine_request_bytes
+    )
     engine_payload = must_json_ok(
         read_json_envelope(
             library,
-            library.vulcan_luaskills_ffi_engine_new_json(
-                json.dumps(engine_request).encode("utf-8")
-            ),
+            library.vulcan_luaskills_ffi_engine_new_json(engine_request_buffer),
         )
     )
+    _ = engine_request_storage
     engine_id = engine_payload["engine_id"]
 
     try:
@@ -416,14 +533,17 @@ def main() -> None:
                 }
             ],
         }
+        load_request_bytes = json.dumps(load_request).encode("utf-8")
+        load_request_storage, load_request_buffer = make_borrowed_json_buffer(
+            load_request_bytes
+        )
         must_json_ok(
             read_json_envelope(
                 library,
-                library.vulcan_luaskills_ffi_load_from_roots_json(
-                    json.dumps(load_request).encode("utf-8")
-                ),
+                library.vulcan_luaskills_ffi_load_from_roots_json(load_request_buffer),
             )
         )
+        _ = load_request_storage
 
         call_request = {
             "engine_id": engine_id,
@@ -432,14 +552,17 @@ def main() -> None:
                 "note": "host provider sqlite smoke from python demo",
             },
         }
+        call_request_bytes = json.dumps(call_request).encode("utf-8")
+        call_request_storage, call_request_buffer = make_borrowed_json_buffer(
+            call_request_bytes
+        )
         invocation = must_json_ok(
             read_json_envelope(
                 library,
-                library.vulcan_luaskills_ffi_call_skill_json(
-                    json.dumps(call_request).encode("utf-8")
-                ),
+                library.vulcan_luaskills_ffi_call_skill_json(call_request_buffer),
             )
         )
+        _ = call_request_storage
         content = invocation["content"]
         payload = json.loads(content)
         if not payload.get("success"):
@@ -452,14 +575,17 @@ def main() -> None:
         print("Managed database:", expected_db)
         print("Skill payload:", json.dumps(payload, ensure_ascii=False))
     finally:
+        free_request_bytes = json.dumps({"engine_id": engine_id}).encode("utf-8")
+        free_request_storage, free_request_buffer = make_borrowed_json_buffer(
+            free_request_bytes
+        )
         must_json_ok(
             read_json_envelope(
                 library,
-                library.vulcan_luaskills_ffi_engine_free_json(
-                    json.dumps({"engine_id": engine_id}).encode("utf-8")
-                ),
+                library.vulcan_luaskills_ffi_engine_free_json(free_request_buffer),
             )
         )
+        _ = free_request_storage
 
 
 if __name__ == "__main__":

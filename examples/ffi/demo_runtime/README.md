@@ -46,7 +46,7 @@ python .\examples\ffi\demo_runtime\run_python_install_demo.py
 当前 smoke demo 选择 Python 是因为：
 
 - ctypes 接入成本最低
-- JSON FFI 调试体验最好
+- JSON FFI 已切到 `FfiBorrowedBuffer + FfiOwnedBuffer`，调试体验最好
 - 便于快速验证 install / call 主链
 
 Go 和 TypeScript 示例仍保留在：

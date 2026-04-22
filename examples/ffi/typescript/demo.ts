@@ -61,18 +61,33 @@ function readCString(pointer: string | Buffer | null): string {
 }
 
 /**
+Read one owned UTF-8 FFI buffer into one JavaScript string.
+将一个拥有型 UTF-8 FFI 缓冲读取为一个 JavaScript 字符串。
+ */
+function readOwnedBuffer(buffer: { ptr: Buffer | null; len: number | bigint } | null): string {
+  if (!buffer?.ptr) {
+    return "";
+  }
+  return Buffer.from(buffer.ptr).subarray(0, Number(buffer.len)).toString("utf8");
+}
+
+/**
 Raise one JavaScript error when the standard FFI call reports failure.
 当标准 FFI 调用报告失败时抛出一个 JavaScript 错误。
  */
-function mustOK(status: number, errorPtr: string | Buffer | null, freeString: (...args: unknown[]) => void): void {
+function mustOK(
+  status: number,
+  errorBuffer: { ptr: Buffer | null; len: number | bigint } | null,
+  freeBuffer: (...args: unknown[]) => void,
+): void {
   if (status === 0) {
     return;
   }
-  const message = readCString(errorPtr);
-  if (errorPtr) {
-    freeString(errorPtr);
+  const message = readOwnedBuffer(errorBuffer);
+  if (errorBuffer) {
+    freeBuffer(errorBuffer);
   }
-  throw new Error(message);
+  throw new Error(message || "Unknown FFI error");
 }
 
 /**
@@ -124,14 +139,20 @@ function main(): void {
     host: FfiLuaRuntimeHostOptions,
   });
 
+  const FfiOwnedBuffer = koffi.struct("FfiOwnedBuffer", {
+    ptr: "void *",
+    len: "size_t",
+  });
+
   const freeString = library.func("void vulcan_luaskills_ffi_string_free(char *value)");
-  const version = library.func("int vulcan_luaskills_ffi_version(char **version_out, char **error_out)");
-  const engineNew = library.func("int vulcan_luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, char **error_out)");
-  const engineFree = library.func("int vulcan_luaskills_ffi_engine_free(uint64_t engine_id, char **error_out)");
+  const freeBuffer = library.func("void vulcan_luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
+  const version = library.func("int vulcan_luaskills_ffi_version(char **version_out, FfiOwnedBuffer *error_out)");
+  const engineNew = library.func("int vulcan_luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
+  const engineFree = library.func("int vulcan_luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
 
   const versionOut = [null];
-  const versionError = [null];
-  mustOK(version(versionOut, versionError), versionError[0], freeString);
+  const versionError = [{ ptr: null, len: 0 }];
+  mustOK(version(versionOut, versionError), versionError[0], freeBuffer);
   console.log("Version:", readCString(versionOut[0]));
   if (versionOut[0]) {
     freeString(versionOut[0]);
@@ -170,12 +191,12 @@ function main(): void {
   };
 
   const engineIdOut = [0n];
-  const engineError = [null];
-  mustOK(engineNew(options, engineIdOut, engineError), engineError[0], freeString);
+  const engineError = [{ ptr: null, len: 0 }];
+  mustOK(engineNew(options, engineIdOut, engineError), engineError[0], freeBuffer);
   console.log("Engine created:", engineIdOut[0].toString());
 
-  const freeError = [null];
-  mustOK(engineFree(engineIdOut[0], freeError), freeError[0], freeString);
+  const freeError = [{ ptr: null, len: 0 }];
+  mustOK(engineFree(engineIdOut[0], freeError), freeError[0], freeBuffer);
   console.log("Engine freed");
 }
 

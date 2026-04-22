@@ -73,6 +73,30 @@ class FfiLuaEngineOptions(ctypes.Structure):
     _fields_ = [("pool", FfiLuaVmPoolConfig), ("host", FfiLuaRuntimeHostOptions)]
 
 
+class FfiBorrowedBuffer(ctypes.Structure):
+    """
+    Borrowed byte-buffer view passed into `_json` FFI requests.
+    传入 `_json` FFI 请求的借用字节缓冲视图。
+    """
+
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
+class FfiOwnedBuffer(ctypes.Structure):
+    """
+    Owned byte-buffer container returned by `_json` FFI calls.
+    由 `_json` FFI 调用返回的拥有型字节缓冲容器。
+    """
+
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
 def runtime_root() -> Path:
     """
     Resolve the shared demo runtime root path.
@@ -139,7 +163,20 @@ def load_library() -> ctypes.CDLL:
     return ctypes.CDLL(str(Path(library_path)))
 
 
-def must_ok(status: int, error_ptr: ctypes.c_void_p, library: ctypes.CDLL) -> None:
+def read_owned_buffer_text(buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> str:
+    """
+    Read one owned UTF-8 buffer into one Python string and free it.
+    将一个拥有型 UTF-8 缓冲读取为 Python 字符串并释放。
+    """
+
+    if not buffer.ptr:
+        return ""
+    text = ctypes.string_at(buffer.ptr, buffer.len).decode("utf-8")
+    library.vulcan_luaskills_ffi_buffer_free(buffer)
+    return text
+
+
+def must_ok(status: int, error_buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> None:
     """
     Raise one Python exception when the standard FFI call reports failure.
     当标准 FFI 调用报告失败时抛出一个 Python 异常。
@@ -147,22 +184,24 @@ def must_ok(status: int, error_ptr: ctypes.c_void_p, library: ctypes.CDLL) -> No
 
     if status == 0:
         return
-    message = ctypes.string_at(error_ptr).decode("utf-8") if error_ptr else "Unknown FFI error"
-    if error_ptr:
-        library.vulcan_luaskills_ffi_string_free(error_ptr)
+    message = read_owned_buffer_text(error_buffer, library) or "Unknown FFI error"
     raise RuntimeError(message)
 
 
-def decode_json_response(raw_ptr: ctypes.c_void_p, library: ctypes.CDLL) -> dict:
+def decode_json_response(raw_buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> dict:
     """
     Decode one JSON envelope returned by one `_json` FFI function.
     解码一个由 `_json` FFI 函数返回的 JSON 包络。
     """
 
-    if not raw_ptr:
-        raise RuntimeError("FFI JSON call returned null")
-    text = ctypes.string_at(raw_ptr).decode("utf-8")
-    library.vulcan_luaskills_ffi_string_free(raw_ptr)
+    if not raw_buffer.ptr and raw_buffer.len != 0:
+        raise RuntimeError("FFI JSON call returned one null buffer with non-zero len")
+    text = (
+        ctypes.string_at(raw_buffer.ptr, raw_buffer.len).decode("utf-8")
+        if raw_buffer.len
+        else ""
+    )
+    library.vulcan_luaskills_ffi_buffer_free(raw_buffer)
     payload = json.loads(text)
     if payload.get("ok") is not True:
         raise RuntimeError(payload.get("error") or "Unknown JSON FFI error")
@@ -176,10 +215,15 @@ def call_json_ffi(library: ctypes.CDLL, function_name: str, payload: dict) -> di
     """
 
     ffi_function = getattr(library, function_name)
-    ffi_function.argtypes = [ctypes.c_char_p]
-    ffi_function.restype = ctypes.c_void_p
+    ffi_function.argtypes = [FfiBorrowedBuffer]
+    ffi_function.restype = FfiOwnedBuffer
     input_bytes = json.dumps(payload).encode("utf-8")
-    return decode_json_response(ffi_function(ctypes.c_char_p(input_bytes)), library)
+    input_array = (ctypes.c_uint8 * len(input_bytes)).from_buffer_copy(input_bytes)
+    input_buffer = FfiBorrowedBuffer(
+        ptr=ctypes.cast(input_array, ctypes.POINTER(ctypes.c_uint8)),
+        len=len(input_bytes),
+    )
+    return decode_json_response(ffi_function(input_buffer), library)
 
 
 def normalized_path(path: Path) -> str:
@@ -243,27 +287,29 @@ def main() -> None:
 
     library = load_library()
     library.vulcan_luaskills_ffi_string_free.argtypes = [ctypes.c_void_p]
+    library.vulcan_luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
+    library.vulcan_luaskills_ffi_buffer_free.restype = None
     library.vulcan_luaskills_ffi_version.argtypes = [
         ctypes.POINTER(ctypes.c_void_p),
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.vulcan_luaskills_ffi_engine_new.argtypes = [
         ctypes.POINTER(FfiLuaEngineOptions),
         ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.vulcan_luaskills_ffi_engine_free.argtypes = [
         ctypes.c_uint64,
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(FfiOwnedBuffer),
     ]
 
     version_ptr = ctypes.c_void_p()
-    error_ptr = ctypes.c_void_p()
+    error_buffer = FfiOwnedBuffer()
     must_ok(
         library.vulcan_luaskills_ffi_version(
-            ctypes.byref(version_ptr), ctypes.byref(error_ptr)
+            ctypes.byref(version_ptr), ctypes.byref(error_buffer)
         ),
-        error_ptr,
+        error_buffer,
         library,
     )
     print("FFI version:", ctypes.string_at(version_ptr).decode("utf-8"))
@@ -271,12 +317,12 @@ def main() -> None:
 
     engine_id = ctypes.c_uint64()
     options = build_engine_options(root)
-    error_ptr = ctypes.c_void_p()
+    error_buffer = FfiOwnedBuffer()
     must_ok(
         library.vulcan_luaskills_ffi_engine_new(
-            ctypes.byref(options), ctypes.byref(engine_id), ctypes.byref(error_ptr)
+            ctypes.byref(options), ctypes.byref(engine_id), ctypes.byref(error_buffer)
         ),
-        error_ptr,
+        error_buffer,
         library,
     )
 
@@ -324,12 +370,12 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         print("success")
     finally:
-        error_ptr = ctypes.c_void_p()
+        error_buffer = FfiOwnedBuffer()
         must_ok(
             library.vulcan_luaskills_ffi_engine_free(
-                engine_id, ctypes.byref(error_ptr)
+                engine_id, ctypes.byref(error_buffer)
             ),
-            error_ptr,
+            error_buffer,
             library,
         )
 

@@ -207,8 +207,8 @@ lib 会一并提供稳定绑定上下文：
   - `const FfiSqliteProviderRequest *request`
   - `void *user_data`
 - 输出：
-  - `char **response_json_out`
-  - `char **error_out`
+  - `FfiOwnedBuffer *response_json_out`
+  - `FfiOwnedBuffer *error_out`
 
 ### LanceDB
 
@@ -222,10 +222,9 @@ lib 会一并提供稳定绑定上下文：
   - `const FfiLanceDbProviderRequest *request`
   - `void *user_data`
 - 输出：
-  - `char **meta_json_out`
-  - `uint8_t **data_out`
-  - `size_t *data_len_out`
-  - `char **error_out`
+  - `FfiOwnedBuffer *meta_json_out`
+  - `FfiOwnedBuffer *data_out`
+  - `FfiOwnedBuffer *error_out`
 
 ### 标准回调的关键点
 
@@ -233,12 +232,13 @@ lib 会一并提供稳定绑定上下文：
 
 - `action`
 - `binding`
-- `input_json`
+- `FfiBorrowedBuffer input_json`
 
 也就是说：
 
 - 外层协议是结构化的
 - 动作内部参数仍然通过 `input_json` 承载
+- `input_json` 不再依赖 NUL 终止字符串，而是显式 `ptr + len`
 
 这样可以同时满足两件事：
 
@@ -255,10 +255,15 @@ lib 会一并提供稳定绑定上下文：
 
 应优先使用 `luaskills` 提供的辅助函数：
 
-- `vulcan_luaskills_ffi_string_clone`
-- `vulcan_luaskills_ffi_bytes_clone`
+- `vulcan_luaskills_ffi_buffer_clone`
+- `vulcan_luaskills_ffi_buffer_free`
 
-对应释放由 `luaskills` 内部自动完成。
+也就是说：
+
+- 标准 callback 不再要求宿主直接写 `char **` 或 `uint8_t ** + len`
+- 宿主应返回 `luaskills` 所有的 `FfiOwnedBuffer`
+- `response_json_out` 与 `meta_json_out` 中的字节内容必须是合法 UTF-8 JSON 文本
+- `data_out` 中的字节内容可为任意二进制载荷
 
 除此之外，还必须遵守以下约束：
 
@@ -282,7 +287,26 @@ lib 会一并提供稳定绑定上下文：
 
 ### JSON 回调规则
 
-JSON 回调模式下，宿主收到的是一整份 JSON 请求字符串。
+JSON 回调模式下，宿主收到的是一整份 JSON 请求字节缓冲。
+
+接口形态是：
+
+- 输入：
+  - `FfiBorrowedBuffer request_json`
+  - `void *user_data`
+- 输出：
+  - `FfiOwnedBuffer *response_out`
+  - `FfiOwnedBuffer *error_out`
+- 返回值：
+  - `int32_t` 状态码
+
+也就是说：
+
+- `request_json` 不是 NUL 终止字符串约定，而是 `ptr + len`
+- `response_out` 必须写入 UTF-8 JSON 文本缓冲
+- `error_out` 也应写入 UTF-8 错误文本缓冲
+- callback 成功时返回 `FFI_STATUS_OK`
+- callback 失败时返回非零状态码，并尽量写入 `error_out`
 
 例如 SQLite 请求会是：
 
@@ -306,7 +330,7 @@ JSON 回调模式下，宿主收到的是一整份 JSON 请求字符串。
 }
 ```
 
-宿主返回的也是 JSON 字符串。
+宿主返回的仍然是 JSON 文本，但载体已经变成 `FfiOwnedBuffer`。
 
 所以：
 
@@ -426,8 +450,8 @@ runtime_root/host_managed/sqlite/<binding_tag>.db
 
 1. 用标准 callback
 2. 外层请求走结构化 ABI
-3. 内层动作参数仍走 `input_json`
-4. 用 `string_clone / bytes_clone` 返回拥有型结果
+3. 内层动作参数仍走 `FfiBorrowedBuffer input_json`
+4. 用 `buffer_clone` 填充 `FfiOwnedBuffer` 返回拥有型结果
 
 ## 12. 一句话总结
 
