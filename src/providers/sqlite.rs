@@ -908,12 +908,13 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().execute_sqlite_script_typed(
-                space_id,
-                binding_id,
-                sql.to_string(),
-                map_controller_sqlite_params(&params),
-            ))?;
+            let sql_text = sql.to_string();
+            let mapped_params = map_controller_sqlite_params(&params);
+            let result = bridge.run(move |client| async move {
+                client
+                    .execute_sqlite_script_typed(space_id, binding_id, sql_text, mapped_params)
+                    .await
+            })?;
             self.log_if_slow("execute_script", started_at, None);
             return Ok(json!({
                 "success": result.success,
@@ -978,16 +979,16 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(
-                bridge.client().execute_sqlite_batch_typed(
-                    space_id,
-                    binding_id,
-                    sql.to_string(),
-                    rows.iter()
-                        .map(|row| map_controller_sqlite_params(row))
-                        .collect(),
-                ),
-            )?;
+            let sql_text = sql.to_string();
+            let mapped_rows = rows
+                .iter()
+                .map(|row| map_controller_sqlite_params(row))
+                .collect();
+            let result = bridge.run(move |client| async move {
+                client
+                    .execute_sqlite_batch_typed(space_id, binding_id, sql_text, mapped_rows)
+                    .await
+            })?;
             self.log_if_slow("execute_batch", started_at, None);
             return Ok(json!({
                 "success": result.success,
@@ -1047,12 +1048,13 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().query_sqlite_json_typed(
-                space_id,
-                binding_id,
-                sql.to_string(),
-                map_controller_sqlite_params(&params),
-            ))?;
+            let sql_text = sql.to_string();
+            let mapped_params = map_controller_sqlite_params(&params);
+            let result = bridge.run(move |client| async move {
+                client
+                    .query_sqlite_json_typed(space_id, binding_id, sql_text, mapped_params)
+                    .await
+            })?;
             let rows = serde_json::from_str::<Value>(&result.json_data).map_err(|error| {
                 format!("space_controller returned invalid json_data: {}", error)
             })?;
@@ -1134,13 +1136,19 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().open_sqlite_query_stream_typed(
-                space_id,
-                binding_id,
-                sql.to_string(),
-                map_controller_sqlite_params(&params),
-                chunk_bytes,
-            ))?;
+            let sql_text = sql.to_string();
+            let mapped_params = map_controller_sqlite_params(&params);
+            let result = bridge.run(move |client| async move {
+                client
+                    .open_sqlite_query_stream_typed(
+                        space_id,
+                        binding_id,
+                        sql_text,
+                        mapped_params,
+                        chunk_bytes,
+                    )
+                    .await
+            })?;
             self.log_if_slow(
                 "query_stream",
                 started_at,
@@ -1219,8 +1227,9 @@ impl SqliteSkillBinding {
             self.log_info("query_stream_wait_metrics", None);
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
-            let metrics =
-                bridge.block_on(bridge.client().wait_sqlite_query_stream_metrics(stream_id))?;
+            let metrics = bridge.run(move |client| async move {
+                client.wait_sqlite_query_stream_metrics(stream_id).await
+            })?;
             self.log_if_slow(
                 "query_stream_wait_metrics",
                 started_at,
@@ -1295,11 +1304,9 @@ impl SqliteSkillBinding {
             self.log_info("query_stream_chunk", None);
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
-            let chunk = bridge.block_on(
-                bridge
-                    .client()
-                    .read_sqlite_query_stream_chunk(stream_id, index),
-            )?;
+            let chunk = bridge.run(move |client| async move {
+                client.read_sqlite_query_stream_chunk(stream_id, index).await
+            })?;
             self.log_if_slow(
                 "query_stream_chunk",
                 started_at,
@@ -1373,7 +1380,9 @@ impl SqliteSkillBinding {
             self.log_info("query_stream_close", None);
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
-            let closed = bridge.block_on(bridge.client().close_sqlite_query_stream(stream_id))?;
+            let closed = bridge.run(move |client| async move {
+                client.close_sqlite_query_stream(stream_id).await
+            })?;
             self.log_if_slow(
                 "query_stream_close",
                 started_at,
@@ -1449,13 +1458,18 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().tokenize_sqlite_text(
-                space_id,
-                binding_id,
-                tokenizer_mode,
-                text.to_string(),
-                search_mode,
-            ))?;
+            let text_value = text.to_string();
+            let result = bridge.run(move |client| async move {
+                client
+                    .tokenize_sqlite_text(
+                        space_id,
+                        binding_id,
+                        tokenizer_mode,
+                        text_value,
+                        search_mode,
+                    )
+                    .await
+            })?;
             self.log_if_slow("tokenize_text", started_at, None);
             return Ok(json!({
                 "success": true,
@@ -1543,12 +1557,13 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().upsert_sqlite_custom_word(
-                space_id,
-                binding_id,
-                word.to_string(),
-                u32::try_from(weight).unwrap_or(u32::MAX),
-            ))?;
+            let word_value = word.to_string();
+            let weight_value = u32::try_from(weight).unwrap_or(u32::MAX);
+            let result = bridge.run(move |client| async move {
+                client
+                    .upsert_sqlite_custom_word(space_id, binding_id, word_value, weight_value)
+                    .await
+            })?;
             self.log_if_slow("upsert_custom_word", started_at, None);
             return Ok(json!({
                 "success": result.success,
@@ -1602,11 +1617,12 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().remove_sqlite_custom_word(
-                space_id,
-                binding_id,
-                word.to_string(),
-            ))?;
+            let word_value = word.to_string();
+            let result = bridge.run(move |client| async move {
+                client
+                    .remove_sqlite_custom_word(space_id, binding_id, word_value)
+                    .await
+            })?;
             self.log_if_slow("remove_custom_word", started_at, None);
             return Ok(json!({
                 "success": result.success,
@@ -1651,11 +1667,9 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(
-                bridge
-                    .client()
-                    .list_sqlite_custom_words(space_id, binding_id),
-            )?;
+            let result = bridge.run(move |client| async move {
+                client.list_sqlite_custom_words(space_id, binding_id).await
+            })?;
             self.log_if_slow(
                 "list_custom_words",
                 started_at,
@@ -1737,12 +1751,17 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().ensure_sqlite_fts_index(
-                space_id,
-                binding_id,
-                index_name.to_string(),
-                tokenizer_mode,
-            ))?;
+            let index_name_value = index_name.to_string();
+            let result = bridge.run(move |client| async move {
+                client
+                    .ensure_sqlite_fts_index(
+                        space_id,
+                        binding_id,
+                        index_name_value,
+                        tokenizer_mode,
+                    )
+                    .await
+            })?;
             self.log_if_slow("ensure_fts_index", started_at, None);
             return Ok(json!({
                 "success": result.success,
@@ -1812,12 +1831,17 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().rebuild_sqlite_fts_index(
-                space_id,
-                binding_id,
-                index_name.to_string(),
-                tokenizer_mode,
-            ))?;
+            let index_name_value = index_name.to_string();
+            let result = bridge.run(move |client| async move {
+                client
+                    .rebuild_sqlite_fts_index(
+                        space_id,
+                        binding_id,
+                        index_name_value,
+                        tokenizer_mode,
+                    )
+                    .await
+            })?;
             self.log_if_slow("rebuild_fts_index", started_at, None);
             return Ok(json!({
                 "success": result.success,
@@ -1901,16 +1925,25 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().upsert_sqlite_fts_document(
-                space_id,
-                binding_id,
-                index_name.to_string(),
-                tokenizer_mode,
-                id.to_string(),
-                file_path.to_string(),
-                title.to_string(),
-                content.to_string(),
-            ))?;
+            let index_name_value = index_name.to_string();
+            let id_value = id.to_string();
+            let file_path_value = file_path.to_string();
+            let title_value = title.to_string();
+            let content_value = content.to_string();
+            let result = bridge.run(move |client| async move {
+                client
+                    .upsert_sqlite_fts_document(
+                        space_id,
+                        binding_id,
+                        index_name_value,
+                        tokenizer_mode,
+                        id_value,
+                        file_path_value,
+                        title_value,
+                        content_value,
+                    )
+                    .await
+            })?;
             self.log_if_slow("upsert_fts_document", started_at, None);
             return Ok(json!({
                 "success": result.success,
@@ -1989,12 +2022,13 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().delete_sqlite_fts_document(
-                space_id,
-                binding_id,
-                index_name.to_string(),
-                id.to_string(),
-            ))?;
+            let index_name_value = index_name.to_string();
+            let id_value = id.to_string();
+            let result = bridge.run(move |client| async move {
+                client
+                    .delete_sqlite_fts_document(space_id, binding_id, index_name_value, id_value)
+                    .await
+            })?;
             self.log_if_slow("delete_fts_document", started_at, None);
             return Ok(json!({
                 "success": result.success,
@@ -2071,15 +2105,23 @@ impl SqliteSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().search_sqlite_fts(
-                space_id,
-                binding_id,
-                index_name.to_string(),
-                tokenizer_mode,
-                query.to_string(),
-                u32::try_from(limit).unwrap_or(u32::MAX),
-                u32::try_from(offset).unwrap_or(u32::MAX),
-            ))?;
+            let index_name_value = index_name.to_string();
+            let query_value = query.to_string();
+            let limit_value = u32::try_from(limit).unwrap_or(u32::MAX);
+            let offset_value = u32::try_from(offset).unwrap_or(u32::MAX);
+            let result = bridge.run(move |client| async move {
+                client
+                    .search_sqlite_fts(
+                        space_id,
+                        binding_id,
+                        index_name_value,
+                        tokenizer_mode,
+                        query_value,
+                        limit_value,
+                        offset_value,
+                    )
+                    .await
+            })?;
             self.log_if_slow(
                 "search_fts",
                 started_at,
@@ -2504,18 +2546,21 @@ impl SqliteSkillHost {
                 .clone();
             let controller_space_id = controller_space_id_for_binding(&binding_context);
             let controller_binding_id = binding_context.binding_tag.clone();
+            let controller_database_path = database_path.clone();
             controller.attach_binding(&binding_context)?;
-            controller.block_on(controller.client().enable_sqlite(
-                ControllerSqliteEnableRequest {
-                    space_id: controller_space_id,
-                    binding_id: controller_binding_id,
-                    db_path: database_path.clone(),
-                    // Controller mode already centralizes ownership in one dedicated process.
-                    // 控制器模式已经把数据库所有权集中到单独控制进程，不再额外启用文件锁。
-                    enforce_db_file_lock: false,
-                    ..ControllerSqliteEnableRequest::default()
-                },
-            ))?;
+            controller.run(move |client| async move {
+                client
+                    .enable_sqlite(ControllerSqliteEnableRequest {
+                        space_id: controller_space_id,
+                        binding_id: controller_binding_id,
+                        db_path: controller_database_path,
+                        // Controller mode already centralizes ownership in one dedicated process.
+                        // 控制器模式已经把数据库所有权集中到单独控制进程，不再额外启用文件锁。
+                        enforce_db_file_lock: false,
+                        ..ControllerSqliteEnableRequest::default()
+                    })
+                    .await
+            })?;
             (
                 database_path.clone(),
                 None,

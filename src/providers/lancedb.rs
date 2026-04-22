@@ -319,11 +319,12 @@ impl LanceDbSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().create_lancedb_table(
-                space_id,
-                binding_id,
-                serde_json::to_string(input).map_err(|error| error.to_string())?,
-            ))?;
+            let request_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
+            let result = bridge.run(move |client| async move {
+                client
+                    .create_lancedb_table(space_id, binding_id, request_json)
+                    .await
+            })?;
             self.log_if_slow("create_table", started_at, None);
             return Ok(json!({ "message": result.message }));
         }
@@ -349,12 +350,13 @@ impl LanceDbSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().upsert_lancedb(
-                space_id,
-                binding_id,
-                serde_json::to_string(input).map_err(|error| error.to_string())?,
-                data.to_vec(),
-            ))?;
+            let request_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
+            let payload = data.to_vec();
+            let result = bridge.run(move |client| async move {
+                client
+                    .upsert_lancedb(space_id, binding_id, request_json, payload)
+                    .await
+            })?;
             self.log_if_slow(
                 "vector_upsert",
                 started_at,
@@ -428,11 +430,12 @@ impl LanceDbSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().search_lancedb(
-                space_id,
-                binding_id,
-                serde_json::to_string(input).map_err(|error| error.to_string())?,
-            ))?;
+            let request_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
+            let result = bridge.run(move |client| async move {
+                client
+                    .search_lancedb(space_id, binding_id, request_json)
+                    .await
+            })?;
             self.log_if_slow(
                 "vector_search",
                 started_at,
@@ -498,11 +501,12 @@ impl LanceDbSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().delete_lancedb(
-                space_id,
-                binding_id,
-                serde_json::to_string(input).map_err(|error| error.to_string())?,
-            ))?;
+            let request_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
+            let result = bridge.run(move |client| async move {
+                client
+                    .delete_lancedb(space_id, binding_id, request_json)
+                    .await
+            })?;
             self.log_if_slow("delete", started_at, None);
             return Ok(json!({
                 "message": result.message,
@@ -529,11 +533,12 @@ impl LanceDbSkillBinding {
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
             let binding_id = self.controller_binding_id();
-            let result = bridge.block_on(bridge.client().drop_lancedb_table(
-                space_id,
-                binding_id,
-                require_string_field(input, "table_name")?.to_string(),
-            ))?;
+            let table_name = require_string_field(input, "table_name")?.to_string();
+            let result = bridge.run(move |client| async move {
+                client
+                    .drop_lancedb_table(space_id, binding_id, table_name)
+                    .await
+            })?;
             self.log_if_slow("drop_table", started_at, None);
             return Ok(json!({ "message": result.message }));
         }
@@ -886,15 +891,18 @@ impl LanceDbSkillHost {
                 .clone();
             let controller_space_id = controller_space_id_for_binding(&binding_context);
             let controller_binding_id = binding_context.binding_tag.clone();
+            let controller_database_path = database_path.clone();
             controller.attach_binding(&binding_context)?;
-            controller.block_on(controller.client().enable_lancedb(
-                ControllerLanceDbEnableRequest {
-                    space_id: controller_space_id,
-                    binding_id: controller_binding_id,
-                    default_db_path: database_path.clone(),
-                    ..ControllerLanceDbEnableRequest::default()
-                },
-            ))?;
+            controller.run(move |client| async move {
+                client
+                    .enable_lancedb(ControllerLanceDbEnableRequest {
+                        space_id: controller_space_id,
+                        binding_id: controller_binding_id,
+                        default_db_path: controller_database_path,
+                        ..ControllerLanceDbEnableRequest::default()
+                    })
+                    .await
+            })?;
             (
                 database_path.clone(),
                 None,

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use vldb_controller_client::{
     ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode, SpaceKind,
     SpaceRegistration,
@@ -65,8 +65,9 @@ impl LuaRuntimeSpaceControllerBridge {
         let runtime = Runtime::new()
             .map_err(|error| format!("failed to create controller tokio runtime: {}", error))?;
         let client = ControllerClient::new(config, registration);
-        runtime
-            .block_on(client.connect())
+        run_controller_operation_with_client(&runtime, &client, |client| async move {
+            client.connect().await
+        })
             .map_err(|error| format!("failed to connect space controller client: {}", error))?;
         Ok(Arc::new(Self {
             client,
@@ -74,25 +75,20 @@ impl LuaRuntimeSpaceControllerBridge {
         }))
     }
 
-    /// Execute one async controller client operation inside the dedicated runtime.
-    /// 在专用运行时中执行一次异步控制器客户端操作。
-    pub fn block_on<F, T>(&self, future: F) -> Result<T, String>
+    /// Execute one controller SDK operation while transparently handling sync and async host threads.
+    /// 透明兼容同步线程与异步宿主线程，执行一次控制器 SDK 操作。
+    pub fn run<F, Fut, T>(&self, operation: F) -> Result<T, String>
     where
-        F: Future<Output = Result<T, vldb_controller_client::client::BoxError>>,
+        F: FnOnce(ControllerClient) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, vldb_controller_client::client::BoxError>> + Send + 'static,
+        T: Send + 'static,
     {
         let runtime = self
             .runtime
             .lock()
             .map_err(|_| "controller runtime lock poisoned".to_string())?;
-        runtime
-            .block_on(future)
+        run_controller_operation_with_client(&runtime, &self.client, operation)
             .map_err(|error| format!("space controller request failed: {}", error))
-    }
-
-    /// Return the shared controller client SDK reference used by the bridge.
-    /// 返回桥接内部使用的共享控制器客户端 SDK 引用。
-    pub fn client(&self) -> &ControllerClient {
-        &self.client
     }
 
     /// Attach one stable binding context as one controller space before backend operations start.
@@ -104,8 +100,37 @@ impl LuaRuntimeSpaceControllerBridge {
             space_kind: map_space_kind(&binding.space_label),
             space_root: binding.space_root.clone(),
         };
-        self.block_on(self.client.attach_space(registration))
+        self.run(move |client| async move { client.attach_space(registration).await })
             .map(|_| ())
+    }
+}
+
+/// Execute one controller SDK operation safely from both sync code and threads already inside a Tokio runtime.
+/// 兼容同步代码与已处于 Tokio 运行时中的线程，安全执行一次控制器 SDK 操作。
+fn run_controller_operation_with_client<F, Fut, T>(
+    runtime: &Runtime,
+    client: &ControllerClient,
+    operation: F,
+) -> Result<T, vldb_controller_client::client::BoxError>
+where
+    F: FnOnce(ControllerClient) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T, vldb_controller_client::client::BoxError>> + Send + 'static,
+    T: Send + 'static,
+{
+    let client_clone = client.clone();
+    if let Ok(handle) = Handle::try_current() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        tokio::task::block_in_place(|| {
+            handle.spawn(async move {
+                let result = operation(client_clone).await;
+                let _ = sender.send(result);
+            });
+            receiver
+                .recv()
+                .unwrap_or_else(|_| Err("space controller task channel closed".into()))
+        })
+    } else {
+        runtime.block_on(operation(client_clone))
     }
 }
 
