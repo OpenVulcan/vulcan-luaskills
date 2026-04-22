@@ -1600,7 +1600,7 @@ fn ffi_error_status(error_out: *mut *mut c_char, message: impl Into<String>) -> 
 /// Clone one host string into one LuaSkills-owned heap string so callbacks can return safely across FFI.
 /// 将宿主字符串克隆到 LuaSkills 管理的堆字符串，便于回调安全跨 FFI 返回。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_string_clone(value: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_string_clone(value: *const c_char) -> *mut c_char {
     if value.is_null() {
         return alloc_c_string("");
     }
@@ -1634,7 +1634,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_bytes_free(value: *mut u8, len: us
 /// Register or clear one SQLite standard provider callback for host-managed database integration.
 /// 为宿主管理数据库集成注册或清理一个 SQLite 标准 provider 回调。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_callback(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_callback(
     callback: Option<FfiSqliteProviderCallback>,
     user_data: *mut c_void,
     error_out: *mut *mut c_char,
@@ -1653,7 +1653,7 @@ pub extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_callback(
 /// Register or clear one LanceDB standard provider callback for host-managed database integration.
 /// 为宿主管理数据库集成注册或清理一个 LanceDB 标准 provider 回调。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_callback(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_callback(
     callback: Option<FfiLanceDbProviderCallback>,
     user_data: *mut c_void,
     error_out: *mut *mut c_char,
@@ -1672,7 +1672,7 @@ pub extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_callback(
 /// Register or clear one SQLite JSON provider callback for cross-language host integration.
 /// 为跨语言宿主集成注册或清理一个 SQLite JSON provider 回调。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
     callback: Option<FfiJsonProviderCallback>,
     user_data: *mut c_void,
     error_out: *mut *mut c_char,
@@ -1691,7 +1691,7 @@ pub extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
 /// Register or clear one LanceDB JSON provider callback for cross-language host integration.
 /// 为跨语言宿主集成注册或清理一个 LanceDB JSON provider 回调。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_json_callback(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_json_callback(
     callback: Option<FfiJsonProviderCallback>,
     user_data: *mut c_void,
     error_out: *mut *mut c_char,
@@ -1834,7 +1834,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_uninstall_result_free(
 /// Return the stable FFI version string through the standard C ABI surface.
 /// 通过标准 C ABI 接口返回稳定的 FFI 版本字符串。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_version(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_version(
     version_out: *mut *mut c_char,
     error_out: *mut *mut c_char,
 ) -> i32 {
@@ -1850,7 +1850,7 @@ pub extern "C" fn vulcan_luaskills_ffi_version(
 /// Return the exported FFI entrypoint names through the standard C ABI surface.
 /// 通过标准 C ABI 接口返回已导出 FFI 入口点名称。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_describe(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_describe(
     functions_out: *mut *mut FfiStringArray,
     error_out: *mut *mut c_char,
 ) -> i32 {
@@ -1867,7 +1867,7 @@ pub extern "C" fn vulcan_luaskills_ffi_describe(
 /// Create one runtime engine through the standard C ABI surface.
 /// 通过标准 C ABI 接口创建单个运行时引擎。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_engine_new(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_new(
     options: *const FfiLuaEngineOptions,
     engine_id_out: *mut u64,
     error_out: *mut *mut c_char,
@@ -1903,7 +1903,7 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_new(
 /// Free one runtime engine through the standard C ABI surface.
 /// 通过标准 C ABI 接口释放单个运行时引擎。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_engine_free(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_free(
     engine_id: u64,
     error_out: *mut *mut c_char,
 ) -> i32 {
@@ -1923,7 +1923,7 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_free(
 /// Load skills from one legacy directory pair through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一组旧目录风格根参数加载技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_load_from_dirs(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
@@ -1951,7 +1951,7 @@ pub extern "C" fn vulcan_luaskills_ffi_load_from_dirs(
 /// Load skills from one ordered root chain through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一条有序根链加载技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_load_from_roots(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_roots(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -1975,7 +1975,7 @@ pub extern "C" fn vulcan_luaskills_ffi_load_from_roots(
 /// Reload skills from one legacy directory pair through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一组旧目录风格根参数重载技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_reload_from_dirs(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
@@ -2003,7 +2003,7 @@ pub extern "C" fn vulcan_luaskills_ffi_reload_from_dirs(
 /// Reload skills from one ordered root chain through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一条有序根链重载技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2027,7 +2027,7 @@ pub extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
 /// List runtime entries through the standard C ABI surface.
 /// 通过标准 C ABI 接口列出运行时入口。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_list_entries(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_list_entries(
     engine_id: u64,
     entries_out: *mut *mut FfiRuntimeEntryDescriptorList,
     error_out: *mut *mut c_char,
@@ -2056,7 +2056,7 @@ pub extern "C" fn vulcan_luaskills_ffi_list_entries(
 /// List runtime help trees through the standard C ABI surface.
 /// 通过标准 C ABI 接口列出运行时帮助树。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_list_skill_help(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_list_skill_help(
     engine_id: u64,
     help_out: *mut *mut FfiRuntimeSkillHelpDescriptorList,
     error_out: *mut *mut c_char,
@@ -2085,7 +2085,7 @@ pub extern "C" fn vulcan_luaskills_ffi_list_skill_help(
 /// Render one help detail through the standard C ABI surface.
 /// 通过标准 C ABI 接口渲染单个帮助详情。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
     engine_id: u64,
     skill_id: *const c_char,
     flow_name: *const c_char,
@@ -2125,7 +2125,7 @@ pub extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
 /// Resolve prompt argument completions through the standard C ABI surface.
 /// 通过标准 C ABI 接口解析提示词参数补全项。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions(
     engine_id: u64,
     prompt_name: *const c_char,
     argument_name: *const c_char,
@@ -2163,7 +2163,7 @@ pub extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions(
 /// Check whether one tool belongs to a Lua skill through the standard C ABI surface.
 /// 通过标准 C ABI 接口检查单个工具是否属于 Lua 技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_is_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_is_skill(
     engine_id: u64,
     tool_name: *const c_char,
     value_out: *mut u8,
@@ -2190,7 +2190,7 @@ pub extern "C" fn vulcan_luaskills_ffi_is_skill(
 /// Resolve the owning skill id of one tool through the standard C ABI surface.
 /// 通过标准 C ABI 接口解析单个工具所属的技能标识符。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
     engine_id: u64,
     tool_name: *const c_char,
     skill_id_out: *mut *mut c_char,
@@ -2219,7 +2219,7 @@ pub extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
 /// Call one loaded skill entry through the standard C ABI surface.
 /// 通过标准 C ABI 接口调用单个已加载技能入口。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_call_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill(
     engine_id: u64,
     tool_name: *const c_char,
     args_json: *const c_char,
@@ -2258,7 +2258,7 @@ pub extern "C" fn vulcan_luaskills_ffi_call_skill(
 /// Execute arbitrary Lua code through the standard C ABI surface.
 /// 通过标准 C ABI 接口执行任意 Lua 代码。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_run_lua(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua(
     engine_id: u64,
     code: *const c_char,
     args_json: *const c_char,
@@ -2303,7 +2303,7 @@ pub extern "C" fn vulcan_luaskills_ffi_run_lua(
 /// Disable one skill through legacy directory-style roots via the standard C ABI surface.
 /// 通过标准 C ABI 接口按旧目录风格根参数停用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
@@ -2346,7 +2346,7 @@ pub extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs(
 /// Disable one skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链停用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_disable_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2380,7 +2380,7 @@ pub extern "C" fn vulcan_luaskills_ffi_disable_skill(
 /// Disable one skill on the system plane through legacy directory-style roots.
 /// 通过标准 C ABI 接口按旧目录风格根参数在 system 平面停用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
@@ -2423,7 +2423,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs(
 /// Disable one skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面停用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2457,7 +2457,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill(
 /// Enable one skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链启用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_enable_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_enable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2486,7 +2486,7 @@ pub extern "C" fn vulcan_luaskills_ffi_enable_skill(
 /// Enable one skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面启用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_enable_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_enable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2515,7 +2515,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_enable_skill(
 /// Uninstall one skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链卸载单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_uninstall_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_uninstall_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2554,7 +2554,7 @@ pub extern "C" fn vulcan_luaskills_ffi_uninstall_skill(
 /// Uninstall one skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面卸载单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2593,7 +2593,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill(
 /// Install one managed skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链安装单个受管技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_install_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_install_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2633,7 +2633,7 @@ pub extern "C" fn vulcan_luaskills_ffi_install_skill(
 /// Install one managed skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面安装单个受管技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_install_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_install_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2673,7 +2673,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_install_skill(
 /// Update one managed skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链更新单个受管技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_update_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_update_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2713,7 +2713,7 @@ pub extern "C" fn vulcan_luaskills_ffi_update_skill(
 /// Update one managed skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面更新单个受管技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_update_skill(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_update_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,

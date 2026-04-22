@@ -260,6 +260,12 @@ lib 会一并提供稳定绑定上下文：
 
 对应释放由 `luaskills` 内部自动完成。
 
+除此之外，还必须遵守以下约束：
+
+- callback 应在 `engine_new` 前注册，避免 engine 创建时拍到旧 callback 快照
+- callback 不允许把 Rust panic、C++ exception 或其他异常机制穿过 C ABI 边界
+- 若一个进程内需要多套不同数据库 callback 逻辑，应分别创建 engine，而不是依赖“创建后切换全局 callback”
+
 ## 7. JSON 回调模式
 
 ### SQLite
@@ -339,6 +345,12 @@ JSON 回调模式下，宿主收到的是一整份 JSON 请求字符串。
 - `drop_table`
 
 如果宿主启用了某个数据库的 `host_callback` 模式，却没有注册对应回调，运行时会直接报错，不会静默回退。
+
+在 `beta` / `v0.1.0` 发布阶段，这条规则应被视为正式接入契约的一部分：
+
+- `host_callback` 不会自动补全缺失 callback
+- callback 注册顺序错误属于宿主初始化错误
+- 建议固定采用“注册 callback -> 创建 engine -> load/reload -> 调用”的启动顺序
 
 ## 9. 宿主应该如何决定数据库落点
 

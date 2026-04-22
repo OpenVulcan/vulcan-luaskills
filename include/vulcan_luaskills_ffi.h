@@ -9,6 +9,23 @@ Stable dual-surface C ABI exported by vulcan-luaskills.
 vulcan-luaskills 导出的稳定双接口 C ABI 接口面。
 */
 
+/*
+Beta integration contract for v0.1.0:
+- This header is a low-level ABI for controlled host integrations.
+- Returned memory must be released only with the matching luaskills free function.
+- Host callbacks must be registered before engine creation when callback-based modes are used.
+- Callbacks must not unwind across the C ABI boundary.
+- Same-thread reentry into the same engine is not supported.
+- Skills are treated as trusted code by default; this ABI does not promise sandbox isolation.
+v0.1.0 beta 集成契约：
+- 当前头文件是面向受控宿主集成的低层 ABI。
+- 所有返回内存都只能使用匹配的 luaskills 释放函数处理。
+- 使用 callback 模式时，宿主必须先注册 callback，再创建 engine。
+- callback 不允许把异常跨越 C ABI 边界传播。
+- 不支持同一线程内对同一 engine 的重入调用。
+- 当前默认将 skill 视为受信代码，本 ABI 不承诺沙箱隔离。
+*/
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -309,7 +326,15 @@ typedef struct FfiSkillUninstallResult {
     char *message;
 } FfiSkillUninstallResult;
 
+/*
+JSON callback must return one luaskills-owned string created by vulcan_luaskills_ffi_string_clone or null on failure.
+JSON 回调应返回由 vulcan_luaskills_ffi_string_clone 创建的 luaskills 所有字符串，失败时返回 null。
+*/
 typedef char *(*FfiJsonProviderCallback)(const char *request_json, void *user_data);
+/*
+Standard callbacks must fill outputs with luaskills-owned allocations and must never unwind across the ABI boundary.
+标准 callback 必须写入 luaskills 所有的输出内存，且绝不能把异常跨越 ABI 边界传播。
+*/
 typedef int32_t (*FfiSqliteProviderCallback)(
     const FfiSqliteProviderRequest *request,
     void *user_data,
@@ -327,27 +352,57 @@ typedef int32_t (*FfiLanceDbProviderCallback)(
 
 /*
 Free one heap-allocated JSON string returned by the FFI layer.
+Only pass pointers returned by luaskills FFI string-producing functions to string_free.
 释放一段由 FFI 层返回并在堆上分配的 JSON 字符串。
+只能将 luaskills FFI 产出的字符串指针传给 string_free。
 */
 void vulcan_luaskills_ffi_string_free(char *value);
+/*
+Clone one host-owned string into one luaskills-owned heap string for callback returns.
+将宿主拥有的字符串克隆为 luaskills 自主管理的堆字符串，供 callback 返回使用。
+*/
 char *vulcan_luaskills_ffi_string_clone(const char *value);
+/*
+Clone one host-owned byte buffer into one luaskills-owned heap buffer for callback returns.
+将宿主拥有的字节缓冲克隆为 luaskills 自主管理的堆缓冲，供 callback 返回使用。
+*/
 uint8_t *vulcan_luaskills_ffi_bytes_clone(const uint8_t *value, size_t len);
+/*
+Free one luaskills-owned heap byte buffer created by vulcan_luaskills_ffi_bytes_clone.
+释放由 vulcan_luaskills_ffi_bytes_clone 创建的 luaskills 自主管理堆字节缓冲。
+*/
 void vulcan_luaskills_ffi_bytes_free(uint8_t *value, size_t len);
+/*
+Register or clear the SQLite host callback before engine creation.
+在创建 engine 前注册或清理 SQLite 宿主 callback。
+*/
 int32_t vulcan_luaskills_ffi_set_sqlite_provider_callback(
     FfiSqliteProviderCallback callback,
     void *user_data,
     char **error_out
 );
+/*
+Register or clear the LanceDB host callback before engine creation.
+在创建 engine 前注册或清理 LanceDB 宿主 callback。
+*/
 int32_t vulcan_luaskills_ffi_set_lancedb_provider_callback(
     FfiLanceDbProviderCallback callback,
     void *user_data,
     char **error_out
 );
+/*
+Register or clear the SQLite JSON callback before engine creation.
+在创建 engine 前注册或清理 SQLite JSON callback。
+*/
 int32_t vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
     FfiJsonProviderCallback callback,
     void *user_data,
     char **error_out
 );
+/*
+Register or clear the LanceDB JSON callback before engine creation.
+在创建 engine 前注册或清理 LanceDB JSON callback。
+*/
 int32_t vulcan_luaskills_ffi_set_lancedb_provider_json_callback(
     FfiJsonProviderCallback callback,
     void *user_data,

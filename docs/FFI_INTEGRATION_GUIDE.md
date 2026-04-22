@@ -231,6 +231,36 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 **凡是 FFI 分配出来的结果结构，必须使用对应 free 函数释放。**
 
+### 6.4 beta / v0.1.0 发布边界
+
+当前 FFI 发布面应按以下定位理解：
+
+- 当前版本更适合作为 `beta` / `v0.1.0` 的**受控宿主集成接口**
+- 当前版本的主集成方式仍然是 Rust 直连，FFI 主要服务于非 Rust 宿主或跨语言桥接
+- FFI 是低层 ABI，不承诺“误用后仍然安全”，宿主必须严格遵守本文档中的所有权、线程与回调规则
+- 当前运行时默认把 skill 当作**受信代码**看待，FFI 文档不提供 Lua skill 沙箱安全承诺
+
+### 6.5 必须遵守的 FFI 契约
+
+以下规则应视为强约束，而不是最佳实践建议：
+
+- `vulcan_luaskills_ffi_string_free` 只能释放 **luaskills 自己分配并返回** 的字符串
+- `vulcan_luaskills_ffi_string_clone` / `vulcan_luaskills_ffi_bytes_clone` 用于把宿主自己的内存复制成 luaskills 自主管理的返回值
+- 宿主不能把自己分配的 `malloc/new/string buffer` 直接交给 `vulcan_luaskills_ffi_string_free`
+- 所有传入 FFI 的裸指针、切片指针、输出指针都必须在调用期间保持有效
+- 标准 callback 与 JSON callback 都**不能**把 Rust panic、C++ exception 或其他异常机制穿过 C ABI 边界
+- 同一线程内，不支持在一个 engine 的 FFI 调用尚未返回时再次重入同一个 engine
+- 若宿主需要数据库 callback 或运行时技能管理 callback，必须先注册 callback，再创建 engine
+
+### 6.6 回调与快照规则
+
+当前回调模型需要宿主特别注意：
+
+- database provider callback 会在 `engine_new` 时拍快照
+- engine 创建完成后再修改回调注册表，不会 retroactive 地影响已存在 engine
+- 若一个进程内需要多套不同 callback 逻辑，应按 callback 集合分别创建 engine，而不是复用同一个 engine 再切换全局回调
+- 对动态语言宿主，应优先从 JSON callback 模式接入，因为所有权模型更简单，误用面更小
+
 ## 7. 启动条件与前置要求
 
 ### 7.1 引擎创建阶段必须提供的关键配置
@@ -280,6 +310,25 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 真正被拉起的 controller 服务程序，不是通过 Cargo 把二进制嵌进宿主，而是由宿主自行复制并管理
 - 也就是说，**Rust SDK 走 git 固定版本，controller 可执行文件走宿主本地复制路径**
 - 如果宿主要连接远端 controller 或使用远端主机名端点，必须关闭 `auto_spawn`，避免把远端地址错误地当成本地 bind 地址去拉起新进程
+
+### 7.1.2 callback 注册前置要求
+
+若宿主准备使用：
+
+- `host_callback`
+- `vulcan.runtime.skills.*` 的运行时技能管理桥接
+
+则应在 `engine_new` 前完成所有必需 callback 注册。
+
+原因不是初始化顺序习惯，而是当前运行时会在 engine 创建时捕获关键 callback 状态：
+
+- 数据库 provider callback 采用 engine 私有快照
+- 技能管理桥接在运行时会显式检查宿主 callback 是否可用
+
+因此：
+
+- 先 `engine_new` 再注册 callback，不应被视为可靠初始化顺序
+- 正式宿主接入应把“注册 callback -> 创建 engine -> load/reload -> call”作为固定启动流程
 
 ### 7.2 生命周期接口的前置要求
 

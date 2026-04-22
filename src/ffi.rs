@@ -600,7 +600,9 @@ pub extern "C" fn vulcan_luaskills_ffi_describe_json() -> *mut c_char {
 /// Create one new LuaSkills engine instance and return its stable FFI handle id.
 /// 创建一个新的 LuaSkills 引擎实例，并返回其稳定的 FFI 句柄标识。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_engine_new_json(input_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_new_json(
+    input_json: *const c_char,
+) -> *mut c_char {
     let request = match decode_json_request::<EngineNewJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_engine_new_json",
@@ -625,7 +627,9 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_new_json(input_json: *const c_char
 /// Free one existing LuaSkills engine handle.
 /// 释放一个现有的 LuaSkills 引擎句柄。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_engine_free_json(input_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_free_json(
+    input_json: *const c_char,
+) -> *mut c_char {
     let request = match decode_json_request::<EngineIdJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_engine_free_json",
@@ -646,7 +650,7 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_free_json(input_json: *const c_cha
 /// Load skills from legacy directory-style roots through the JSON FFI surface.
 /// 通过 JSON FFI 入口按旧目录风格根参数加载技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_load_from_dirs_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_dirs_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<EngineDirsJsonRequest>(
@@ -669,7 +673,7 @@ pub extern "C" fn vulcan_luaskills_ffi_load_from_dirs_json(
 /// Load skills from one ordered root chain through the JSON FFI surface.
 /// 通过 JSON FFI 入口按有序根链加载技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_load_from_roots_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_roots_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<EngineRootsJsonRequest>(
@@ -692,7 +696,7 @@ pub extern "C" fn vulcan_luaskills_ffi_load_from_roots_json(
 /// Reload skills from legacy directory-style roots through the JSON FFI surface.
 /// 通过 JSON FFI 入口按旧目录风格根参数重载技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_reload_from_dirs_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_dirs_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<EngineDirsJsonRequest>(
@@ -715,7 +719,7 @@ pub extern "C" fn vulcan_luaskills_ffi_reload_from_dirs_json(
 /// Reload skills from one ordered root chain through the JSON FFI surface.
 /// 通过 JSON FFI 入口按有序根链重载技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_reload_from_roots_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_roots_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<EngineRootsJsonRequest>(
@@ -738,7 +742,9 @@ pub extern "C" fn vulcan_luaskills_ffi_reload_from_roots_json(
 /// List runtime entry descriptors through the JSON FFI surface.
 /// 通过 JSON FFI 入口列出运行时入口描述。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_list_entries_json(input_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_list_entries_json(
+    input_json: *const c_char,
+) -> *mut c_char {
     let request = match decode_json_request::<EngineIdJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_list_entries_json",
@@ -755,7 +761,7 @@ pub extern "C" fn vulcan_luaskills_ffi_list_entries_json(input_json: *const c_ch
 /// List structured help trees through the JSON FFI surface.
 /// 通过 JSON FFI 入口列出结构化帮助树。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_list_skill_help_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_list_skill_help_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<EngineIdJsonRequest>(
@@ -774,7 +780,7 @@ pub extern "C" fn vulcan_luaskills_ffi_list_skill_help_json(
 /// Render one structured help detail payload through the JSON FFI surface.
 /// 通过 JSON FFI 入口渲染单个结构化帮助详情载荷。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<RenderHelpJsonRequest>(
@@ -799,7 +805,7 @@ pub extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail_json(
 /// Resolve prompt argument completion candidates through the JSON FFI surface.
 /// 通过 JSON FFI 入口解析提示词参数补全候选项。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<PromptCompletionJsonRequest>(
@@ -820,7 +826,9 @@ pub extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions_json(
 /// Check whether one canonical tool name belongs to one Lua skill entry.
 /// 检查某个 canonical 工具名是否属于 Lua 技能入口。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_is_skill_json(input_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_is_skill_json(
+    input_json: *const c_char,
+) -> *mut c_char {
     let request = match decode_json_request::<IsSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_is_skill_json",
@@ -839,7 +847,7 @@ pub extern "C" fn vulcan_luaskills_ffi_is_skill_json(input_json: *const c_char) 
 /// Resolve the owning skill id of one canonical tool name through the JSON FFI surface.
 /// 通过 JSON FFI 入口解析某个 canonical 工具名所属的技能标识符。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<SkillNameForToolJsonRequest>(
@@ -860,7 +868,9 @@ pub extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool_json(
 /// Call one loaded skill entry through the JSON FFI surface.
 /// 通过 JSON FFI 入口调用单个已加载技能入口。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_call_skill_json(input_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill_json(
+    input_json: *const c_char,
+) -> *mut c_char {
     let request = match decode_json_request::<CallSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_call_skill_json",
@@ -883,7 +893,9 @@ pub extern "C" fn vulcan_luaskills_ffi_call_skill_json(input_json: *const c_char
 /// Execute arbitrary Lua code through the JSON FFI surface.
 /// 通过 JSON FFI 入口执行任意 Lua 代码。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_run_lua_json(input_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua_json(
+    input_json: *const c_char,
+) -> *mut c_char {
     let request = match decode_json_request::<RunLuaJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_run_lua_json",
@@ -906,7 +918,7 @@ pub extern "C" fn vulcan_luaskills_ffi_run_lua_json(input_json: *const c_char) -
 /// Disable one skill through the ordinary skills plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在普通 skills 平面停用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<DisableSkillDirsJsonRequest>(
@@ -934,7 +946,7 @@ pub extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs_json(
 /// Disable one skill through the ordinary skills plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在普通 skills 平面停用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_disable_skill_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<DisableSkillJsonRequest>(
@@ -961,7 +973,7 @@ pub extern "C" fn vulcan_luaskills_ffi_disable_skill_json(
 /// Disable one skill through the system plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在 system 平面停用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<DisableSkillDirsJsonRequest>(
@@ -989,7 +1001,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs_json(
 /// Disable one skill through the system plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在 system 平面停用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<DisableSkillJsonRequest>(
@@ -1016,7 +1028,9 @@ pub extern "C" fn vulcan_luaskills_ffi_system_disable_skill_json(
 /// Enable one skill through the ordinary skills plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在普通 skills 平面启用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_enable_skill_json(input_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_enable_skill_json(
+    input_json: *const c_char,
+) -> *mut c_char {
     let request = match decode_json_request::<EnableSkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_enable_skill_json",
@@ -1037,7 +1051,7 @@ pub extern "C" fn vulcan_luaskills_ffi_enable_skill_json(input_json: *const c_ch
 /// Enable one skill through the system plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在 system 平面启用单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_enable_skill_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_enable_skill_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<EnableSkillJsonRequest>(
@@ -1060,7 +1074,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_enable_skill_json(
 /// Uninstall one skill through the ordinary skills plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在普通 skills 平面卸载单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_uninstall_skill_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_uninstall_skill_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<UninstallSkillJsonRequest>(
@@ -1083,7 +1097,7 @@ pub extern "C" fn vulcan_luaskills_ffi_uninstall_skill_json(
 /// Uninstall one skill through the system plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在 system 平面卸载单个技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<UninstallSkillJsonRequest>(
@@ -1106,7 +1120,7 @@ pub extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill_json(
 /// Install one managed skill through the ordinary skills plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在普通 skills 平面安装单个受管技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_install_skill_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_install_skill_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<ApplySkillJsonRequest>(
@@ -1129,7 +1143,7 @@ pub extern "C" fn vulcan_luaskills_ffi_install_skill_json(
 /// Install one managed skill through the system plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在 system 平面安装单个受管技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_install_skill_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_install_skill_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<ApplySkillJsonRequest>(
@@ -1152,7 +1166,9 @@ pub extern "C" fn vulcan_luaskills_ffi_system_install_skill_json(
 /// Update one managed skill through the ordinary skills plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在普通 skills 平面更新单个受管技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_update_skill_json(input_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vulcan_luaskills_ffi_update_skill_json(
+    input_json: *const c_char,
+) -> *mut c_char {
     let request = match decode_json_request::<ApplySkillJsonRequest>(
         input_json,
         "vulcan_luaskills_ffi_update_skill_json",
@@ -1173,7 +1189,7 @@ pub extern "C" fn vulcan_luaskills_ffi_update_skill_json(input_json: *const c_ch
 /// Update one managed skill through the system plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在 system 平面更新单个受管技能。
 #[unsafe(no_mangle)]
-pub extern "C" fn vulcan_luaskills_ffi_system_update_skill_json(
+pub unsafe extern "C" fn vulcan_luaskills_ffi_system_update_skill_json(
     input_json: *const c_char,
 ) -> *mut c_char {
     let request = match decode_json_request::<ApplySkillJsonRequest>(
