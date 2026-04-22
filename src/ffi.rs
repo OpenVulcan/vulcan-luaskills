@@ -1,8 +1,9 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -40,9 +41,19 @@ struct FfiJsonEnvelope<T: Serialize> {
 /// One engine registry entry stored behind one stable numeric FFI handle id.
 /// 通过稳定数值 FFI 句柄标识存放的单个引擎注册表条目。
 pub(crate) struct FfiEngineSlot {
-    /// Mutable runtime engine instance owned by the current FFI handle.
-    /// 由当前 FFI 句柄拥有的可变运行时引擎实例。
-    pub(crate) engine: LuaEngine,
+    /// Independently locked runtime engine instance owned by the current FFI handle.
+    /// 由当前 FFI 句柄拥有并独立加锁的运行时引擎实例。
+    pub(crate) engine: Arc<Mutex<LuaEngine>>,
+}
+
+impl FfiEngineSlot {
+    /// Wrap one runtime engine into one independently locked shared FFI handle slot.
+    /// 将单个运行时引擎封装为一个可独立加锁的共享 FFI 句柄槽位。
+    pub(crate) fn new(engine: LuaEngine) -> Self {
+        Self {
+            engine: Arc::new(Mutex::new(engine)),
+        }
+    }
 }
 
 /// One JSON request used to create one runtime engine instance.
@@ -324,6 +335,50 @@ pub(crate) static FFI_ENGINE_REGISTRY: OnceLock<Mutex<HashMap<u64, FfiEngineSlot
     OnceLock::new();
 pub(crate) static FFI_ENGINE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+thread_local! {
+    /// Active engine ids currently executing on the calling thread.
+    /// 当前调用线程上正在执行中的引擎标识列表。
+    static ACTIVE_FFI_ENGINE_IDS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One thread-local engine activity guard used to reject same-thread reentrant access.
+/// 用于拒绝同线程重入访问的线程局部引擎活动守卫。
+struct ActiveFfiEngineGuard {
+    engine_id: u64,
+}
+
+impl ActiveFfiEngineGuard {
+    /// Enter one engine activity scope on the current thread.
+    /// 在当前线程上进入单个引擎活动作用域。
+    fn enter(engine_id: u64) -> Result<Self, String> {
+        ACTIVE_FFI_ENGINE_IDS.with(|active_ids| {
+            let mut active_ids = active_ids.borrow_mut();
+            if active_ids.contains(&engine_id) {
+                return Err(format!(
+                    "FFI engine {} reentrant access is not allowed on the same thread",
+                    engine_id
+                ));
+            }
+            active_ids.push(engine_id);
+            Ok(Self { engine_id })
+        })
+    }
+}
+
+impl Drop for ActiveFfiEngineGuard {
+    fn drop(&mut self) {
+        ACTIVE_FFI_ENGINE_IDS.with(|active_ids| {
+            let mut active_ids = active_ids.borrow_mut();
+            if let Some(position) = active_ids
+                .iter()
+                .rposition(|active| *active == self.engine_id)
+            {
+                active_ids.remove(position);
+            }
+        });
+    }
+}
+
 /// Return the default empty JSON object payload.
 /// 返回默认的空 JSON 对象载荷。
 fn default_json_object() -> Value {
@@ -334,6 +389,18 @@ fn default_json_object() -> Value {
 /// 返回 FFI 层使用的全局引擎注册表。
 pub(crate) fn ffi_engine_registry() -> &'static Mutex<HashMap<u64, FfiEngineSlot>> {
     FFI_ENGINE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Clone one shared engine handle out of the global registry without holding the registry lock during execution.
+/// 从全局注册表中克隆一个共享引擎句柄，并确保执行期间不再持有注册表锁。
+fn clone_engine_handle(engine_id: u64) -> Result<Arc<Mutex<LuaEngine>>, String> {
+    let registry = ffi_engine_registry()
+        .lock()
+        .map_err(|_| "FFI engine registry lock poisoned".to_string())?;
+    registry
+        .get(&engine_id)
+        .map(|slot| Arc::clone(&slot.engine))
+        .ok_or_else(|| format!("FFI engine {} not found", engine_id))
 }
 
 /// Convert one Rust value into one heap-allocated UTF-8 JSON string for foreign callers.
@@ -398,13 +465,12 @@ pub(crate) fn with_engine<T, F>(engine_id: u64, operation: F) -> Result<T, Strin
 where
     F: FnOnce(&LuaEngine) -> Result<T, String>,
 {
-    let registry = ffi_engine_registry()
+    let engine_handle = clone_engine_handle(engine_id)?;
+    let _active_guard = ActiveFfiEngineGuard::enter(engine_id)?;
+    let engine = engine_handle
         .lock()
-        .map_err(|_| "FFI engine registry lock poisoned".to_string())?;
-    let slot = registry
-        .get(&engine_id)
-        .ok_or_else(|| format!("FFI engine {} not found", engine_id))?;
-    operation(&slot.engine)
+        .map_err(|_| format!("FFI engine {} lock poisoned", engine_id))?;
+    operation(&engine)
 }
 
 /// Execute one mutable engine operation by engine id.
@@ -413,13 +479,12 @@ pub(crate) fn with_engine_mut<T, F>(engine_id: u64, operation: F) -> Result<T, S
 where
     F: FnOnce(&mut LuaEngine) -> Result<T, String>,
 {
-    let mut registry = ffi_engine_registry()
+    let engine_handle = clone_engine_handle(engine_id)?;
+    let _active_guard = ActiveFfiEngineGuard::enter(engine_id)?;
+    let mut engine = engine_handle
         .lock()
-        .map_err(|_| "FFI engine registry lock poisoned".to_string())?;
-    let slot = registry
-        .get_mut(&engine_id)
-        .ok_or_else(|| format!("FFI engine {} not found", engine_id))?;
-    operation(&mut slot.engine)
+        .map_err(|_| format!("FFI engine {} lock poisoned", engine_id))?;
+    operation(&mut engine)
 }
 
 /// Return one stable list of all exported FFI entrypoints.
@@ -550,7 +615,7 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_new_json(input_json: *const c_char
                 Ok(registry) => registry,
                 Err(_) => return ffi_error("FFI engine registry lock poisoned"),
             };
-            registry.insert(engine_id, FfiEngineSlot { engine });
+            registry.insert(engine_id, FfiEngineSlot::new(engine));
             ffi_ok(EngineHandleJsonResult { engine_id })
         }
         Err(error) => ffi_error(error.to_string()),
@@ -1131,12 +1196,13 @@ pub extern "C" fn vulcan_luaskills_ffi_system_update_skill_json(
 #[cfg(test)]
 mod tests {
     use super::{
-        EngineHandleJsonResult, EngineIdJsonRequest, EngineNewJsonRequest,
-        vulcan_luaskills_ffi_engine_free_json, vulcan_luaskills_ffi_engine_new_json,
-        vulcan_luaskills_ffi_string_free,
+        EngineHandleJsonResult, EngineIdJsonRequest, EngineNewJsonRequest, FFI_ENGINE_COUNTER,
+        FfiEngineSlot, ffi_engine_registry, vulcan_luaskills_ffi_engine_free_json,
+        vulcan_luaskills_ffi_engine_new_json, vulcan_luaskills_ffi_string_free, with_engine,
     };
-    use crate::{LuaEngineOptions, LuaVmPoolConfig};
+    use crate::{LuaEngine, LuaEngineOptions, LuaVmPoolConfig};
     use std::ffi::{CStr, CString};
+    use std::sync::atomic::Ordering;
 
     /// Read one FFI JSON response string back into one serde_json value.
     /// 将单个 FFI JSON 响应字符串回读为一个 serde_json 值。
@@ -1147,6 +1213,40 @@ mod tests {
         let value = serde_json::from_str(text).expect("ffi json must parse");
         unsafe { vulcan_luaskills_ffi_string_free(ptr) };
         value
+    }
+
+    /// One test-only registered engine handle that cleans itself from the global registry on drop.
+    /// 一个仅供测试使用的已注册引擎句柄，并在释放时自动从全局注册表清理。
+    struct TestFfiEngineHandle {
+        engine_id: u64,
+    }
+
+    impl Drop for TestFfiEngineHandle {
+        fn drop(&mut self) {
+            if let Ok(mut registry) = ffi_engine_registry().lock() {
+                registry.remove(&self.engine_id);
+            }
+        }
+    }
+
+    /// Register one minimal engine into the global FFI registry for concurrency tests.
+    /// 将一个最小引擎注册到全局 FFI 注册表中，用于并发相关测试。
+    fn register_test_engine() -> TestFfiEngineHandle {
+        let engine = LuaEngine::new(LuaEngineOptions::new(
+            LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 30,
+            },
+            crate::LuaRuntimeHostOptions::default(),
+        ))
+        .expect("create ffi test engine");
+        let engine_id = FFI_ENGINE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        ffi_engine_registry()
+            .lock()
+            .expect("lock ffi engine registry")
+            .insert(engine_id, FfiEngineSlot::new(engine));
+        TestFfiEngineHandle { engine_id }
     }
 
     /// Verify that one engine can be created and freed through the JSON FFI surface.
@@ -1212,5 +1312,35 @@ mod tests {
             decode_response_json(vulcan_luaskills_ffi_engine_free_json(free_request.as_ptr()))
         };
         assert_eq!(free_response["ok"], true);
+    }
+
+    /// Verify that one engine operation no longer keeps the global registry mutex while running.
+    /// 验证单次引擎操作执行期间不会继续持有全局注册表互斥锁。
+    #[test]
+    fn with_engine_releases_registry_lock_before_operation() {
+        let handle = register_test_engine();
+        let result = with_engine(handle.engine_id, |_engine| {
+            let registry_lock = ffi_engine_registry().try_lock();
+            assert!(
+                registry_lock.is_ok(),
+                "registry lock should be acquirable while engine operation is running"
+            );
+            Ok(())
+        });
+        assert!(result.is_ok());
+    }
+
+    /// Verify that same-thread reentrant access returns an explicit error instead of deadlocking.
+    /// 验证同线程重入访问会返回明确错误，而不是直接死锁。
+    #[test]
+    fn with_engine_rejects_same_thread_reentry() {
+        let handle = register_test_engine();
+        let outer_result = with_engine(handle.engine_id, |_engine| {
+            let nested_result = with_engine(handle.engine_id, |_nested| Ok(()));
+            let nested_error = nested_result.expect_err("same-thread reentry should fail");
+            assert!(nested_error.contains("reentrant access"));
+            Ok(())
+        });
+        assert!(outer_result.is_ok());
     }
 }

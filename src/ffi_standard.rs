@@ -1889,7 +1889,7 @@ pub extern "C" fn vulcan_luaskills_ffi_engine_new(
             let engine_id = FFI_ENGINE_COUNTER.fetch_add(1, Ordering::Relaxed);
             match ffi_engine_registry().lock() {
                 Ok(mut registry) => {
-                    registry.insert(engine_id, crate::ffi::FfiEngineSlot { engine });
+                    registry.insert(engine_id, crate::ffi::FfiEngineSlot::new(engine));
                     unsafe { *engine_id_out = engine_id };
                     ffi_ok_status(error_out)
                 }

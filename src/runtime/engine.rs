@@ -17,6 +17,7 @@ use crate::host::callbacks::{
     RuntimeSkillManagementRequest, dispatch_skill_management_request,
     try_has_skill_management_callback,
 };
+use crate::host::database::RuntimeDatabaseProviderCallbacks;
 use crate::lancedb_host::{LanceDbSkillBinding, LanceDbSkillHost, disabled_skill_status_json};
 use crate::lua_skill::{SkillMeta, validate_luaskills_identifier, validate_luaskills_version};
 use crate::runtime_context::{RuntimeClientInfo, RuntimeRequestContext};
@@ -116,6 +117,7 @@ pub struct LuaEngine {
     pool: Arc<LuaVmPool>,
     lancedb_host: Option<Arc<LanceDbSkillHost>>,
     sqlite_host: Option<Arc<SqliteSkillHost>>,
+    database_provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
     host_options: Arc<LuaRuntimeHostOptions>,
 }
 
@@ -1269,6 +1271,431 @@ fn get_vulcan_runtime_lua_table(lua: &Lua) -> Result<Table, String> {
         .map_err(|error| format!("Failed to get vulcan.runtime.lua: {}", error))
 }
 
+/// Snapshot of the mutable core `vulcan` tables that must survive nested-call failures.
+/// 会在嵌套调用失败后恢复的 `vulcan` 可变核心表快照。
+#[derive(Clone)]
+struct VulcanCoreModuleState {
+    vulcan: Table,
+    call: Function,
+    runtime: Table,
+    runtime_skills: Table,
+    runtime_internal: Table,
+    runtime_lua: Table,
+    fs: Table,
+    path: Table,
+    process: Table,
+    os: Table,
+    json: Table,
+    cache: Table,
+    context: Table,
+    deps: Table,
+}
+
+impl VulcanCoreModuleState {
+    /// Capture the currently installed `vulcan` root tables before one nested skill call mutates them.
+    /// 在一次嵌套技能调用可能修改它们之前，捕获当前安装好的 `vulcan` 根表结构。
+    fn capture(lua: &Lua) -> Result<Self, String> {
+        let vulcan = get_vulcan_table(lua)?;
+        let runtime = get_vulcan_runtime_table(lua)?;
+        Ok(Self {
+            call: vulcan
+                .get("call")
+                .map_err(|error| format!("Failed to get vulcan.call: {}", error))?,
+            runtime_skills: runtime
+                .get("skills")
+                .map_err(|error| format!("Failed to get vulcan.runtime.skills: {}", error))?,
+            runtime_internal: runtime
+                .get("internal")
+                .map_err(|error| format!("Failed to get vulcan.runtime.internal: {}", error))?,
+            runtime_lua: runtime
+                .get("lua")
+                .map_err(|error| format!("Failed to get vulcan.runtime.lua: {}", error))?,
+            fs: vulcan
+                .get("fs")
+                .map_err(|error| format!("Failed to get vulcan.fs: {}", error))?,
+            path: vulcan
+                .get("path")
+                .map_err(|error| format!("Failed to get vulcan.path: {}", error))?,
+            process: vulcan
+                .get("process")
+                .map_err(|error| format!("Failed to get vulcan.process: {}", error))?,
+            os: vulcan
+                .get("os")
+                .map_err(|error| format!("Failed to get vulcan.os: {}", error))?,
+            json: vulcan
+                .get("json")
+                .map_err(|error| format!("Failed to get vulcan.json: {}", error))?,
+            cache: vulcan
+                .get("cache")
+                .map_err(|error| format!("Failed to get vulcan.cache: {}", error))?,
+            context: vulcan
+                .get("context")
+                .map_err(|error| format!("Failed to get vulcan.context: {}", error))?,
+            deps: vulcan
+                .get("deps")
+                .map_err(|error| format!("Failed to get vulcan.deps: {}", error))?,
+            vulcan,
+            runtime,
+        })
+    }
+
+    /// Reinstall the captured `vulcan` core table topology after one nested call corrupts it.
+    /// 在嵌套调用破坏表结构后，重新安装捕获到的 `vulcan` 核心表拓扑。
+    fn restore(&self, lua: &Lua) -> Result<(), String> {
+        self.runtime
+            .set("skills", self.runtime_skills.clone())
+            .map_err(|error| format!("Failed to restore vulcan.runtime.skills: {}", error))?;
+        self.runtime
+            .set("internal", self.runtime_internal.clone())
+            .map_err(|error| format!("Failed to restore vulcan.runtime.internal: {}", error))?;
+        self.runtime
+            .set("lua", self.runtime_lua.clone())
+            .map_err(|error| format!("Failed to restore vulcan.runtime.lua: {}", error))?;
+        self.vulcan
+            .set("call", self.call.clone())
+            .map_err(|error| format!("Failed to restore vulcan.call: {}", error))?;
+        self.vulcan
+            .set("runtime", self.runtime.clone())
+            .map_err(|error| format!("Failed to restore vulcan.runtime: {}", error))?;
+        self.vulcan
+            .set("fs", self.fs.clone())
+            .map_err(|error| format!("Failed to restore vulcan.fs: {}", error))?;
+        self.vulcan
+            .set("path", self.path.clone())
+            .map_err(|error| format!("Failed to restore vulcan.path: {}", error))?;
+        self.vulcan
+            .set("process", self.process.clone())
+            .map_err(|error| format!("Failed to restore vulcan.process: {}", error))?;
+        self.vulcan
+            .set("os", self.os.clone())
+            .map_err(|error| format!("Failed to restore vulcan.os: {}", error))?;
+        self.vulcan
+            .set("json", self.json.clone())
+            .map_err(|error| format!("Failed to restore vulcan.json: {}", error))?;
+        self.vulcan
+            .set("cache", self.cache.clone())
+            .map_err(|error| format!("Failed to restore vulcan.cache: {}", error))?;
+        self.vulcan
+            .set("context", self.context.clone())
+            .map_err(|error| format!("Failed to restore vulcan.context: {}", error))?;
+        self.vulcan
+            .set("deps", self.deps.clone())
+            .map_err(|error| format!("Failed to restore vulcan.deps: {}", error))?;
+        lua.globals()
+            .set("vulcan", self.vulcan.clone())
+            .map_err(|error| format!("Failed to restore global vulcan module: {}", error))?;
+        Ok(())
+    }
+}
+
+/// Return the non-empty skill identifier string when the captured value is usable.
+/// 当捕获到的技能标识可用时，返回其非空字符串引用。
+fn non_empty_skill_name(value: &str) -> Option<&str> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// Clear the transient `__runlua_args` global used by pooled VM requests.
+/// 清理池化虚拟机请求期间使用的临时 `__runlua_args` 全局变量。
+fn clear_runlua_args_global(lua: &Lua) -> Result<(), String> {
+    lua.globals()
+        .set("__runlua_args", LuaValue::Nil)
+        .map_err(|error| format!("Failed to clear __runlua_args: {}", error))
+}
+
+/// Reset one pooled Lua VM back to the neutral per-request baseline.
+/// 将单个池化 Lua 虚拟机重置回中性的单次请求基线状态。
+fn reset_pooled_vm_request_scope(
+    lua: &Lua,
+    host_options: &LuaRuntimeHostOptions,
+) -> Result<(), String> {
+    LuaEngine::populate_vulcan_request_context(lua, None)?;
+    populate_vulcan_internal_execution_context(lua, &VulcanInternalExecutionContext::default())?;
+    populate_vulcan_file_context(lua, None, None)?;
+    populate_vulcan_dependency_context(lua, host_options, None, None)?;
+    LuaEngine::populate_vulcan_lancedb_context(lua, None, None)?;
+    LuaEngine::populate_vulcan_sqlite_context(lua, None, None)?;
+    clear_runlua_args_global(lua)?;
+    Ok(())
+}
+
+/// One RAII guard that keeps pooled Lua VM request-scoped state isolated.
+/// 一个用于保持池化 Lua 虚拟机请求级状态隔离的 RAII 守卫。
+struct LuaVmRequestScopeGuard<'a> {
+    lease: &'a mut LuaVmLease,
+    host_options: &'a LuaRuntimeHostOptions,
+    active: bool,
+}
+
+impl<'a> LuaVmRequestScopeGuard<'a> {
+    /// Normalize one pooled VM before use and arm cleanup for all exit paths.
+    /// 在使用前归一化单个池化虚拟机，并为全部退出路径启用清理保护。
+    fn new(
+        lease: &'a mut LuaVmLease,
+        host_options: &'a LuaRuntimeHostOptions,
+    ) -> Result<Self, String> {
+        let mut guard = Self {
+            lease,
+            host_options,
+            active: true,
+        };
+        if let Err(error) = reset_pooled_vm_request_scope(guard.lua(), host_options) {
+            guard.lease.discard();
+            guard.active = false;
+            return Err(error);
+        }
+        Ok(guard)
+    }
+
+    /// Borrow the guarded Lua VM while the request scope is active.
+    /// 在请求作用域激活期间借用受守卫保护的 Lua 虚拟机。
+    fn lua(&self) -> &Lua {
+        self.lease.lua()
+    }
+
+    /// Explicitly finish the request scope and surface cleanup errors to the caller.
+    /// 显式结束当前请求作用域，并将清理错误返回给调用方。
+    fn finish(mut self) -> Result<(), String> {
+        let cleanup_result = reset_pooled_vm_request_scope(self.lua(), self.host_options);
+        if let Err(error) = cleanup_result {
+            self.lease.discard();
+            self.active = false;
+            return Err(error);
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for LuaVmRequestScopeGuard<'_> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Err(error) = reset_pooled_vm_request_scope(self.lua(), self.host_options) {
+            log_error(format!(
+                "[LuaSkill:error] Failed to reset pooled Lua VM request scope: {}",
+                error
+            ));
+            self.lease.discard();
+        }
+    }
+}
+
+/// RAII guard that restores the outer `vulcan` execution context after one nested `vulcan.call`.
+/// 在一次嵌套 `vulcan.call` 之后恢复外层 `vulcan` 执行上下文的 RAII 守卫。
+struct LuaNestedCallScopeGuard {
+    lua: Lua,
+    host_options: Arc<LuaRuntimeHostOptions>,
+    lancedb_host: Option<Arc<LanceDbSkillHost>>,
+    sqlite_host: Option<Arc<SqliteSkillHost>>,
+    core_state: VulcanCoreModuleState,
+    previous_context: LuaValue,
+    previous_client_info: LuaValue,
+    previous_client_capabilities: LuaValue,
+    previous_client_budget: LuaValue,
+    previous_tool_config: LuaValue,
+    previous_lancedb_skill_name: String,
+    previous_sqlite_skill_name: String,
+    previous_internal_context: VulcanInternalExecutionContext,
+    previous_file_context: (Option<String>, Option<String>, Option<String>),
+    active: bool,
+}
+
+impl LuaNestedCallScopeGuard {
+    /// Capture the current outer `vulcan` execution state before entering one nested skill.
+    /// 在进入一次嵌套技能调用之前捕获当前外层 `vulcan` 执行状态。
+    fn new(
+        lua: &Lua,
+        host_options: Arc<LuaRuntimeHostOptions>,
+        lancedb_host: Option<Arc<LanceDbSkillHost>>,
+        sqlite_host: Option<Arc<SqliteSkillHost>>,
+    ) -> Result<Self, String> {
+        let vulcan = get_vulcan_table(lua)?;
+        let context_table = get_vulcan_context_table(lua)?;
+        Ok(Self {
+            lua: lua.clone(),
+            host_options,
+            lancedb_host,
+            sqlite_host,
+            core_state: VulcanCoreModuleState::capture(lua)?,
+            previous_context: context_table
+                .get("request")
+                .map_err(|error| format!("Failed to read vulcan.context.request: {}", error))?,
+            previous_client_info: context_table
+                .get("client_info")
+                .map_err(|error| format!("Failed to read vulcan.context.client_info: {}", error))?,
+            previous_client_capabilities: context_table.get("client_capabilities").map_err(
+                |error| {
+                    format!(
+                        "Failed to read vulcan.context.client_capabilities: {}",
+                        error
+                    )
+                },
+            )?,
+            previous_client_budget: context_table.get("client_budget").map_err(|error| {
+                format!("Failed to read vulcan.context.client_budget: {}", error)
+            })?,
+            previous_tool_config: context_table
+                .get("tool_config")
+                .map_err(|error| format!("Failed to read vulcan.context.tool_config: {}", error))?,
+            previous_lancedb_skill_name: vulcan.get("__lancedb_skill_name").unwrap_or_default(),
+            previous_sqlite_skill_name: vulcan.get("__sqlite_skill_name").unwrap_or_default(),
+            previous_internal_context: capture_vulcan_internal_execution_context(lua)?,
+            previous_file_context: capture_vulcan_file_context(lua)?,
+            active: true,
+        })
+    }
+
+    /// Switch the current Lua VM into the nested skill request context.
+    /// 把当前 Lua 虚拟机切换到嵌套技能请求上下文。
+    fn enter_nested_call(
+        &self,
+        dispatch_entry_display_name: &str,
+        owner_skill_name: &str,
+        owner_skill_dir: &str,
+        entry_path: &str,
+        nested_invocation_context: &LuaInvocationContext,
+        target_lancedb_binding: Option<Arc<LanceDbSkillBinding>>,
+        target_sqlite_binding: Option<Arc<SqliteSkillBinding>>,
+    ) -> Result<(), String> {
+        LuaEngine::populate_vulcan_request_context(&self.lua, Some(nested_invocation_context))?;
+        populate_vulcan_internal_execution_context(
+            &self.lua,
+            &VulcanInternalExecutionContext {
+                tool_name: Some(dispatch_entry_display_name.to_string()),
+                skill_name: Some(owner_skill_name.to_string()),
+                luaexec_active: self.previous_internal_context.luaexec_active,
+                luaexec_caller_tool_name: self
+                    .previous_internal_context
+                    .luaexec_caller_tool_name
+                    .clone(),
+            },
+        )?;
+        populate_vulcan_file_context(
+            &self.lua,
+            Some(Path::new(owner_skill_dir)),
+            Some(Path::new(entry_path)),
+        )?;
+        populate_vulcan_dependency_context(
+            &self.lua,
+            self.host_options.as_ref(),
+            Some(Path::new(owner_skill_dir)),
+            Some(owner_skill_name),
+        )?;
+        LuaEngine::populate_vulcan_lancedb_context(
+            &self.lua,
+            target_lancedb_binding,
+            Some(owner_skill_name),
+        )?;
+        LuaEngine::populate_vulcan_sqlite_context(
+            &self.lua,
+            target_sqlite_binding,
+            Some(owner_skill_name),
+        )?;
+        Ok(())
+    }
+
+    /// Restore the outer `vulcan` execution state captured before the nested call began.
+    /// 恢复嵌套调用开始前捕获到的外层 `vulcan` 执行状态。
+    fn restore_previous_state(&self) -> Result<(), String> {
+        self.core_state.restore(&self.lua)?;
+        let restore_lancedb_binding = match non_empty_skill_name(&self.previous_lancedb_skill_name)
+        {
+            Some(skill_name) => self
+                .lancedb_host
+                .as_ref()
+                .map(|host| host.binding_for_skill(skill_name))
+                .transpose()?
+                .flatten(),
+            None => None,
+        };
+        let restore_sqlite_binding = match non_empty_skill_name(&self.previous_sqlite_skill_name) {
+            Some(skill_name) => self
+                .sqlite_host
+                .as_ref()
+                .map(|host| host.binding_for_skill(skill_name))
+                .transpose()?
+                .flatten(),
+            None => None,
+        };
+        LuaEngine::populate_vulcan_lancedb_context(
+            &self.lua,
+            restore_lancedb_binding,
+            non_empty_skill_name(&self.previous_lancedb_skill_name),
+        )?;
+        LuaEngine::populate_vulcan_sqlite_context(
+            &self.lua,
+            restore_sqlite_binding,
+            non_empty_skill_name(&self.previous_sqlite_skill_name),
+        )?;
+        let context_table = get_vulcan_context_table(&self.lua)?;
+        context_table
+            .set("request", self.previous_context.clone())
+            .map_err(|error| format!("Failed to restore vulcan.context.request: {}", error))?;
+        context_table
+            .set("client_info", self.previous_client_info.clone())
+            .map_err(|error| format!("Failed to restore vulcan.context.client_info: {}", error))?;
+        context_table
+            .set(
+                "client_capabilities",
+                self.previous_client_capabilities.clone(),
+            )
+            .map_err(|error| {
+                format!(
+                    "Failed to restore vulcan.context.client_capabilities: {}",
+                    error
+                )
+            })?;
+        context_table
+            .set("client_budget", self.previous_client_budget.clone())
+            .map_err(|error| {
+                format!("Failed to restore vulcan.context.client_budget: {}", error)
+            })?;
+        context_table
+            .set("tool_config", self.previous_tool_config.clone())
+            .map_err(|error| format!("Failed to restore vulcan.context.tool_config: {}", error))?;
+        populate_vulcan_internal_execution_context(&self.lua, &self.previous_internal_context)?;
+        populate_vulcan_file_context(
+            &self.lua,
+            self.previous_file_context.0.as_deref().map(Path::new),
+            self.previous_file_context.2.as_deref().map(Path::new),
+        )?;
+        populate_vulcan_dependency_context(
+            &self.lua,
+            self.host_options.as_ref(),
+            self.previous_file_context.0.as_deref().map(Path::new),
+            self.previous_internal_context.skill_name.as_deref(),
+        )?;
+        Ok(())
+    }
+
+    /// Explicitly finish the nested-call scope and surface any restore failure to the caller.
+    /// 显式结束嵌套调用作用域，并把恢复失败信息返回给调用方。
+    fn finish(mut self) -> Result<(), String> {
+        let restore_result = self.restore_previous_state();
+        self.active = false;
+        restore_result
+    }
+}
+
+impl Drop for LuaNestedCallScopeGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Err(error) = self.restore_previous_state() {
+            log_error(format!(
+                "[LuaSkill:error] Failed to restore nested vulcan.call context: {}",
+                error
+            ));
+        }
+    }
+}
+
 /// Checked-out VM guard that returns the VM back into the pool on drop.
 /// 已借出的虚拟机守卫，在释放时会自动归还到池中。
 struct LuaVmLease {
@@ -1281,6 +1708,14 @@ impl LuaVmLease {
     /// 在租约生命周期内以只读方式借用底层 Lua 虚拟机。
     fn lua(&self) -> &Lua {
         &self.vm.as_ref().expect("lua vm lease missing instance").lua
+    }
+
+    /// Permanently retire the currently leased VM instead of returning it to the pool.
+    /// 永久淘汰当前租出的虚拟机，而不是把它放回池中。
+    fn discard(&mut self) {
+        if let Some(vm) = self.vm.take() {
+            self.pool.discard(vm);
+        }
     }
 }
 
@@ -1377,6 +1812,16 @@ impl LuaVmPool {
         let mut state = self.state.lock().unwrap();
         state.available.push(vm);
         self.reap_idle_locked(&mut state);
+        self.condvar.notify_one();
+    }
+
+    /// Retire one broken VM so later borrowers receive a fresh instance instead of stale state.
+    /// 退役一个已损坏的虚拟机，确保后续借用方拿到的是新实例而不是陈旧状态。
+    fn discard(&self, _vm: LuaVm) {
+        let mut state = self.state.lock().unwrap();
+        if state.total_count > 0 {
+            state.total_count -= 1;
+        }
         self.condvar.notify_one();
     }
 
@@ -1530,12 +1975,17 @@ impl LuaEngine {
                 .clone()
                 .unwrap_or_else(ToolCacheConfig::default),
         );
+        let database_provider_callbacks = Arc::new(
+            RuntimeDatabaseProviderCallbacks::capture_process_defaults()
+                .map_err(std::io::Error::other)?,
+        );
         Ok(Self {
             skills: HashMap::new(),
             entry_registry: BTreeMap::new(),
             pool: Arc::new(LuaVmPool::new(options.pool_config)),
             lancedb_host: None,
             sqlite_host: None,
+            database_provider_callbacks,
             host_options: Arc::new(options.host_options),
         })
     }
@@ -2836,7 +3286,11 @@ impl LuaEngine {
         let lancedb_binding = if effective_lancedb.enable {
             if self.lancedb_host.is_none() {
                 self.lancedb_host = Some(Arc::new(
-                    LanceDbSkillHost::new(self.host_options.as_ref().clone()).map_err(|error| {
+                    LanceDbSkillHost::new(
+                        self.host_options.as_ref().clone(),
+                        self.database_provider_callbacks.clone(),
+                    )
+                    .map_err(|error| {
                         format!("Failed to initialize LanceDB skill host: {}", error)
                     })?,
                 ));
@@ -2866,7 +3320,11 @@ impl LuaEngine {
         let sqlite_binding = if effective_sqlite.enable {
             if self.sqlite_host.is_none() {
                 self.sqlite_host = Some(Arc::new(
-                    SqliteSkillHost::new(self.host_options.as_ref().clone()).map_err(|error| {
+                    SqliteSkillHost::new(
+                        self.host_options.as_ref().clone(),
+                        self.database_provider_callbacks.clone(),
+                    )
+                    .map_err(|error| {
                         format!("Failed to initialize SQLite skill host: {}", error)
                     })?,
                 ));
@@ -4035,8 +4493,9 @@ impl LuaEngine {
         let module_name = tool.lua_module.clone();
         let func_name = format!("__skill_{}", module_name);
 
-        let lease = self.acquire_vm()?;
-        let lua = lease.lua();
+        let mut lease = self.acquire_vm()?;
+        let scope_guard = LuaVmRequestScopeGuard::new(&mut lease, self.host_options.as_ref())?;
+        let lua = scope_guard.lua();
 
         if skill.meta.debug {
             Self::compile_skill_into_lua(lua, skill, tool, true)?;
@@ -4092,17 +4551,16 @@ impl LuaEngine {
                 e
             })
         })();
-
-        Self::populate_vulcan_request_context(lua, None)?;
-        populate_vulcan_internal_execution_context(
-            lua,
-            &VulcanInternalExecutionContext::default(),
-        )?;
-        populate_vulcan_file_context(lua, None, None)?;
-        populate_vulcan_dependency_context(lua, self.host_options.as_ref(), None, None)?;
-        Self::populate_vulcan_lancedb_context(lua, None, None)?;
-        Self::populate_vulcan_sqlite_context(lua, None, None)?;
-        call_result
+        let cleanup_result = scope_guard.finish();
+        match (call_result, cleanup_result) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(call_error), Ok(())) => Err(call_error),
+            (Err(call_error), Err(cleanup_error)) => Err(format!(
+                "{}; pooled Lua VM cleanup failed: {}",
+                call_error, cleanup_error
+            )),
+        }
     }
 
     /// Execute arbitrary Lua code and return the result.
@@ -4112,8 +4570,9 @@ impl LuaEngine {
         args: &Value,
         invocation_context: Option<&LuaInvocationContext>,
     ) -> Result<Value, String> {
-        let lease = self.acquire_vm()?;
-        let lua = lease.lua();
+        let mut lease = self.acquire_vm()?;
+        let scope_guard = LuaVmRequestScopeGuard::new(&mut lease, self.host_options.as_ref())?;
+        let lua = scope_guard.lua();
         Self::populate_vulcan_request_context(lua, invocation_context)?;
         populate_vulcan_internal_execution_context(
             lua,
@@ -4144,17 +4603,16 @@ impl LuaEngine {
 
             lua_value_to_json(&result)
         })();
-
-        Self::populate_vulcan_request_context(lua, None)?;
-        populate_vulcan_internal_execution_context(
-            lua,
-            &VulcanInternalExecutionContext::default(),
-        )?;
-        populate_vulcan_file_context(lua, None, None)?;
-        populate_vulcan_dependency_context(lua, self.host_options.as_ref(), None, None)?;
-        Self::populate_vulcan_lancedb_context(lua, None, None)?;
-        Self::populate_vulcan_sqlite_context(lua, None, None)?;
-        run_result
+        let cleanup_result = scope_guard.finish();
+        match (run_result, cleanup_result) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(run_error), Ok(())) => Err(run_error),
+            (Err(run_error), Err(cleanup_error)) => Err(format!(
+                "{}; pooled Lua VM cleanup failed: {}",
+                run_error, cleanup_error
+            )),
+        }
     }
 
     /// Execute one isolated runlua request and render it into Markdown text.
@@ -4680,8 +5138,9 @@ end
                 error
             )
         })?;
-        let lease = self.acquire_vm()?;
-        let lua = lease.lua();
+        let mut lease = self.acquire_vm()?;
+        let scope_guard = LuaVmRequestScopeGuard::new(&mut lease, self.host_options.as_ref())?;
+        let lua = scope_guard.lua();
         let help_invocation_context = LuaInvocationContext::new(
             request_context.cloned(),
             Value::Object(serde_json::Map::new()),
@@ -4762,17 +5221,16 @@ end
                 )),
             }
         })();
-
-        Self::populate_vulcan_request_context(lua, None)?;
-        populate_vulcan_internal_execution_context(
-            lua,
-            &VulcanInternalExecutionContext::default(),
-        )?;
-        populate_vulcan_file_context(lua, None, None)?;
-        populate_vulcan_dependency_context(lua, self.host_options.as_ref(), None, None)?;
-        Self::populate_vulcan_lancedb_context(lua, None, None)?;
-        Self::populate_vulcan_sqlite_context(lua, None, None)?;
-        rendered_result
+        let cleanup_result = scope_guard.finish();
+        match (rendered_result, cleanup_result) {
+            (Ok(rendered), Ok(())) => Ok(rendered),
+            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(render_error), Ok(())) => Err(render_error),
+            (Err(render_error), Err(cleanup_error)) => Err(format!(
+                "{}; pooled Lua VM cleanup failed: {}",
+                render_error, cleanup_error
+            )),
+        }
     }
 
     /// Populate the vulcan.call function to dispatch to loaded skills.
@@ -4845,36 +5303,16 @@ end
                 let func: Function = lua.globals().get(func_name.as_str()).map_err(|_| {
                     mlua::Error::runtime(format!("Skill function '{}' not found", module))
                 })?;
-                let vulcan: Table = lua
-                    .globals()
-                    .get("vulcan")
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                let context_table = get_vulcan_context_table(lua).map_err(mlua::Error::runtime)?;
-                let previous_context: LuaValue = context_table
-                    .get("request")
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                let previous_client_info: LuaValue = context_table
-                    .get("client_info")
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                let previous_client_capabilities: LuaValue = context_table
-                    .get("client_capabilities")
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                let previous_client_budget: LuaValue = context_table
-                    .get("client_budget")
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                let previous_tool_config: LuaValue = context_table
-                    .get("tool_config")
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                let previous_skill_name: String =
-                    vulcan.get("__lancedb_skill_name").unwrap_or_default();
-                let previous_sqlite_skill_name: String =
-                    vulcan.get("__sqlite_skill_name").unwrap_or_default();
-                let previous_internal_context =
-                    capture_vulcan_internal_execution_context(lua).map_err(mlua::Error::runtime)?;
-                let previous_file_context =
-                    capture_vulcan_file_context(lua).map_err(mlua::Error::runtime)?;
+                let nested_scope_guard = LuaNestedCallScopeGuard::new(
+                    lua,
+                    host_options.clone(),
+                    lancedb_host.clone(),
+                    sqlite_host.clone(),
+                )
+                .map_err(mlua::Error::runtime)?;
                 let current_request_context_json =
-                    lua_value_to_json(&previous_context).map_err(mlua::Error::runtime)?;
+                    lua_value_to_json(&nested_scope_guard.previous_context)
+                        .map_err(mlua::Error::runtime)?;
                 let current_request_context = match &current_request_context_json {
                     Value::Object(object) if object.is_empty() => None,
                     _ => serde_json::from_value::<RuntimeRequestContext>(
@@ -4883,11 +5321,14 @@ end
                     .ok(),
                 };
                 let current_client_budget =
-                    lua_value_to_json(&previous_client_budget).map_err(mlua::Error::runtime)?;
+                    lua_value_to_json(&nested_scope_guard.previous_client_budget)
+                        .map_err(mlua::Error::runtime)?;
                 let current_tool_config =
-                    lua_value_to_json(&previous_tool_config).map_err(mlua::Error::runtime)?;
-                if previous_internal_context.luaexec_active {
-                    if previous_internal_context
+                    lua_value_to_json(&nested_scope_guard.previous_tool_config)
+                        .map_err(mlua::Error::runtime)?;
+                if nested_scope_guard.previous_internal_context.luaexec_active {
+                    if nested_scope_guard
+                        .previous_internal_context
                         .luaexec_caller_tool_name
                         .as_deref()
                         == Some(dispatch_entry.display_name.as_str())
@@ -4924,117 +5365,28 @@ end
                     current_client_budget,
                     current_tool_config,
                 );
-                Self::populate_vulcan_request_context(lua, Some(&nested_invocation_context))
+                nested_scope_guard
+                    .enter_nested_call(
+                        &dispatch_entry.display_name,
+                        owner_skill_name,
+                        &dispatch_entry.owner_skill_dir,
+                        &dispatch_entry.entry_path,
+                        &nested_invocation_context,
+                        target_binding,
+                        target_sqlite_binding,
+                    )
                     .map_err(mlua::Error::runtime)?;
-                populate_vulcan_internal_execution_context(
-                    lua,
-                    &VulcanInternalExecutionContext {
-                        tool_name: Some(dispatch_entry.display_name.clone()),
-                        skill_name: Some(owner_skill_name.clone()),
-                        luaexec_active: previous_internal_context.luaexec_active,
-                        luaexec_caller_tool_name: previous_internal_context
-                            .luaexec_caller_tool_name
-                            .clone(),
-                    },
-                )
-                .map_err(mlua::Error::runtime)?;
-                populate_vulcan_file_context(
-                    lua,
-                    Some(Path::new(&dispatch_entry.owner_skill_dir)),
-                    Some(Path::new(&dispatch_entry.entry_path)),
-                )
-                .map_err(mlua::Error::runtime)?;
-                populate_vulcan_dependency_context(
-                    lua,
-                    host_options.as_ref(),
-                    Some(Path::new(&dispatch_entry.owner_skill_dir)),
-                    Some(owner_skill_name.as_str()),
-                )
-                .map_err(mlua::Error::runtime)?;
-                Self::populate_vulcan_lancedb_context(
-                    lua,
-                    target_binding,
-                    Some(owner_skill_name.as_str()),
-                )
-                .map_err(mlua::Error::runtime)?;
-                Self::populate_vulcan_sqlite_context(
-                    lua,
-                    target_sqlite_binding,
-                    Some(owner_skill_name.as_str()),
-                )
-                .map_err(mlua::Error::runtime)?;
                 let call_result = func.call::<MultiValue>(args);
-                let restore_binding = if previous_skill_name.trim().is_empty() {
-                    None
-                } else {
-                    lancedb_host
-                        .as_ref()
-                        .map(|host| host.binding_for_skill(&previous_skill_name))
-                        .transpose()
-                        .map_err(mlua::Error::runtime)?
-                        .flatten()
-                };
-                let restore_sqlite_binding = if previous_sqlite_skill_name.trim().is_empty() {
-                    None
-                } else {
-                    sqlite_host
-                        .as_ref()
-                        .map(|host| host.binding_for_skill(&previous_sqlite_skill_name))
-                        .transpose()
-                        .map_err(mlua::Error::runtime)?
-                        .flatten()
-                };
-                Self::populate_vulcan_lancedb_context(
-                    lua,
-                    restore_binding,
-                    if previous_skill_name.trim().is_empty() {
-                        None
-                    } else {
-                        Some(previous_skill_name.as_str())
-                    },
-                )
-                .map_err(mlua::Error::runtime)?;
-                Self::populate_vulcan_sqlite_context(
-                    lua,
-                    restore_sqlite_binding,
-                    if previous_sqlite_skill_name.trim().is_empty() {
-                        None
-                    } else {
-                        Some(previous_sqlite_skill_name.as_str())
-                    },
-                )
-                .map_err(mlua::Error::runtime)?;
-                context_table
-                    .set("request", previous_context)
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                context_table
-                    .set("client_info", previous_client_info)
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                context_table
-                    .set("client_capabilities", previous_client_capabilities)
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                context_table
-                    .set("client_budget", previous_client_budget)
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                context_table
-                    .set("tool_config", previous_tool_config)
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                populate_vulcan_internal_execution_context(lua, &previous_internal_context)
-                    .map_err(mlua::Error::runtime)?;
-                populate_vulcan_file_context(
-                    lua,
-                    previous_file_context.0.as_deref().map(Path::new),
-                    previous_file_context.2.as_deref().map(Path::new),
-                )
-                .map_err(mlua::Error::runtime)?;
-                populate_vulcan_dependency_context(
-                    lua,
-                    host_options.as_ref(),
-                    previous_file_context.0.as_deref().map(Path::new),
-                    previous_internal_context.skill_name.as_deref(),
-                )
-                .map_err(mlua::Error::runtime)?;
-                call_result
+                let restore_result = nested_scope_guard.finish().map_err(mlua::Error::runtime);
+                match (call_result, restore_result) {
+                    (Ok(result), Ok(())) => Ok(result),
+                    (Ok(_), Err(restore_error)) => Err(restore_error),
+                    (Err(call_error), Ok(())) => Err(call_error),
+                    (Err(call_error), Err(restore_error)) => Err(mlua::Error::runtime(format!(
+                        "{}; nested vulcan.call restore failed: {}",
+                        call_error, restore_error
+                    ))),
+                }
             })
             .map_err(|e| format!("Failed to create vulcan.call dispatcher: {}", e))?;
 
@@ -5574,11 +5926,21 @@ fn lua_table_to_object(t: &Table) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState};
+    use super::{
+        LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState, LuaVmRequestScopeGuard,
+        VulcanInternalExecutionContext, get_vulcan_context_table, get_vulcan_deps_table,
+        get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
+        populate_vulcan_dependency_context, populate_vulcan_file_context,
+        populate_vulcan_internal_execution_context,
+    };
+    use crate::host::database::RuntimeDatabaseProviderCallbacks;
     use crate::lua_skill::SkillMeta;
     use crate::{LuaEngineOptions, LuaRuntimeHostOptions};
+    use mlua::{Table, Value as LuaValue};
+    use serde_json::json;
     use std::collections::HashMap;
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::{Arc, Condvar, Mutex};
 
@@ -5623,8 +5985,121 @@ mod tests {
             }),
             lancedb_host: None,
             sqlite_host: None,
+            database_provider_callbacks: Arc::new(RuntimeDatabaseProviderCallbacks::default()),
             host_options: Arc::new(LuaRuntimeHostOptions::default()),
         }
+    }
+
+    /// Build one minimal runtime engine that can execute pooled-VM isolation tests.
+    /// 构造一个可用于池化虚拟机隔离测试的最小运行时引擎。
+    fn make_runtime_test_engine() -> LuaEngine {
+        LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create runtime test engine")
+    }
+
+    /// Assert that one pooled Lua VM has returned to the neutral request baseline.
+    /// 断言单个池化 Lua 虚拟机已经回到中性的请求基线状态。
+    fn assert_vm_scope_is_clean(lua: &mlua::Lua) {
+        let context = get_vulcan_context_table(lua).expect("get vulcan.context");
+        let request: Table = context.get("request").expect("get request table");
+        assert_eq!(request.raw_len(), 0);
+        assert_eq!(request.pairs::<String, LuaValue>().count(), 0);
+        assert!(matches!(
+            context
+                .get::<LuaValue>("client_info")
+                .expect("get client_info"),
+            LuaValue::Nil
+        ));
+        assert!(matches!(
+            context
+                .get::<LuaValue>("client_capabilities")
+                .expect("get client_capabilities"),
+            LuaValue::Table(_)
+        ));
+        assert!(matches!(
+            context
+                .get::<LuaValue>("client_budget")
+                .expect("get client_budget"),
+            LuaValue::Table(_)
+        ));
+        assert!(matches!(
+            context
+                .get::<LuaValue>("tool_config")
+                .expect("get tool_config"),
+            LuaValue::Table(_)
+        ));
+        assert!(matches!(
+            context.get::<LuaValue>("skill_dir").expect("get skill_dir"),
+            LuaValue::Nil
+        ));
+        assert!(matches!(
+            context.get::<LuaValue>("entry_dir").expect("get entry_dir"),
+            LuaValue::Nil
+        ));
+        assert!(matches!(
+            context
+                .get::<LuaValue>("entry_file")
+                .expect("get entry_file"),
+            LuaValue::Nil
+        ));
+
+        let deps = get_vulcan_deps_table(lua).expect("get vulcan.deps");
+        assert!(matches!(
+            deps.get::<LuaValue>("tools_path").expect("get tools_path"),
+            LuaValue::Nil
+        ));
+        assert!(matches!(
+            deps.get::<LuaValue>("lua_path").expect("get lua_path"),
+            LuaValue::Nil
+        ));
+        assert!(matches!(
+            deps.get::<LuaValue>("ffi_path").expect("get ffi_path"),
+            LuaValue::Nil
+        ));
+
+        let internal = get_vulcan_runtime_internal_table(lua).expect("get runtime internal");
+        assert!(matches!(
+            internal
+                .get::<LuaValue>("tool_name")
+                .expect("get tool_name"),
+            LuaValue::Nil
+        ));
+        assert!(matches!(
+            internal
+                .get::<LuaValue>("skill_name")
+                .expect("get skill_name"),
+            LuaValue::Nil
+        ));
+        assert!(
+            !internal
+                .get::<bool>("luaexec_active")
+                .expect("get luaexec_active")
+        );
+        assert!(matches!(
+            internal
+                .get::<LuaValue>("luaexec_caller_tool_name")
+                .expect("get luaexec_caller_tool_name"),
+            LuaValue::Nil
+        ));
+
+        let vulcan = get_vulcan_table(lua).expect("get vulcan");
+        let lancedb: Table = vulcan.get("lancedb").expect("get lancedb");
+        assert!(!lancedb.get::<bool>("enabled").expect("get lancedb enabled"));
+        let sqlite: Table = vulcan.get("sqlite").expect("get sqlite");
+        assert!(!sqlite.get::<bool>("enabled").expect("get sqlite enabled"));
+        assert!(matches!(
+            lua.globals()
+                .get::<LuaValue>("__runlua_args")
+                .expect("get __runlua_args"),
+            LuaValue::Nil
+        ));
     }
 
     /// Verify that skill manifests must not declare skill_id explicitly.
@@ -5746,5 +6221,197 @@ mod tests {
             alpha_skill.resolved_tool_name("help-list"),
             Some("vulcan-help-list-2")
         );
+    }
+
+    /// Verify that the pooled VM scope guard clears request state even when setup exits early.
+    /// 验证池化虚拟机作用域守卫即使在安装阶段提前退出也会清理请求状态。
+    #[test]
+    fn pooled_vm_scope_guard_cleans_state_after_early_exit() {
+        let engine = make_runtime_test_engine();
+        let scope_result: Result<(), String> = (|| {
+            let mut lease = engine.acquire_vm()?;
+            let _scope_guard =
+                LuaVmRequestScopeGuard::new(&mut lease, engine.host_options.as_ref())?;
+            let lua = _scope_guard.lua();
+            LuaEngine::populate_vulcan_request_context(
+                lua,
+                Some(&crate::runtime_options::LuaInvocationContext::new(
+                    None,
+                    json!({"budget":"test"}),
+                    json!({"tool":"config"}),
+                )),
+            )?;
+            populate_vulcan_internal_execution_context(
+                lua,
+                &VulcanInternalExecutionContext {
+                    tool_name: Some("test-tool".to_string()),
+                    skill_name: Some("test-skill".to_string()),
+                    luaexec_active: false,
+                    luaexec_caller_tool_name: None,
+                },
+            )?;
+            let skill_dir = Path::new("D:/runtime-test-root/skills/test-skill");
+            let entry_file = Path::new("D:/runtime-test-root/skills/test-skill/runtime/test.lua");
+            populate_vulcan_file_context(lua, Some(skill_dir), Some(entry_file))?;
+            populate_vulcan_dependency_context(
+                lua,
+                engine.host_options.as_ref(),
+                Some(skill_dir),
+                Some("test-skill"),
+            )?;
+            lua.globals()
+                .set(
+                    "__runlua_args",
+                    json_to_lua_table(lua, &json!({"stale":"value"}))
+                        .expect("build runlua args table"),
+                )
+                .expect("set stale runlua args");
+            Err("simulated setup failure".to_string())
+        })();
+        assert_eq!(
+            scope_result.expect_err("scope should fail"),
+            "simulated setup failure"
+        );
+
+        let lease = engine.acquire_vm().expect("reacquire pooled vm");
+        assert_vm_scope_is_clean(lease.lua());
+    }
+
+    /// Verify that a pooled VM with broken core tables is discarded before it can be reused.
+    /// 验证当池化虚拟机的核心表被破坏时，该实例会在复用前被直接丢弃。
+    #[test]
+    fn pooled_vm_scope_guard_discards_vm_when_entry_reset_fails() {
+        let engine = make_runtime_test_engine();
+        {
+            let lease = engine.acquire_vm().expect("borrow pooled vm");
+            let vulcan = get_vulcan_table(lease.lua()).expect("get vulcan");
+            vulcan
+                .set("context", LuaValue::Nil)
+                .expect("break vulcan.context");
+        }
+
+        let mut broken_lease = engine.acquire_vm().expect("reacquire broken pooled vm");
+        let error =
+            match LuaVmRequestScopeGuard::new(&mut broken_lease, engine.host_options.as_ref()) {
+                Ok(_) => panic!("broken pooled vm should fail normalization"),
+                Err(error) => error,
+            };
+        assert!(error.contains("vulcan.context"));
+
+        let mut fresh_lease = engine.acquire_vm().expect("borrow fresh pooled vm");
+        let fresh_scope =
+            LuaVmRequestScopeGuard::new(&mut fresh_lease, engine.host_options.as_ref())
+                .expect("normalize fresh pooled vm");
+        assert_vm_scope_is_clean(fresh_scope.lua());
+    }
+
+    /// Verify that cleanup failures retire the current pooled VM instead of returning dirty state.
+    /// 验证当清理阶段失败时，当前池化虚拟机会被退役，而不是带着脏状态返回池中。
+    #[test]
+    fn pooled_vm_scope_guard_discards_vm_when_exit_reset_fails() {
+        let engine = make_runtime_test_engine();
+        let mut lease = engine.acquire_vm().expect("borrow pooled vm");
+        let scope_guard = LuaVmRequestScopeGuard::new(&mut lease, engine.host_options.as_ref())
+            .expect("normalize pooled vm");
+        let vulcan = get_vulcan_table(scope_guard.lua()).expect("get vulcan");
+        vulcan
+            .set("context", LuaValue::Nil)
+            .expect("break vulcan.context");
+        let error = scope_guard
+            .finish()
+            .expect_err("cleanup should fail after context corruption");
+        assert!(error.contains("vulcan.context"));
+
+        let mut fresh_lease = engine.acquire_vm().expect("borrow fresh pooled vm");
+        let fresh_scope =
+            LuaVmRequestScopeGuard::new(&mut fresh_lease, engine.host_options.as_ref())
+                .expect("normalize fresh pooled vm");
+        assert_vm_scope_is_clean(fresh_scope.lua());
+    }
+
+    /// Verify that run_lua clears transient args after one successful execution.
+    /// 验证 run_lua 在成功执行后会清理临时参数状态。
+    #[test]
+    fn run_lua_clears_args_after_success() {
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .run_lua("return args.value", &json!({"value":"hello"}), None)
+            .expect("run_lua should succeed");
+        assert_eq!(result, json!("hello"));
+
+        let lease = engine.acquire_vm().expect("reacquire pooled vm");
+        assert_vm_scope_is_clean(lease.lua());
+    }
+
+    /// Verify that run_lua clears transient args after one failed execution.
+    /// 验证 run_lua 在失败执行后同样会清理临时参数状态。
+    #[test]
+    fn run_lua_clears_args_after_failure() {
+        let engine = make_runtime_test_engine();
+        let error = engine
+            .run_lua("error('boom')", &json!({"value":"hello"}), None)
+            .expect_err("run_lua should fail");
+        assert!(error.contains("Lua run_lua error"));
+
+        let lease = engine.acquire_vm().expect("reacquire pooled vm");
+        assert_vm_scope_is_clean(lease.lua());
+    }
+
+    /// Verify that `vulcan.call` restores the outer execution context even when the nested skill corrupts it.
+    /// 验证当嵌套技能破坏上下文时，`vulcan.call` 仍会恢复外层执行上下文。
+    #[test]
+    fn vulcan_call_restores_outer_context_after_nested_failure() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_nested_call_restore_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = fs::remove_dir_all(&temp_root);
+        }
+        let skill_root = temp_root.join("skills");
+        let skill_dir = skill_root.join("test-skill");
+        fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime dir");
+        fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: test-skill\nversion: 0.1.0\nenable: true\ndebug: false\nentries:\n  - name: outer\n    lua_entry: runtime/outer.lua\n    lua_module: test-skill.outer\n  - name: nested\n    lua_entry: runtime/nested.lua\n    lua_module: test-skill.nested\n",
+        )
+        .expect("write skill yaml");
+        fs::write(
+            skill_dir.join("runtime").join("outer.lua"),
+            "return function(args)\n  local ok, err = pcall(vulcan.call, \"test-skill-nested\", {})\n  if ok then\n    return \"nested-call-unexpected-success\"\n  end\n  local tool_name = (vulcan.runtime and vulcan.runtime.internal and vulcan.runtime.internal.tool_name) or \"tool-nil\"\n  local entry_file = (vulcan.context and vulcan.context.entry_file) or \"entry-nil\"\n  local deps_path = (vulcan.deps and vulcan.deps.lua_path) or \"deps-nil\"\n  return tool_name .. \"|\" .. entry_file .. \"|\" .. deps_path\nend\n",
+        )
+        .expect("write outer runtime entry");
+        fs::write(
+            skill_dir.join("runtime").join("nested.lua"),
+            "return function(args)\n  vulcan.runtime = nil\n  vulcan.context = nil\n  vulcan.deps = nil\n  error(\"boom\")\nend\n",
+        )
+        .expect("write nested runtime entry");
+
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create engine");
+        engine
+            .load_from_roots(&[crate::host::options::RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: skill_root.clone(),
+            }])
+            .expect("load nested-call test skill");
+
+        let result = engine
+            .call_skill("test-skill-outer", &json!({}), None)
+            .expect("outer skill should succeed after nested failure");
+        assert!(result.content.starts_with("test-skill-outer|"));
+        assert!(result.content.contains("outer.lua"));
+        assert!(!result.content.contains("|entry-nil|"));
+        assert!(!result.content.ends_with("|deps-nil"));
+        assert!(result.content.contains("test-skill"));
+
+        let _ = fs::remove_dir_all(&temp_root);
     }
 }

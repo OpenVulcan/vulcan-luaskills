@@ -240,6 +240,138 @@ pub type RuntimeSqliteProviderJsonCallback =
 pub type RuntimeLanceDbProviderJsonCallback =
     Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
+/// One engine-scoped snapshot of all database provider callbacks visible at creation time.
+/// 一个在引擎创建时快照出的数据库 provider 回调集合，作用域限定为单个引擎实例。
+#[derive(Clone, Default)]
+pub(crate) struct RuntimeDatabaseProviderCallbacks {
+    /// Structured SQLite callback captured for the current engine snapshot.
+    /// 当前引擎快照捕获到的结构化 SQLite 回调。
+    sqlite_standard: Option<RuntimeSqliteProviderCallback>,
+    /// Structured LanceDB callback captured for the current engine snapshot.
+    /// 当前引擎快照捕获到的结构化 LanceDB 回调。
+    lancedb_standard: Option<RuntimeLanceDbProviderCallback>,
+    /// JSON SQLite callback captured for the current engine snapshot.
+    /// 当前引擎快照捕获到的 JSON SQLite 回调。
+    sqlite_json: Option<RuntimeSqliteProviderJsonCallback>,
+    /// JSON LanceDB callback captured for the current engine snapshot.
+    /// 当前引擎快照捕获到的 JSON LanceDB 回调。
+    lancedb_json: Option<RuntimeLanceDbProviderJsonCallback>,
+}
+
+impl RuntimeDatabaseProviderCallbacks {
+    /// Snapshot the current process-wide callback defaults into one engine-private registry.
+    /// 把当前进程级默认回调快照为一个引擎私有注册表。
+    pub(crate) fn capture_process_defaults() -> Result<Self, String> {
+        Ok(Self {
+            sqlite_standard: take_optional_callback(sqlite_provider_callback_registry())?,
+            lancedb_standard: take_optional_callback(lancedb_provider_callback_registry())?,
+            sqlite_json: take_optional_callback(sqlite_provider_json_callback_registry())?,
+            lancedb_json: take_optional_callback(lancedb_provider_json_callback_registry())?,
+        })
+    }
+
+    /// Return whether the snapshot contains one SQLite callback for the requested transport mode.
+    /// 返回当前快照是否包含指定传输模式的 SQLite 回调。
+    pub(crate) fn has_sqlite_provider_callback_for_mode(
+        &self,
+        callback_mode: LuaRuntimeDatabaseCallbackMode,
+    ) -> bool {
+        match callback_mode {
+            LuaRuntimeDatabaseCallbackMode::Standard => self.sqlite_standard.is_some(),
+            LuaRuntimeDatabaseCallbackMode::Json => self.sqlite_json.is_some(),
+        }
+    }
+
+    /// Return whether the snapshot contains one LanceDB callback for the requested transport mode.
+    /// 返回当前快照是否包含指定传输模式的 LanceDB 回调。
+    pub(crate) fn has_lancedb_provider_callback_for_mode(
+        &self,
+        callback_mode: LuaRuntimeDatabaseCallbackMode,
+    ) -> bool {
+        match callback_mode {
+            LuaRuntimeDatabaseCallbackMode::Standard => self.lancedb_standard.is_some(),
+            LuaRuntimeDatabaseCallbackMode::Json => self.lancedb_json.is_some(),
+        }
+    }
+
+    /// Dispatch one SQLite provider request through the callbacks captured by this snapshot.
+    /// 通过当前快照捕获的回调分发一次 SQLite provider 请求。
+    pub(crate) fn dispatch_sqlite_provider_request(
+        &self,
+        request: &RuntimeSqliteProviderRequest,
+        callback_mode: LuaRuntimeDatabaseCallbackMode,
+    ) -> Result<Value, String> {
+        match callback_mode {
+            LuaRuntimeDatabaseCallbackMode::Standard => {
+                let callback = self.sqlite_standard.clone().ok_or_else(|| {
+                    "SQLite host-callback mode requires one registered standard callback"
+                        .to_string()
+                })?;
+                callback(request)
+            }
+            LuaRuntimeDatabaseCallbackMode::Json => {
+                let callback = self.sqlite_json.clone().ok_or_else(|| {
+                    "SQLite host-callback JSON mode requires one registered JSON callback"
+                        .to_string()
+                })?;
+                let request_json = serde_json::to_string(request).map_err(|error| {
+                    format!("failed to encode sqlite provider request: {}", error)
+                })?;
+                let response_json = callback(&request_json)?;
+                serde_json::from_str::<Value>(&response_json).map_err(|error| {
+                    format!("failed to parse sqlite provider response json: {}", error)
+                })
+            }
+        }
+    }
+
+    /// Dispatch one LanceDB provider request through the callbacks captured by this snapshot.
+    /// 通过当前快照捕获的回调分发一次 LanceDB provider 请求。
+    pub(crate) fn dispatch_lancedb_provider_request(
+        &self,
+        request: &RuntimeLanceDbProviderRequest,
+        callback_mode: LuaRuntimeDatabaseCallbackMode,
+    ) -> Result<RuntimeLanceDbProviderResult, String> {
+        match callback_mode {
+            LuaRuntimeDatabaseCallbackMode::Standard => {
+                let callback = self.lancedb_standard.clone().ok_or_else(|| {
+                    "LanceDB host-callback mode requires one registered standard callback"
+                        .to_string()
+                })?;
+                callback(request)
+            }
+            LuaRuntimeDatabaseCallbackMode::Json => {
+                let callback = self.lancedb_json.clone().ok_or_else(|| {
+                    "LanceDB host-callback JSON mode requires one registered JSON callback"
+                        .to_string()
+                })?;
+                let request_json = serde_json::to_string(request).map_err(|error| {
+                    format!("failed to encode lancedb provider request: {}", error)
+                })?;
+                let response_json = callback(&request_json)?;
+                let value: Value = serde_json::from_str(&response_json).map_err(|error| {
+                    format!("failed to parse lancedb provider response json: {}", error)
+                })?;
+                let meta = value
+                    .get("meta")
+                    .cloned()
+                    .unwrap_or_else(|| Value::Object(Default::default()));
+                let bytes = value
+                    .get("data_base64")
+                    .and_then(Value::as_str)
+                    .map(|text| {
+                        BASE64_STANDARD.decode(text.as_bytes()).map_err(|error| {
+                            format!("failed to decode lancedb provider data_base64: {}", error)
+                        })
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                Ok(RuntimeLanceDbProviderResult::binary(meta, bytes))
+            }
+        }
+    }
+}
+
 /// Structured LanceDB provider result returned by the standard host callback.
 /// 标准宿主回调返回的结构化 LanceDB provider 结果。
 #[derive(Debug, Clone, PartialEq)]
@@ -301,113 +433,6 @@ pub fn set_lancedb_provider_json_callback(callback: Option<RuntimeLanceDbProvide
     *guard = callback;
 }
 
-/// Dispatch one structured SQLite provider request through the best available host callback.
-/// 按显式回调传输模式分发一个结构化 SQLite provider 请求。
-pub(crate) fn dispatch_sqlite_provider_request(
-    request: &RuntimeSqliteProviderRequest,
-    callback_mode: LuaRuntimeDatabaseCallbackMode,
-) -> Result<Value, String> {
-    match callback_mode {
-        LuaRuntimeDatabaseCallbackMode::Standard => {
-            let callback = take_optional_callback(sqlite_provider_callback_registry())?
-                .ok_or_else(|| {
-                    "SQLite host-callback mode requires one registered standard callback"
-                        .to_string()
-                })?;
-            callback(request)
-        }
-        LuaRuntimeDatabaseCallbackMode::Json => {
-            let callback = take_optional_callback(sqlite_provider_json_callback_registry())?
-                .ok_or_else(|| {
-                    "SQLite host-callback JSON mode requires one registered JSON callback"
-                        .to_string()
-                })?;
-            let request_json = serde_json::to_string(request)
-                .map_err(|error| format!("failed to encode sqlite provider request: {}", error))?;
-            let response_json = callback(&request_json)?;
-            serde_json::from_str::<Value>(&response_json).map_err(|error| {
-                format!("failed to parse sqlite provider response json: {}", error)
-            })
-        }
-    }
-}
-
-/// Dispatch one structured LanceDB provider request through the best available host callback.
-/// 按显式回调传输模式分发一个结构化 LanceDB provider 请求。
-pub(crate) fn dispatch_lancedb_provider_request(
-    request: &RuntimeLanceDbProviderRequest,
-    callback_mode: LuaRuntimeDatabaseCallbackMode,
-) -> Result<RuntimeLanceDbProviderResult, String> {
-    match callback_mode {
-        LuaRuntimeDatabaseCallbackMode::Standard => {
-            let callback = take_optional_callback(lancedb_provider_callback_registry())?
-                .ok_or_else(|| {
-                    "LanceDB host-callback mode requires one registered standard callback"
-                        .to_string()
-                })?;
-            callback(request)
-        }
-        LuaRuntimeDatabaseCallbackMode::Json => {
-            let callback = take_optional_callback(lancedb_provider_json_callback_registry())?
-                .ok_or_else(|| {
-                    "LanceDB host-callback JSON mode requires one registered JSON callback"
-                        .to_string()
-                })?;
-            let request_json = serde_json::to_string(request)
-                .map_err(|error| format!("failed to encode lancedb provider request: {}", error))?;
-            let response_json = callback(&request_json)?;
-            let value: Value = serde_json::from_str(&response_json).map_err(|error| {
-                format!("failed to parse lancedb provider response json: {}", error)
-            })?;
-            let meta = value
-                .get("meta")
-                .cloned()
-                .unwrap_or_else(|| Value::Object(Default::default()));
-            let bytes = value
-                .get("data_base64")
-                .and_then(Value::as_str)
-                .map(|text| {
-                    BASE64_STANDARD.decode(text.as_bytes()).map_err(|error| {
-                        format!("failed to decode lancedb provider data_base64: {}", error)
-                    })
-                })
-                .transpose()?
-                .unwrap_or_default();
-            Ok(RuntimeLanceDbProviderResult::binary(meta, bytes))
-        }
-    }
-}
-
-/// Return whether the requested SQLite callback transport is currently registered.
-/// 返回指定 SQLite 回调传输模式当前是否已注册。
-pub(crate) fn has_sqlite_provider_callback_for_mode(
-    callback_mode: LuaRuntimeDatabaseCallbackMode,
-) -> Result<bool, String> {
-    match callback_mode {
-        LuaRuntimeDatabaseCallbackMode::Standard => {
-            Ok(take_optional_callback(sqlite_provider_callback_registry())?.is_some())
-        }
-        LuaRuntimeDatabaseCallbackMode::Json => {
-            Ok(take_optional_callback(sqlite_provider_json_callback_registry())?.is_some())
-        }
-    }
-}
-
-/// Return whether the requested LanceDB callback transport is currently registered.
-/// 返回指定 LanceDB 回调传输模式当前是否已注册。
-pub(crate) fn has_lancedb_provider_callback_for_mode(
-    callback_mode: LuaRuntimeDatabaseCallbackMode,
-) -> Result<bool, String> {
-    match callback_mode {
-        LuaRuntimeDatabaseCallbackMode::Standard => {
-            Ok(take_optional_callback(lancedb_provider_callback_registry())?.is_some())
-        }
-        LuaRuntimeDatabaseCallbackMode::Json => {
-            Ok(take_optional_callback(lancedb_provider_json_callback_registry())?.is_some())
-        }
-    }
-}
-
 /// Read one optional callback from one mutex registry without cloning error-prone lock code at each call site.
 /// 从一个互斥量注册表读取可选回调，避免在每个调用点重复编写易错的加锁逻辑。
 fn take_optional_callback<T: Clone>(
@@ -447,4 +472,192 @@ fn lancedb_provider_json_callback_registry()
 -> &'static Mutex<Option<RuntimeLanceDbProviderJsonCallback>> {
     static REGISTRY: OnceLock<Mutex<Option<RuntimeLanceDbProviderJsonCallback>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Return a process-wide test lock so callback-registry tests do not race in parallel.
+    /// 返回一个进程级测试锁，避免回调注册表测试并发互相干扰。
+    fn database_callback_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// Restore the process-wide callback defaults captured before one test mutates them.
+    /// 恢复某个测试修改前捕获到的进程级默认回调集合。
+    struct ProcessCallbackRestoreGuard {
+        snapshot: RuntimeDatabaseProviderCallbacks,
+    }
+
+    impl ProcessCallbackRestoreGuard {
+        /// Capture the current process-wide callback defaults so they can be restored on drop.
+        /// 捕获当前进程级默认回调，以便在释放时恢复。
+        fn capture() -> Self {
+            Self {
+                snapshot: RuntimeDatabaseProviderCallbacks::capture_process_defaults()
+                    .expect("capture callback snapshot"),
+            }
+        }
+    }
+
+    impl Drop for ProcessCallbackRestoreGuard {
+        fn drop(&mut self) {
+            set_sqlite_provider_callback(self.snapshot.sqlite_standard.clone());
+            set_lancedb_provider_callback(self.snapshot.lancedb_standard.clone());
+            set_sqlite_provider_json_callback(self.snapshot.sqlite_json.clone());
+            set_lancedb_provider_json_callback(self.snapshot.lancedb_json.clone());
+        }
+    }
+
+    /// Build one stable binding context used by snapshot-isolation tests.
+    /// 构造供快照隔离测试使用的稳定绑定上下文。
+    fn sample_binding_context(database_kind: RuntimeDatabaseKind) -> RuntimeDatabaseBindingContext {
+        RuntimeDatabaseBindingContext::new(
+            "ROOT",
+            "test-skill",
+            "ROOT",
+            "D:/runtime-test-root/__database",
+            "D:/runtime-test-root/skills/test-skill",
+            "test-skill",
+            database_kind,
+            "D:/runtime-test-root/__database/default.db",
+        )
+    }
+
+    /// Verify that each captured callback snapshot keeps routing to the callbacks visible at capture time.
+    /// 验证每个捕获到的回调快照都会持续路由到捕获当时可见的回调实现。
+    #[test]
+    fn captured_callback_snapshots_stay_engine_scoped() {
+        let _serial_guard = database_callback_test_lock()
+            .lock()
+            .expect("lock callback test guard");
+        let _restore_guard = ProcessCallbackRestoreGuard::capture();
+
+        set_sqlite_provider_callback(Some(Arc::new(|_| {
+            Ok(json!({ "source": "sqlite-standard-a" }))
+        })));
+        set_sqlite_provider_json_callback(Some(Arc::new(|_| {
+            Ok("{\"source\":\"sqlite-json-a\"}".to_string())
+        })));
+        set_lancedb_provider_callback(Some(Arc::new(|_| {
+            Ok(RuntimeLanceDbProviderResult::json(
+                json!({ "source": "lancedb-standard-a" }),
+            ))
+        })));
+        set_lancedb_provider_json_callback(Some(Arc::new(|_| {
+            Ok("{\"meta\":{\"source\":\"lancedb-json-a\"}}".to_string())
+        })));
+        let snapshot_a = RuntimeDatabaseProviderCallbacks::capture_process_defaults()
+            .expect("capture callback snapshot A");
+
+        set_sqlite_provider_callback(Some(Arc::new(|_| {
+            Ok(json!({ "source": "sqlite-standard-b" }))
+        })));
+        set_sqlite_provider_json_callback(Some(Arc::new(|_| {
+            Ok("{\"source\":\"sqlite-json-b\"}".to_string())
+        })));
+        set_lancedb_provider_callback(Some(Arc::new(|_| {
+            Ok(RuntimeLanceDbProviderResult::json(
+                json!({ "source": "lancedb-standard-b" }),
+            ))
+        })));
+        set_lancedb_provider_json_callback(Some(Arc::new(|_| {
+            Ok("{\"meta\":{\"source\":\"lancedb-json-b\"}}".to_string())
+        })));
+        let snapshot_b = RuntimeDatabaseProviderCallbacks::capture_process_defaults()
+            .expect("capture callback snapshot B");
+
+        let sqlite_request = RuntimeSqliteProviderRequest {
+            action: RuntimeSqliteProviderAction::QueryJson,
+            binding: sample_binding_context(RuntimeDatabaseKind::Sqlite),
+            input: json!({ "sql": "select 1" }),
+        };
+        let lancedb_request = RuntimeLanceDbProviderRequest {
+            action: RuntimeLanceDbProviderAction::VectorSearch,
+            binding: sample_binding_context(RuntimeDatabaseKind::LanceDb),
+            input: json!({ "table": "demo" }),
+        };
+
+        assert_eq!(
+            snapshot_a
+                .dispatch_sqlite_provider_request(
+                    &sqlite_request,
+                    LuaRuntimeDatabaseCallbackMode::Standard,
+                )
+                .expect("dispatch sqlite standard A"),
+            json!({ "source": "sqlite-standard-a" })
+        );
+        assert_eq!(
+            snapshot_a
+                .dispatch_sqlite_provider_request(
+                    &sqlite_request,
+                    LuaRuntimeDatabaseCallbackMode::Json,
+                )
+                .expect("dispatch sqlite json A"),
+            json!({ "source": "sqlite-json-a" })
+        );
+        assert_eq!(
+            snapshot_b
+                .dispatch_sqlite_provider_request(
+                    &sqlite_request,
+                    LuaRuntimeDatabaseCallbackMode::Standard,
+                )
+                .expect("dispatch sqlite standard B"),
+            json!({ "source": "sqlite-standard-b" })
+        );
+        assert_eq!(
+            snapshot_b
+                .dispatch_sqlite_provider_request(
+                    &sqlite_request,
+                    LuaRuntimeDatabaseCallbackMode::Json,
+                )
+                .expect("dispatch sqlite json B"),
+            json!({ "source": "sqlite-json-b" })
+        );
+
+        assert_eq!(
+            snapshot_a
+                .dispatch_lancedb_provider_request(
+                    &lancedb_request,
+                    LuaRuntimeDatabaseCallbackMode::Standard,
+                )
+                .expect("dispatch lancedb standard A")
+                .meta,
+            json!({ "source": "lancedb-standard-a" })
+        );
+        assert_eq!(
+            snapshot_a
+                .dispatch_lancedb_provider_request(
+                    &lancedb_request,
+                    LuaRuntimeDatabaseCallbackMode::Json,
+                )
+                .expect("dispatch lancedb json A")
+                .meta,
+            json!({ "source": "lancedb-json-a" })
+        );
+        assert_eq!(
+            snapshot_b
+                .dispatch_lancedb_provider_request(
+                    &lancedb_request,
+                    LuaRuntimeDatabaseCallbackMode::Standard,
+                )
+                .expect("dispatch lancedb standard B")
+                .meta,
+            json!({ "source": "lancedb-standard-b" })
+        );
+        assert_eq!(
+            snapshot_b
+                .dispatch_lancedb_provider_request(
+                    &lancedb_request,
+                    LuaRuntimeDatabaseCallbackMode::Json,
+                )
+                .expect("dispatch lancedb json B")
+                .meta,
+            json!({ "source": "lancedb-json-b" })
+        );
+    }
 }

@@ -75,6 +75,8 @@
 - controller 服务程序由宿主自行复制到本地稳定路径，再通过 `LuaRuntimeHostOptions.space_controller.executable_path` 提供给 lib
 - 如果宿主没有显式指定 `endpoint`，运行时默认使用共享端点 `http://127.0.0.1:19801`
 - 如果宿主指定了不同端点，则可切换到独立 controller 实例
+- 若 `auto_spawn=true`，则 `endpoint` 必须使用可映射为本地 bind 地址的形式，例如 `19801`、`:19801`、`127.0.0.1:19801`、`localhost:19801` 或 `[::1]:19801`
+- 若 `endpoint` 指向远端主机名或远端服务地址，则必须将 `auto_spawn` 设为 `false`，并由宿主自行保证 controller 已经可连接
 
 推荐理解方式：
 

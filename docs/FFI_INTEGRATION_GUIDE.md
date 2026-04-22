@@ -266,6 +266,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
   - 缺失时默认使用共享端点 `http://127.0.0.1:19801`
 - `LuaRuntimeHostOptions.space_controller.auto_spawn`
   - 是否允许自动唤起 controller
+  - 若为 `true`，`endpoint` 必须使用本地可绑定地址格式，例如 `19801`、`:19801`、`127.0.0.1:19801`、`localhost:19801` 或 `[::1]:19801`
 - `LuaRuntimeHostOptions.space_controller.executable_path`
   - 可选
   - 指向宿主已经复制到本地稳定目录的 `vldb-controller` 可执行文件
@@ -278,6 +279,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `vulcan-luaskills` 代码层只通过 `git + rev` 固定依赖 `vldb-controller-client`
 - 真正被拉起的 controller 服务程序，不是通过 Cargo 把二进制嵌进宿主，而是由宿主自行复制并管理
 - 也就是说，**Rust SDK 走 git 固定版本，controller 可执行文件走宿主本地复制路径**
+- 如果宿主要连接远端 controller 或使用远端主机名端点，必须关闭 `auto_spawn`，避免把远端地址错误地当成本地 bind 地址去拉起新进程
 
 ### 7.2 生命周期接口的前置要求
 

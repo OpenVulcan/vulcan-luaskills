@@ -12,8 +12,8 @@ use std::time::Instant;
 use crate::host::controller::{LuaRuntimeSpaceControllerBridge, controller_space_id_for_binding};
 use crate::host::database::{
     LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,
-    RuntimeDatabaseKind, RuntimeSqliteProviderAction, RuntimeSqliteProviderRequest,
-    dispatch_sqlite_provider_request, has_sqlite_provider_callback_for_mode,
+    RuntimeDatabaseKind, RuntimeDatabaseProviderCallbacks, RuntimeSqliteProviderAction,
+    RuntimeSqliteProviderRequest,
 };
 use crate::lua_skill::{SkillSqliteLogLevel, SkillSqliteMeta};
 use crate::runtime_logging::{info as log_info, warn as log_warn};
@@ -775,6 +775,7 @@ pub struct SqliteSkillBinding {
     callback_mode: LuaRuntimeDatabaseCallbackMode,
     handles: Option<Mutex<SkillHandleState>>,
     controller: Option<Arc<LuaRuntimeSpaceControllerBridge>>,
+    provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
     provider_binding: RuntimeDatabaseBindingContext,
 }
 
@@ -1305,7 +1306,9 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let chunk = bridge.run(move |client| async move {
-                client.read_sqlite_query_stream_chunk(stream_id, index).await
+                client
+                    .read_sqlite_query_stream_chunk(stream_id, index)
+                    .await
             })?;
             self.log_if_slow(
                 "query_stream_chunk",
@@ -1754,12 +1757,7 @@ impl SqliteSkillBinding {
             let index_name_value = index_name.to_string();
             let result = bridge.run(move |client| async move {
                 client
-                    .ensure_sqlite_fts_index(
-                        space_id,
-                        binding_id,
-                        index_name_value,
-                        tokenizer_mode,
-                    )
+                    .ensure_sqlite_fts_index(space_id, binding_id, index_name_value, tokenizer_mode)
                     .await
             })?;
             self.log_if_slow("ensure_fts_index", started_at, None);
@@ -2337,7 +2335,8 @@ impl SqliteSkillBinding {
             binding: self.provider_binding.clone(),
             input: input.clone(),
         };
-        dispatch_sqlite_provider_request(&request, self.host_callback_mode())
+        self.provider_callbacks
+            .dispatch_sqlite_provider_request(&request, self.host_callback_mode())
     }
 
     /// Return the configured callback transport mode for the current host-managed binding.
@@ -2403,13 +2402,17 @@ pub struct SqliteSkillHost {
     api: Option<Arc<LoadedSqliteApi>>,
     controller: Option<Arc<LuaRuntimeSpaceControllerBridge>>,
     skills: Mutex<HashMap<String, Arc<SqliteSkillBinding>>>,
+    provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
     host_options: LuaRuntimeHostOptions,
 }
 
 impl SqliteSkillHost {
     /// Create the host-side SQLite skill manager and load the dynamic library immediately.
     /// 创建宿主级 SQLite 技能管理器，并立即加载动态库。
-    pub fn new(host_options: LuaRuntimeHostOptions) -> Result<Self, String> {
+    pub fn new(
+        host_options: LuaRuntimeHostOptions,
+        provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
+    ) -> Result<Self, String> {
         let api = match host_options.sqlite_provider_mode {
             LuaRuntimeDatabaseProviderMode::DynamicLibrary => {
                 let library_path = host_options.sqlite_library_path.clone().ok_or_else(|| {
@@ -2419,7 +2422,9 @@ impl SqliteSkillHost {
                 Some(Arc::new(LoadedSqliteApi::load(&library_path)?))
             }
             LuaRuntimeDatabaseProviderMode::HostCallback => {
-                if !has_sqlite_provider_callback_for_mode(host_options.sqlite_callback_mode)? {
+                if !provider_callbacks
+                    .has_sqlite_provider_callback_for_mode(host_options.sqlite_callback_mode)
+                {
                     return Err(format!(
                         "SQLite host-callback mode is enabled but no {} callback is registered",
                         callback_mode_name(host_options.sqlite_callback_mode)
@@ -2439,6 +2444,7 @@ impl SqliteSkillHost {
             api,
             controller,
             skills: Mutex::new(HashMap::new()),
+            provider_callbacks,
             host_options,
         })
     }
@@ -2586,6 +2592,7 @@ impl SqliteSkillHost {
             callback_mode: self.host_options.sqlite_callback_mode,
             handles,
             controller,
+            provider_callbacks: self.provider_callbacks.clone(),
             provider_binding: binding_context,
         });
         guard.insert(skill_name.to_string(), binding.clone());

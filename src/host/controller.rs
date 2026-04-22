@@ -8,8 +8,8 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::runtime::{Handle, Runtime};
 use vldb_controller_client::{
-    ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode, SpaceKind,
-    SpaceRegistration,
+    BoxError, ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
+    SpaceKind, SpaceRegistration,
 };
 
 /// Shared host-side controller bridge that executes async controller SDK calls from sync runtime code.
@@ -68,7 +68,7 @@ impl LuaRuntimeSpaceControllerBridge {
         run_controller_operation_with_client(&runtime, &client, |client| async move {
             client.connect().await
         })
-            .map_err(|error| format!("failed to connect space controller client: {}", error))?;
+        .map_err(|error| format!("failed to connect space controller client: {}", error))?;
         Ok(Arc::new(Self {
             client,
             runtime: Mutex::new(runtime),
@@ -80,7 +80,7 @@ impl LuaRuntimeSpaceControllerBridge {
     pub fn run<F, Fut, T>(&self, operation: F) -> Result<T, String>
     where
         F: FnOnce(ControllerClient) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<T, vldb_controller_client::client::BoxError>> + Send + 'static,
+        Fut: Future<Output = Result<T, BoxError>> + Send + 'static,
         T: Send + 'static,
     {
         let runtime = self
@@ -111,27 +111,47 @@ fn run_controller_operation_with_client<F, Fut, T>(
     runtime: &Runtime,
     client: &ControllerClient,
     operation: F,
-) -> Result<T, vldb_controller_client::client::BoxError>
+) -> Result<T, BoxError>
 where
     F: FnOnce(ControllerClient) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<T, vldb_controller_client::client::BoxError>> + Send + 'static,
+    Fut: Future<Output = Result<T, BoxError>> + Send + 'static,
     T: Send + 'static,
 {
     let client_clone = client.clone();
-    if let Ok(handle) = Handle::try_current() {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        tokio::task::block_in_place(|| {
-            handle.spawn(async move {
-                let result = operation(client_clone).await;
-                let _ = sender.send(result);
-            });
-            receiver
-                .recv()
-                .unwrap_or_else(|_| Err("space controller task channel closed".into()))
-        })
-    } else {
-        runtime.block_on(operation(client_clone))
+    run_future_on_bridge_runtime(runtime, operation(client_clone))
+}
+
+/// Execute one Send future on the bridge-owned Tokio runtime without depending on the host runtime flavor.
+/// 在桥接持有的 Tokio 运行时上执行一个可发送 future，并且不依赖宿主运行时 flavor。
+fn run_future_on_bridge_runtime<Fut, T>(runtime: &Runtime, future: Fut) -> Result<T, BoxError>
+where
+    Fut: Future<Output = Result<T, BoxError>> + Send + 'static,
+    T: Send + 'static,
+{
+    if Handle::try_current().is_ok() {
+        return run_future_on_bridge_runtime_handle(runtime.handle().clone(), future);
     }
+    runtime.block_on(future)
+}
+
+/// Dispatch one future onto the bridge runtime worker threads and wait synchronously for the result.
+/// 把一个 future 分发到桥接运行时的工作线程上，并同步等待执行结果。
+fn run_future_on_bridge_runtime_handle<Fut, T>(
+    runtime_handle: Handle,
+    future: Fut,
+) -> Result<T, BoxError>
+where
+    Fut: Future<Output = Result<T, BoxError>> + Send + 'static,
+    T: Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    runtime_handle.spawn(async move {
+        let result = future.await;
+        let _ = sender.send(result);
+    });
+    receiver
+        .recv()
+        .unwrap_or_else(|_| Err("space controller task channel closed".into()))
 }
 
 impl Drop for LuaRuntimeSpaceControllerBridge {
@@ -145,7 +165,7 @@ impl Drop for LuaRuntimeSpaceControllerBridge {
                 let Ok(runtime) = Runtime::new() else {
                     return;
                 };
-                let _ = runtime.block_on(async move {
+                runtime.block_on(async move {
                     let _ =
                         tokio::time::timeout(Duration::from_millis(250), client.shutdown()).await;
                 });
@@ -202,5 +222,49 @@ fn normalize_controller_space_label(space_label: &str) -> String {
         "SPACE".to_string()
     } else {
         normalized
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_future_on_bridge_runtime;
+    use tokio::runtime::{Builder, Runtime};
+    use vldb_controller_client::BoxError;
+
+    /// Build one controller bridge runtime used by bridge-execution tests.
+    /// 构建一个供桥接执行测试使用的控制器运行时。
+    fn build_bridge_runtime() -> Runtime {
+        Runtime::new().expect("bridge runtime should build")
+    }
+
+    /// Verify bridge-owned futures still execute correctly for synchronous callers outside Tokio.
+    /// 验证桥接持有的 future 在 Tokio 外部的同步调用方场景下仍能正确执行。
+    #[test]
+    fn bridge_runtime_executes_futures_for_sync_callers() {
+        let runtime = build_bridge_runtime();
+        let result = run_future_on_bridge_runtime(&runtime, async { Ok::<_, BoxError>(7usize) })
+            .expect("sync caller path should succeed");
+        assert_eq!(result, 7);
+    }
+
+    /// Verify bridge-owned futures do not panic when the host is already inside a current-thread Tokio runtime.
+    /// 验证当宿主已经处于 current-thread Tokio 运行时中时，桥接持有的 future 不会触发 panic。
+    #[test]
+    fn bridge_runtime_executes_futures_inside_current_thread_tokio_runtime() {
+        let bridge_runtime = build_bridge_runtime();
+        let host_runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread host runtime should build");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            host_runtime.block_on(async {
+                run_future_on_bridge_runtime(&bridge_runtime, async { Ok::<_, BoxError>(11usize) })
+                    .expect("current-thread caller path should succeed")
+            })
+        }))
+        .expect("current-thread host runtime path should not panic");
+
+        assert_eq!(result, 11);
     }
 }

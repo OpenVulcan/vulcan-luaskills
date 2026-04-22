@@ -12,8 +12,8 @@ use std::time::Instant;
 use crate::host::controller::{LuaRuntimeSpaceControllerBridge, controller_space_id_for_binding};
 use crate::host::database::{
     LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,
-    RuntimeDatabaseKind, RuntimeLanceDbProviderAction, RuntimeLanceDbProviderRequest,
-    dispatch_lancedb_provider_request, has_lancedb_provider_callback_for_mode,
+    RuntimeDatabaseKind, RuntimeDatabaseProviderCallbacks, RuntimeLanceDbProviderAction,
+    RuntimeLanceDbProviderRequest,
 };
 use crate::lua_skill::{SkillLanceDbLogLevel, SkillLanceDbMeta};
 use crate::runtime_logging::{info as log_info, warn as log_warn};
@@ -278,6 +278,7 @@ pub struct LanceDbSkillBinding {
     callback_mode: LuaRuntimeDatabaseCallbackMode,
     handles: Option<Mutex<SkillHandleState>>,
     controller: Option<Arc<LuaRuntimeSpaceControllerBridge>>,
+    provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
     provider_binding: RuntimeDatabaseBindingContext,
 }
 
@@ -683,7 +684,8 @@ impl LanceDbSkillBinding {
             binding: self.provider_binding.clone(),
             input: input.clone(),
         };
-        dispatch_lancedb_provider_request(&request, self.callback_mode)
+        self.provider_callbacks
+            .dispatch_lancedb_provider_request(&request, self.callback_mode)
     }
 
     /// Acquire the handle lock so LanceDB FFI calls for the same skill execute serially.
@@ -750,13 +752,17 @@ pub struct LanceDbSkillHost {
     api: Option<Arc<LoadedLanceDbApi>>,
     controller: Option<Arc<LuaRuntimeSpaceControllerBridge>>,
     skills: Mutex<HashMap<String, Arc<LanceDbSkillBinding>>>,
+    provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
     host_options: LuaRuntimeHostOptions,
 }
 
 impl LanceDbSkillHost {
     /// Create the host-side LanceDB skill manager and load the dynamic library immediately.
     /// 创建宿主级 LanceDB 技能管理器，并立即加载动态库。
-    pub fn new(host_options: LuaRuntimeHostOptions) -> Result<Self, String> {
+    pub fn new(
+        host_options: LuaRuntimeHostOptions,
+        provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
+    ) -> Result<Self, String> {
         let api = match host_options.lancedb_provider_mode {
             LuaRuntimeDatabaseProviderMode::DynamicLibrary => {
                 let library_path = host_options.lancedb_library_path.clone().ok_or_else(|| {
@@ -766,7 +772,9 @@ impl LanceDbSkillHost {
                 Some(Arc::new(LoadedLanceDbApi::load(&library_path)?))
             }
             LuaRuntimeDatabaseProviderMode::HostCallback => {
-                if !has_lancedb_provider_callback_for_mode(host_options.lancedb_callback_mode)? {
+                if !provider_callbacks
+                    .has_lancedb_provider_callback_for_mode(host_options.lancedb_callback_mode)
+                {
                     return Err(format!(
                         "LanceDB host-callback mode is enabled but no {} callback is registered",
                         callback_mode_name(host_options.lancedb_callback_mode)
@@ -786,6 +794,7 @@ impl LanceDbSkillHost {
             api,
             controller,
             skills: Mutex::new(HashMap::new()),
+            provider_callbacks,
             host_options,
         })
     }
@@ -928,6 +937,7 @@ impl LanceDbSkillHost {
             callback_mode: self.host_options.lancedb_callback_mode,
             handles,
             controller,
+            provider_callbacks: self.provider_callbacks.clone(),
             provider_binding: binding_context,
         });
         guard.insert(skill_name.to_string(), binding.clone());
