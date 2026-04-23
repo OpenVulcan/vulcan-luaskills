@@ -212,6 +212,12 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Number of reserved public entry names.
     /// 保留公开入口名称数组长度。
     pub reserved_entry_names_len: usize,
+    /// Host-forced ignored skill identifiers.
+    /// 宿主强制忽略的技能标识符数组。
+    pub ignored_skill_ids: *const *const c_char,
+    /// Number of host-forced ignored skill identifiers.
+    /// 宿主强制忽略的技能标识符数组长度。
+    pub ignored_skill_ids_len: usize,
     /// Whether Lua may use `vulcan.runtime.skills.*` management bridges.
     /// Lua 是否允许使用 `vulcan.runtime.skills.*` 管理桥接。
     pub enable_skill_management_bridge: u8,
@@ -944,6 +950,11 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             value.reserved_entry_names,
             value.reserved_entry_names_len,
             "reserved_entry_names",
+        )?,
+        ignored_skill_ids: parse_string_array(
+            value.ignored_skill_ids,
+            value.ignored_skill_ids_len,
+            "ignored_skill_ids",
         )?,
         capabilities: LuaRuntimeCapabilityOptions {
             enable_skill_management_bridge: value.enable_skill_management_bridge != 0,
@@ -3265,6 +3276,8 @@ mod tests {
             cache_config: ptr::null(),
             reserved_entry_names: ptr::null(),
             reserved_entry_names_len: 0,
+            ignored_skill_ids: ptr::null(),
+            ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
         };
         let engine_options = FfiLuaEngineOptions {
@@ -3438,6 +3451,8 @@ mod tests {
             cache_config: ptr::null(),
             reserved_entry_names: ptr::null(),
             reserved_entry_names_len: 0,
+            ignored_skill_ids: ptr::null(),
+            ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
         };
         let engine_options = FfiLuaEngineOptions {
@@ -3594,6 +3609,8 @@ mod tests {
             cache_config: ptr::null(),
             reserved_entry_names: ptr::null(),
             reserved_entry_names_len: 0,
+            ignored_skill_ids: ptr::null(),
+            ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
         };
         let engine_options = FfiLuaEngineOptions {
@@ -3756,6 +3773,8 @@ mod tests {
             cache_config: ptr::null(),
             reserved_entry_names: ptr::null(),
             reserved_entry_names_len: 0,
+            ignored_skill_ids: ptr::null(),
+            ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
         };
         let engine_options = FfiLuaEngineOptions {

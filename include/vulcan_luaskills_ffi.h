@@ -117,6 +117,16 @@ typedef struct FfiLuaRuntimeHostOptions {
     const char **reserved_entry_names;
     size_t reserved_entry_names_len;
     /*
+    Host-forced skill identifiers skipped before dependency and database setup.
+    在依赖与数据库初始化前由宿主强制跳过的技能标识符数组。
+    */
+    const char **ignored_skill_ids;
+    /*
+    Number of host-forced ignored skill identifiers.
+    宿主强制忽略的技能标识符数组长度。
+    */
+    size_t ignored_skill_ids_len;
+    /*
     Whether Lua may use `vulcan.runtime.skills.*` management bridges.
     Lua 是否允许使用 `vulcan.runtime.skills.*` 管理桥接。
     */

@@ -625,6 +625,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `lancedb_provider_mode`
 - `lancedb_callback_mode`
 - `reserved_entry_names`
+- `ignored_skill_ids`
 - `enable_skill_management_bridge`
 
 数据库后端模式规则如下：
@@ -656,6 +657,14 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
   - 真正执行仍依赖宿主已注册运行时技能管理回调
 - 如果宿主打开了开关但没有注册回调，Lua 会得到明确错误：
   - `Runtime skill management bridge is enabled but no host callback is registered`
+
+宿主强制忽略规则：
+
+- `ignored_skill_ids` 匹配 skill 目录派生出的 `skill_id`
+- 命中后该 skill 会在加载早期被跳过
+- 被跳过的 skill 不会触发依赖准备、SQLite/LanceDB 绑定或 entry 注册
+- 该字段适合宿主已经用原生、gRPC、VMM 或其他实现替代某个默认 skill 包时使用
+- 这不是 skill 自声明的 capability 判定，也不会自动推断宿主已有能力
 
 ### 8.4 `FfiLuaEngineOptions`
 

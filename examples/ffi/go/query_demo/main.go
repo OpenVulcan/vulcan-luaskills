@@ -123,6 +123,8 @@ func main() {
 		cache_config:                     nil,
 		reserved_entry_names:             nil,
 		reserved_entry_names_len:         0,
+		ignored_skill_ids:                nil,
+		ignored_skill_ids_len:            0,
 		enable_skill_management_bridge:   0,
 	}
 	defer C.free(unsafe.Pointer(host.temp_dir))

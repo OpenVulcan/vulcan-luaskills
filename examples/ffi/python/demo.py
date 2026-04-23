@@ -57,6 +57,8 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("cache_config", ctypes.c_void_p),
         ("reserved_entry_names", ctypes.POINTER(ctypes.c_char_p)),
         ("reserved_entry_names_len", ctypes.c_size_t),
+        ("ignored_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
+        ("ignored_skill_ids_len", ctypes.c_size_t),
         ("enable_skill_management_bridge", ctypes.c_uint8),
     ]
 
@@ -373,6 +375,8 @@ def main() -> None:
     host.cache_config = None
     host.reserved_entry_names = None
     host.reserved_entry_names_len = 0
+    host.ignored_skill_ids = None
+    host.ignored_skill_ids_len = 0
     host.enable_skill_management_bridge = 0
 
     options = FfiLuaEngineOptions(

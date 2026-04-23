@@ -1343,6 +1343,7 @@ mod tests {
                     space_controller: crate::LuaRuntimeSpaceControllerOptions::default(),
                     cache_config: None,
                     reserved_entry_names: Vec::new(),
+                    ignored_skill_ids: Vec::new(),
                     capabilities: Default::default(),
                 },
             ),

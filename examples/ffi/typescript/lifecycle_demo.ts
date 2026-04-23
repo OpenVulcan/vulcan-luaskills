@@ -228,6 +228,8 @@ function main(): void {
     cache_config: "void *",
     reserved_entry_names: "void *",
     reserved_entry_names_len: "size_t",
+    ignored_skill_ids: "void *",
+    ignored_skill_ids_len: "size_t",
     enable_skill_management_bridge: "uint8_t",
   });
 
@@ -307,6 +309,8 @@ function main(): void {
       cache_config: null,
       reserved_entry_names: null,
       reserved_entry_names_len: 0,
+      ignored_skill_ids: null,
+      ignored_skill_ids_len: 0,
       enable_skill_management_bridge: 0,
     },
   };

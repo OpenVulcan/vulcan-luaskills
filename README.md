@@ -109,6 +109,16 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 - IDE 插件宿主
 - 未来的 FFI 宿主
 
+宿主还可以通过 `LuaRuntimeHostOptions.ignored_skill_ids` 提供一个强制忽略列表：
+
+- 匹配对象是 skill 目录派生出的 `skill_id`，不是 `skill.yaml` 的展示名称
+- 命中后该 skill 会在加载早期被跳过
+- 被跳过的 skill 不会准备依赖、不会绑定 SQLite/LanceDB，也不会注册 entry
+- 该能力适合宿主已经把某类能力切换到原生、gRPC、VMM 或其他更强实现时，用来屏蔽默认包或冲突包
+
+这不是自动 capability 反判定系统，也不是 skill 自己决定是否启用的机制。  
+最终是否忽略某个 skill，仍由宿主策略和用户安装/禁用意图决定。
+
 ### 3. System 与 Skill 分层
 
 当前模型分为两层：

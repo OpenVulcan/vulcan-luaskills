@@ -2027,6 +2027,15 @@ impl LuaEngine {
         parent.join(self.host_options.dependency_dir_name.as_str())
     }
 
+    /// Return whether the host policy forces one skill identifier to be ignored.
+    /// 返回宿主策略是否强制忽略指定技能标识符。
+    fn is_host_ignored_skill(&self, skill_id: &str) -> bool {
+        self.host_options
+            .ignored_skill_ids
+            .iter()
+            .any(|ignored| ignored.trim() == skill_id)
+    }
+
     /// Build the sibling database root for one named skill root.
     /// 为单个命名技能根构造同级数据库根目录。
     fn database_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
@@ -2328,6 +2337,13 @@ impl LuaEngine {
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
         {
             let skill_name = resolved_instance.skill_id;
+            if self.is_host_ignored_skill(&skill_name) {
+                log_info(format!(
+                    "[LuaSkill] Skipped host-ignored skill '{}'",
+                    skill_name
+                ));
+                continue;
+            }
             let resolved_root = RuntimeSkillRoot {
                 name: resolved_instance.root_name.clone(),
                 skills_dir: resolved_instance.skills_root.clone(),
@@ -6175,6 +6191,62 @@ mod tests {
             .expect_err("explicit skill_id should be rejected");
         let rendered = error.to_string();
         assert!(rendered.contains("must not declare skill_id"));
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    /// Verify that host-ignored skills are skipped before dependency, database, or entry setup.
+    /// 验证宿主忽略的 skill 会在依赖、数据库与入口初始化之前被跳过。
+    #[test]
+    fn load_from_roots_skips_host_ignored_skill_before_resource_setup() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_ignored_skill_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = fs::remove_dir_all(&temp_root);
+        }
+        let skill_root = temp_root.join("skills");
+        let skill_dir = skill_root.join("grpc-memory");
+        fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime dir");
+        fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: grpc-memory\nversion: 0.1.0\nenable: true\ndebug: false\nsqlite:\n  enable: true\nlancedb:\n  enable: true\nentries:\n  - name: remember\n    lua_entry: runtime/remember.lua\n    lua_module: grpc-memory.remember\n",
+        )
+        .expect("write skill yaml");
+        fs::write(
+            skill_dir.join("runtime").join("remember.lua"),
+            "return function(args)\n  return 'unexpected-load'\nend\n",
+        )
+        .expect("write runtime entry");
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.dependency_dir_name = "dependencies".to_string();
+        host_options.state_dir_name = "state".to_string();
+        host_options.database_dir_name = "databases".to_string();
+        host_options.ignored_skill_ids = vec!["grpc-memory".to_string()];
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options,
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create engine");
+
+        engine
+            .load_from_roots(&[crate::host::options::RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: skill_root,
+            }])
+            .expect("ignored skill should not fail loading");
+
+        assert!(engine.skills.is_empty());
+        assert!(engine.entry_registry.is_empty());
+        assert!(!temp_root.join("dependencies").exists());
+        assert!(!temp_root.join("state").exists());
+        assert!(!temp_root.join("databases").exists());
 
         let _ = fs::remove_dir_all(&temp_root);
     }

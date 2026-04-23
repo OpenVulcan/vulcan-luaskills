@@ -124,6 +124,8 @@ def main() -> None:
     host.cache_config = None
     host.reserved_entry_names = None
     host.reserved_entry_names_len = 0
+    host.ignored_skill_ids = None
+    host.ignored_skill_ids_len = 0
     host.enable_skill_management_bridge = 0
 
     options = FfiLuaEngineOptions(

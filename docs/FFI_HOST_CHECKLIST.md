@@ -48,6 +48,9 @@
   - 已确认 `endpoint / auto_spawn / executable_path / process_mode`
 - 如果连接远端 controller：
   - 必须关闭 `auto_spawn`
+- 如果宿主需要屏蔽默认包或冲突包：
+  - 在 `FfiLuaRuntimeHostOptions.ignored_skill_ids` 填入对应目录派生的 `skill_id`
+  - 被忽略 skill 不会准备依赖、不会绑定数据库，也不会注册 entry
 
 ## 4. 标准创建顺序
 

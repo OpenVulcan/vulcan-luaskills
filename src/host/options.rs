@@ -191,6 +191,10 @@ pub struct LuaRuntimeHostOptions {
     /// Host-reserved public entry names that LuaSkills canonical name generation must never occupy directly.
     /// 宿主保留的公开入口名称集合，LuaSkills 在生成 canonical 名称时必须直接避开这些名称。
     pub reserved_entry_names: Vec<String>,
+    /// Host-forced skill identifiers that must be skipped before dependency or database setup.
+    /// 宿主强制跳过的技能标识符列表，会在依赖或数据库初始化前生效。
+    #[serde(default)]
+    pub ignored_skill_ids: Vec<String>,
     /// Host-controlled optional runtime capability toggles.
     /// 由宿主控制的可选运行时能力开关集合。
     #[serde(default)]

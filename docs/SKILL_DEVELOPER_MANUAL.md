@@ -32,6 +32,7 @@
 
 1. 当前运行时默认把 skill 当作**受信代码**执行，不提供沙箱安全承诺。
 2. `vulcan.context.*`、`vulcan.deps.*`、`vulcan.sqlite.*`、`vulcan.lancedb.*` 中有一部分内容依赖宿主或当前 skill 绑定状态，不能假设始终存在有效值。
+3. 宿主可以通过 `LuaRuntimeHostOptions.ignored_skill_ids` 强制忽略某些 skill，被忽略的 skill 不会进入依赖准备、数据库绑定或 entry 注册阶段。
 
 ## 3. 顶级能力总览
 
@@ -49,6 +50,33 @@
 | `vulcan.deps` | 当前 skill 依赖根路径 | 是 | 未解析到当前 skill 时可能为 `nil` |
 | `vulcan.sqlite` | 当前 skill 的 SQLite 绑定 | 条件可用 | 未启用时仍有 `enabled/status/info` |
 | `vulcan.lancedb` | 当前 skill 的 LanceDB 绑定 | 条件可用 | 未启用时仍有 `enabled/status/info` |
+
+## 3.1 宿主强制忽略 skill
+
+`ignored_skill_ids` 是宿主运行时级策略，用来在加载早期跳过某些 skill。
+
+典型场景：
+
+- 宿主已经提供了更强的原生、gRPC 或 VMM 能力实现
+- 默认 skill 包与宿主现有功能重复
+- 某个数据库型 skill 的能力已被宿主侧服务替代，不希望继续启动 SQLite / LanceDB 绑定
+
+匹配规则：
+
+- 匹配对象是 skill 目录派生出的 `skill_id`
+- 不匹配 `skill.yaml` 的 `name`
+- 不由 skill 自己声明，也不属于依赖判定
+
+运行时效果：
+
+- 命中忽略列表后，整个 skill 会被跳过
+- 不准备 `dependencies.yaml`
+- 不绑定 SQLite / LanceDB
+- 不注册任何 entry
+- 不会出现在 `list_entries` 或 `vulcan.call` 可调用目标中
+
+这项能力保留宿主和用户的最终选择权。  
+如果用户希望继续使用某个 skill，宿主不应在策略层把它加入忽略列表。
 
 ## 4. `vulcan.call`
 

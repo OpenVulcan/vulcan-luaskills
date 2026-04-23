@@ -34,6 +34,9 @@
 - SQLite 使用 `host_callback + json`
 - LanceDB 使用 `dynamic_library`
 
+如果宿主已经把某个数据库型 skill 的能力切换到原生、gRPC、VMM 或其他实现，可以在加载前通过 `LuaRuntimeHostOptions.ignored_skill_ids` 忽略对应 skill。  
+被忽略的 skill 不会进入依赖准备、SQLite/LanceDB 绑定或 entry 注册阶段，因此不会产生数据库 provider 请求。
+
 ### `dynamic_library`
 
 由 `luaskills` 自己加载本地动态库，并直接调用：
