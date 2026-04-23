@@ -15,6 +15,11 @@
 
 **`vulcan-luaskills` 负责运行 skill，宿主负责决定怎么把这些能力公开给用户。**
 
+如果您当前主要是**写 Lua skill**，建议先看：
+
+1. [docs/SKILL_DEVELOPER_MANUAL.md](docs/SKILL_DEVELOPER_MANUAL.md)
+2. [docs/HOST_DATABASE_PROVIDER_GUIDE.md](docs/HOST_DATABASE_PROVIDER_GUIDE.md)
+
 ## 当前定位
 
 这个库是整个 LuaSkills 体系的核心真相层，主要承担：
@@ -508,7 +513,8 @@ FFI 设计规则如下：
   - lib 把数据库请求和稳定绑定上下文回调给宿主
 - `space_controller`
   - 由 lib 把数据库请求转发给外部空间控制器
-  - 代码层通过 `git + tag v0.1.0` 固定依赖 `vldb-controller-client`
+  - 代码层通过 `git + tag v0.2.0` 固定依赖 `vldb-controller-client`
+  - 当前上游 Rust SDK 注册字段为 `client_name`，会话主键 `client_session_id` 由 SDK 内部自动管理
   - 服务进程本体不走 Cargo 依赖注入，而是由宿主复制本地 controller 可执行文件后，通过 `space_controller.executable_path` 指定启动路径
   - 宿主不指定 `endpoint` 时，默认连接共享端点 `http://127.0.0.1:19801`
   - 宿主指定独立端点时，可切换到独占 controller 实例

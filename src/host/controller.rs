@@ -37,7 +37,7 @@ impl LuaRuntimeSpaceControllerBridge {
             .map(|duration| duration.as_millis())
             .unwrap_or_default();
         let registration = ClientRegistration {
-            client_id: format!(
+            client_name: format!(
                 "vulcan-luaskills-{}-{}-{}",
                 process_id, backend_suffix, started_at_ms
             ),

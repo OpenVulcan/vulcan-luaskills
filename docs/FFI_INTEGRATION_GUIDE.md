@@ -496,7 +496,8 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 这里要特别注意：
 
-- `vulcan-luaskills` 代码层只通过 `git + tag v0.1.0` 固定依赖 `vldb-controller-client`
+- `vulcan-luaskills` 代码层只通过 `git + tag v0.2.0` 固定依赖 `vldb-controller-client`
+- 当前上游 Rust SDK 在注册阶段使用 `client_name`，具体 `client_session_id` 由 SDK 内部自动管理并自动回放附着与 backend 期望状态
 - 真正被拉起的 controller 服务程序，不是通过 Cargo 把二进制嵌进宿主，而是由宿主自行复制并管理
 - 也就是说，**Rust SDK 走 git 固定版本，controller 可执行文件走宿主本地复制路径**
 - 如果宿主要连接远端 controller 或使用远端主机名端点，必须关闭 `auto_spawn`，避免把远端地址错误地当成本地 bind 地址去拉起新进程

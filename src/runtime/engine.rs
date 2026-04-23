@@ -55,6 +55,33 @@ struct LoadedSkill {
     resolved_entry_names: HashMap<String, String>,
 }
 
+/// Normalize one host-visible path string so Windows verbatim prefixes never leak into logs or Lua-visible context.
+/// 归一化一个对宿主可见的路径文本，避免 Windows verbatim 前缀泄漏到日志或 Lua 可见上下文中。
+fn normalize_host_visible_path_text(rendered: &str) -> String {
+    #[cfg(windows)]
+    {
+        if let Some(stripped) = rendered.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{}", stripped);
+        }
+        if let Some(stripped) = rendered.strip_prefix(r"\\?\") {
+            return stripped.to_string();
+        }
+    }
+    rendered.to_string()
+}
+
+/// Render one filesystem path for host-visible runtime surfaces without Windows verbatim prefixes.
+/// 为宿主可见的运行时表面渲染文件系统路径，并去掉 Windows verbatim 前缀。
+fn render_host_visible_path(path: &Path) -> String {
+    normalize_host_visible_path_text(&path.to_string_lossy())
+}
+
+/// Render one filesystem path for user-facing runtime logs without Windows verbatim prefixes.
+/// 为面向用户的运行时日志渲染文件系统路径，并去掉 Windows verbatim 前缀。
+fn render_log_friendly_path(path: &Path) -> String {
+    render_host_visible_path(path)
+}
+
 /// Pool sizing configuration for Lua virtual machines.
 /// Lua 虚拟机池的容量配置。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -985,7 +1012,7 @@ fn populate_vulcan_file_context(
 
     match skill_dir {
         Some(path) => context
-            .set("skill_dir", path.to_string_lossy().to_string())
+            .set("skill_dir", render_host_visible_path(path))
             .map_err(|error| format!("Failed to set vulcan.context.skill_dir: {}", error))?,
         None => context
             .set("skill_dir", LuaValue::Nil)
@@ -996,10 +1023,10 @@ fn populate_vulcan_file_context(
         Some(path) => {
             let entry_dir = path.parent().unwrap_or(path);
             context
-                .set("entry_dir", entry_dir.to_string_lossy().to_string())
+                .set("entry_dir", render_host_visible_path(entry_dir))
                 .map_err(|error| format!("Failed to set vulcan.context.entry_dir: {}", error))?;
             context
-                .set("entry_file", path.to_string_lossy().to_string())
+                .set("entry_file", render_host_visible_path(path))
                 .map_err(|error| format!("Failed to set vulcan.context.entry_file: {}", error))?;
         }
         None => {
@@ -1058,29 +1085,17 @@ fn populate_vulcan_dependency_context(
 
     deps.set(
         "tools_path",
-        dependency_root
-            .join("tools")
-            .join(skill_id)
-            .to_string_lossy()
-            .to_string(),
+        render_host_visible_path(&dependency_root.join("tools").join(skill_id)),
     )
     .map_err(|error| format!("Failed to set vulcan.deps.tools_path: {}", error))?;
     deps.set(
         "lua_path",
-        dependency_root
-            .join("lua")
-            .join(skill_id)
-            .to_string_lossy()
-            .to_string(),
+        render_host_visible_path(&dependency_root.join("lua").join(skill_id)),
     )
     .map_err(|error| format!("Failed to set vulcan.deps.lua_path: {}", error))?;
     deps.set(
         "ffi_path",
-        dependency_root
-            .join("ffi")
-            .join(skill_id)
-            .to_string_lossy()
-            .to_string(),
+        render_host_visible_path(&dependency_root.join("ffi").join(skill_id)),
     )
     .map_err(|error| format!("Failed to set vulcan.deps.ffi_path: {}", error))?;
     Ok(())
@@ -2329,10 +2344,8 @@ impl LuaEngine {
             }
             let actual_dir = resolved_instance.actual_dir;
             log_info(format!(
-                "[LuaSkill] Loaded '{}' from root '{}' at {}",
-                skill_name,
-                resolved_instance.root_name,
-                actual_dir.display()
+                "[LuaSkill] Loaded '{}' from root '{}'",
+                skill_name, resolved_instance.root_name
             ));
 
             if let Err(error) = self.ensure_skill_dependencies(&resolved_root, &actual_dir) {
@@ -3461,7 +3474,7 @@ impl LuaEngine {
             log_info(format!(
                 "[LuaSkill] Hot reload {}: {}",
                 tool.lua_module,
-                lua_path.display()
+                render_log_friendly_path(&lua_path)
             ));
         }
 
@@ -5597,7 +5610,7 @@ end
                 let part = require_path_arg(val, "path.join", &param_name)?;
                 joined.push(part);
             }
-            let result = joined.to_string_lossy().to_string();
+            let result = render_host_visible_path(&joined);
             lua.create_string(&result)
         })?;
         path.set("join", path_join_fn)?;
@@ -5605,20 +5618,18 @@ end
         let cwd_fn = lua.create_function(|lua, ()| {
             let current_dir = std::env::current_dir()
                 .map_err(|error| mlua::Error::runtime(format!("runtime.cwd: {}", error)))?;
-            let current_dir_text = current_dir.to_string_lossy().to_string();
+            let current_dir_text = render_host_visible_path(&current_dir);
             lua.create_string(&current_dir_text)
         })?;
         runtime.set("cwd", cwd_fn)?;
 
         match host_options.temp_dir.as_ref() {
-            Some(path_buf) => runtime.set("temp_dir", path_buf.to_string_lossy().to_string())?,
+            Some(path_buf) => runtime.set("temp_dir", render_host_visible_path(path_buf))?,
             None => runtime.set("temp_dir", LuaValue::Nil)?,
         }
 
         match host_options.resources_dir.as_ref() {
-            Some(path_buf) => {
-                runtime.set("resources_dir", path_buf.to_string_lossy().to_string())?
-            }
+            Some(path_buf) => runtime.set("resources_dir", render_host_visible_path(path_buf))?,
             None => runtime.set("resources_dir", LuaValue::Nil)?,
         }
 
@@ -5930,8 +5941,8 @@ mod tests {
         LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState, LuaVmRequestScopeGuard,
         VulcanInternalExecutionContext, get_vulcan_context_table, get_vulcan_deps_table,
         get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
-        populate_vulcan_dependency_context, populate_vulcan_file_context,
-        populate_vulcan_internal_execution_context,
+        normalize_host_visible_path_text, populate_vulcan_dependency_context,
+        populate_vulcan_file_context, populate_vulcan_internal_execution_context,
     };
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
     use crate::lua_skill::SkillMeta;
@@ -5963,6 +5974,28 @@ mod tests {
             sqlite_binding: None,
             resolved_entry_names: HashMap::new(),
         }
+    }
+
+    /// Verify host-visible path normalization strips the Windows drive-letter verbatim prefix.
+    /// 验证对宿主可见的路径归一化会去掉 Windows 盘符 verbatim 前缀。
+    #[cfg(windows)]
+    #[test]
+    fn normalize_host_visible_path_text_strips_windows_drive_verbatim_prefix() {
+        assert_eq!(
+            normalize_host_visible_path_text(r"\\?\C:\runtime-test-root\skill.lua"),
+            r"C:\runtime-test-root\skill.lua"
+        );
+    }
+
+    /// Verify host-visible path normalization strips the Windows UNC verbatim prefix.
+    /// 验证对宿主可见的路径归一化会去掉 Windows UNC verbatim 前缀。
+    #[cfg(windows)]
+    #[test]
+    fn normalize_host_visible_path_text_strips_windows_unc_verbatim_prefix() {
+        assert_eq!(
+            normalize_host_visible_path_text(r"\\?\UNC\server\share\skill.lua"),
+            r"\\server\share\skill.lua"
+        );
     }
 
     /// Build one minimal engine instance used only for registry tests.

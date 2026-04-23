@@ -80,7 +80,8 @@
 
 推荐理解方式：
 
-- Rust SDK：走 `git + tag v0.1.0`
+- Rust SDK：走 `git + tag v0.2.0`
+- SDK 注册时宿主名使用 `client_name`，会话主键 `client_session_id` 由 controller 分配并由 SDK 内部自动管理
 - controller 可执行程序：走宿主本地复制与管理
 - 共享还是独占：由 `endpoint` 决定
 
