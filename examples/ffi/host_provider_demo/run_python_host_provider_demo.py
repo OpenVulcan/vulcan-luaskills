@@ -39,7 +39,6 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("temp_dir", ctypes.c_char_p),
         ("resources_dir", ctypes.c_char_p),
         ("lua_packages_dir", ctypes.c_char_p),
-        ("luaexec_program", ctypes.c_char_p),
         ("host_provided_tool_root", ctypes.c_char_p),
         ("host_provided_lua_root", ctypes.c_char_p),
         ("host_provided_ffi_root", ctypes.c_char_p),
@@ -63,6 +62,7 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("space_controller_executable_path", ctypes.c_char_p),
         ("space_controller_process_mode", ctypes.c_int32),
         ("cache_config", ctypes.c_void_p),
+        ("runlua_pool_config", ctypes.c_void_p),
         ("reserved_entry_names", ctypes.POINTER(ctypes.c_char_p)),
         ("reserved_entry_names_len", ctypes.c_size_t),
         ("ignored_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
@@ -452,7 +452,6 @@ def main() -> None:
     host.temp_dir = str((runtime_root / "temp").resolve()).replace("\\", "/").encode("utf-8")
     host.resources_dir = str((runtime_root / "resources").resolve()).replace("\\", "/").encode("utf-8")
     host.lua_packages_dir = str((runtime_root / "lua_packages").resolve()).replace("\\", "/").encode("utf-8")
-    host.luaexec_program = None
     host.host_provided_tool_root = str((runtime_root / "bin" / "tools").resolve()).replace("\\", "/").encode("utf-8")
     host.host_provided_lua_root = str((runtime_root / "lua_packages").resolve()).replace("\\", "/").encode("utf-8")
     host.host_provided_ffi_root = str((runtime_root / "libs").resolve()).replace("\\", "/").encode("utf-8")
@@ -476,6 +475,7 @@ def main() -> None:
     host.space_controller_executable_path = None
     host.space_controller_process_mode = 0
     host.cache_config = None
+    host.runlua_pool_config = None
     host.reserved_entry_names = None
     host.reserved_entry_names_len = 0
     host.ignored_skill_ids = None
@@ -493,7 +493,6 @@ def main() -> None:
                 "temp_dir": host.temp_dir.decode("utf-8"),
                 "resources_dir": host.resources_dir.decode("utf-8"),
                 "lua_packages_dir": host.lua_packages_dir.decode("utf-8"),
-                "luaexec_program": None,
                 "host_provided_tool_root": host.host_provided_tool_root.decode("utf-8"),
                 "host_provided_lua_root": host.host_provided_lua_root.decode("utf-8"),
                 "host_provided_ffi_root": host.host_provided_ffi_root.decode("utf-8"),

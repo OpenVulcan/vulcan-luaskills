@@ -147,7 +147,6 @@ def main() -> None:
     host.temp_dir = str((root / "temp").resolve()).replace("\\", "/").encode("utf-8")
     host.resources_dir = str((root / "resources").resolve()).replace("\\", "/").encode("utf-8")
     host.lua_packages_dir = str((root / "lua_packages").resolve()).replace("\\", "/").encode("utf-8")
-    host.luaexec_program = None
     host.host_provided_tool_root = str((root / "bin" / "tools").resolve()).replace("\\", "/").encode("utf-8")
     host.host_provided_lua_root = str((root / "lua_packages").resolve()).replace("\\", "/").encode("utf-8")
     host.host_provided_ffi_root = str((root / "libs").resolve()).replace("\\", "/").encode("utf-8")
@@ -171,6 +170,7 @@ def main() -> None:
     host.space_controller_executable_path = None
     host.space_controller_process_mode = 0
     host.cache_config = None
+    host.runlua_pool_config = None
     host.reserved_entry_names = None
     host.reserved_entry_names_len = 0
     host.ignored_skill_ids = None

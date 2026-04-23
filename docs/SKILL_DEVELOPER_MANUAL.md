@@ -216,6 +216,11 @@ return rendered
   - `vulcan.context.client_info.name`
   - `vulcan.context.request.transport_name`
   默认会是 `luaexec_call` 一类内部标识，而不是外部真实客户端。
+- 当前隔离执行链已经拥有独立 VM 池：
+  - 默认 `min_size=1 / max_size=4 / idle_ttl_secs=60`
+  - 可由宿主通过 `LuaRuntimeHostOptions.runlua_pool_config` 覆盖
+  - 这只影响 `vulcan.runtime.lua.exec(...)`，不改变普通 skill VM 池
+  - 当前不再支持为 `vulcan.runtime.lua.exec(...)` 单独配置外部执行器路径
 
 ### 5.8 `vulcan.runtime.skills.*`
 

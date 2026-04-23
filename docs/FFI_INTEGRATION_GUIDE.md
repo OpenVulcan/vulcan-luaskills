@@ -624,6 +624,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `sqlite_callback_mode`
 - `lancedb_provider_mode`
 - `lancedb_callback_mode`
+- `runlua_pool_config`
 - `reserved_entry_names`
 - `ignored_skill_ids`
 - `enable_skill_management_bridge`
@@ -665,6 +666,17 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 被跳过的 skill 不会触发依赖准备、SQLite/LanceDB 绑定或 entry 注册
 - 该字段适合宿主已经用原生、gRPC、VMM 或其他实现替代某个默认 skill 包时使用
 - 这不是 skill 自声明的 capability 判定，也不会自动推断宿主已有能力
+
+隔离 `runlua` 专用池规则：
+
+- `runlua_pool_config` 只作用于 `vulcan.runtime.lua.exec` 这条隔离执行链
+- 未配置时默认使用：
+  - `min_size = 1`
+  - `max_size = 4`
+- `idle_ttl_secs = 60`
+- 该配置不会改变普通 skill VM 池，也不会改变标准 `call_skill / run_lua` 主池配置
+- 当宿主预期会高频调用 `vulcan.runtime.lua.exec` 时，建议显式配置该字段，而不是误调普通 `pool`
+- 当前 `vulcan.runtime.lua.exec` 统一在当前进程内执行，不再支持单独配置外部 `luaexec` 执行器路径
 
 ### 8.4 `FfiLuaEngineOptions`
 
@@ -1285,6 +1297,7 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
   - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
   - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
 - TypeScript：
+  - [examples/ffi/typescript/README.md](../examples/ffi/typescript/README.md)
   - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
   - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
   - [examples/ffi/typescript/query_demo.ts](../examples/ffi/typescript/query_demo.ts)

@@ -48,6 +48,9 @@
   - 已确认 `endpoint / auto_spawn / executable_path / process_mode`
 - 如果连接远端 controller：
   - 必须关闭 `auto_spawn`
+- 如果宿主会高频使用 `vulcan.runtime.lua.exec`：
+  - 已决定是否覆盖 `runlua_pool_config`
+  - 未配置时默认是 `min=1 / max=4 / idle_ttl_secs=60`
 - 如果宿主需要屏蔽默认包或冲突包：
   - 在 `FfiLuaRuntimeHostOptions.ignored_skill_ids` 填入对应目录派生的 `skill_id`
   - 被忽略 skill 不会准备依赖、不会绑定数据库，也不会注册 entry

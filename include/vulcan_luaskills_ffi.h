@@ -10,7 +10,7 @@ vulcan-luaskills 导出的稳定标准 C ABI 接口面。
 */
 
 /*
-Beta integration contract for v0.1.0:
+ Beta integration contract for v0.1.x:
 - This header is the low-level standard ABI for controlled host integrations.
 - Public high-level JSON FFI declarations are provided by vulcan_luaskills_json_ffi.h.
 - Returned memory must be released only with the matching luaskills free function.
@@ -18,7 +18,7 @@ Beta integration contract for v0.1.0:
 - Callbacks must not unwind across the C ABI boundary.
 - Same-thread reentry into the same engine is not supported.
 - Skills are treated as trusted code by default; this ABI does not promise sandbox isolation.
-v0.1.0 beta 集成契约：
+v0.1.x beta 集成契约：
 - 当前头文件是面向受控宿主集成的低层标准 ABI。
 - 公共高层 JSON FFI 声明位于 vulcan_luaskills_json_ffi.h。
 - 所有返回内存都只能使用匹配的 luaskills 释放函数处理。
@@ -58,7 +58,6 @@ typedef struct FfiLuaRuntimeHostOptions {
     const char *temp_dir;
     const char *resources_dir;
     const char *lua_packages_dir;
-    const char *luaexec_program;
     const char *host_provided_tool_root;
     const char *host_provided_lua_root;
     const char *host_provided_ffi_root;
@@ -114,6 +113,11 @@ typedef struct FfiLuaRuntimeHostOptions {
     */
     int32_t space_controller_process_mode;
     const FfiToolCacheConfig *cache_config;
+    /*
+    Optional dedicated isolated runlua VM pool config.
+    可选的隔离 runlua 虚拟机独立池配置。
+    */
+    const FfiLuaVmPoolConfig *runlua_pool_config;
     const char **reserved_entry_names;
     size_t reserved_entry_names_len;
     /*

@@ -74,6 +74,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 2. [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
 3. [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
 4. [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
+5. [examples/ffi/typescript/README.md](examples/ffi/typescript/README.md)
 
 ## 核心原则
 
@@ -193,6 +194,13 @@ skill **不应该**：
 - runtime lua 执行链
 - `vulcan.runtime.lua.exec`
 - 可选的 `vulcan.runtime.skills.*` 宿主管理桥接
+
+其中隔离 `vulcan.runtime.lua.exec` 已经拥有独立的专用 VM 池：
+
+- 默认配置是 `min_size=1 / max_size=4 / idle_ttl_secs=60`
+- 宿主可以通过 `LuaRuntimeHostOptions.runlua_pool_config` 覆盖
+- 该池只作用于隔离 `luaexec` 路径，不改变普通 skill VM 池和普通 `run_lua` 主池行为
+- 当前不再提供外部 `luaexec` 执行器路径配置，隔离执行统一在当前进程内完成
 
 宿主可以自由把这些 system 能力映射成：
 

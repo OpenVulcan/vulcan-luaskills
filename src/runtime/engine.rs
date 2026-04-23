@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use crate::dependency::manager::{DependencyManager, DependencyManagerConfig, ensure_directory};
 use crate::entry_descriptor::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
@@ -46,6 +46,7 @@ use crate::tool_cache::{ToolCacheConfig, configure_global_tool_cache, global_too
 // Loaded skill (compiled Lua function + metadata)
 // ============================================================
 
+#[derive(Clone)]
 struct LoadedSkill {
     meta: SkillMeta,
     dir: std::path::PathBuf,
@@ -112,6 +113,16 @@ impl LuaVmPoolConfig {
     }
 }
 
+/// Return the default dedicated pool config used by isolated runlua execution.
+/// 返回隔离 runlua 执行使用的默认独立池配置。
+fn default_runlua_vm_pool_config() -> LuaVmPoolConfig {
+    LuaVmPoolConfig {
+        min_size: 1,
+        max_size: 4,
+        idle_ttl_secs: 60,
+    }
+}
+
 /// Runtime state of a single Lua VM instance.
 /// 单个 Lua 虚拟机实例的运行时状态。
 struct LuaVm {
@@ -142,6 +153,7 @@ pub struct LuaEngine {
     skills: HashMap<String, LoadedSkill>,
     entry_registry: BTreeMap<String, ResolvedEntryTarget>,
     pool: Arc<LuaVmPool>,
+    runlua_pool: Arc<LuaVmPool>,
     lancedb_host: Option<Arc<LanceDbSkillHost>>,
     sqlite_host: Option<Arc<SqliteSkillHost>>,
     database_provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
@@ -1983,6 +1995,15 @@ impl LuaEngine {
 
     /// Create a new LuaEngine with LuaJIT VM and registered globals.
     pub fn new(options: LuaEngineOptions) -> Result<Self, Box<dyn std::error::Error>> {
+        let runlua_pool_config = options
+            .host_options
+            .runlua_pool_config
+            .map(|config| LuaVmPoolConfig {
+                min_size: config.min_size,
+                max_size: config.max_size,
+                idle_ttl_secs: config.idle_ttl_secs,
+            })
+            .unwrap_or_else(default_runlua_vm_pool_config);
         configure_global_tool_cache(
             options
                 .host_options
@@ -1998,6 +2019,7 @@ impl LuaEngine {
             skills: HashMap::new(),
             entry_registry: BTreeMap::new(),
             pool: Arc::new(LuaVmPool::new(options.pool_config)),
+            runlua_pool: Arc::new(LuaVmPool::new(runlua_pool_config)),
             lancedb_host: None,
             sqlite_host: None,
             database_provider_callbacks,
@@ -2382,6 +2404,17 @@ impl LuaEngine {
 
         self.pool
             .prewarm(|| self.create_vm())
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        self.runlua_pool
+            .prewarm(|| {
+                Self::create_runlua_vm(
+                    &self.skills,
+                    &self.entry_registry,
+                    self.host_options.clone(),
+                    self.lancedb_host.clone(),
+                    self.sqlite_host.clone(),
+                )
+            })
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
 
         log_info(format!("[LuaSkill] {} skills loaded", self.skills.len()));
@@ -3147,11 +3180,13 @@ impl LuaEngine {
     /// 在执行一次完整重载前重置全部已加载技能、provider 与虚拟机池。
     fn reset_runtime_state(&mut self) {
         let pool_config = self.pool.config;
+        let runlua_pool_config = self.runlua_pool.config;
         self.skills.clear();
         self.entry_registry.clear();
         self.lancedb_host = None;
         self.sqlite_host = None;
         self.pool = Arc::new(LuaVmPool::new(pool_config));
+        self.runlua_pool = Arc::new(LuaVmPool::new(runlua_pool_config));
     }
 
     /// Emit one structured lifecycle event through the host callback bridge.
@@ -3397,17 +3432,27 @@ impl LuaEngine {
     /// Build a fresh Lua VM instance with all loaded skills registered.
     /// 创建一个全新的 Lua 虚拟机实例，并注册当前已加载的全部技能。
     fn create_vm(&self) -> Result<LuaVm, String> {
+        let skills = Arc::new(self.skills.clone());
+        let entry_registry = Arc::new(self.entry_registry.clone());
         let lua = unsafe { Lua::unsafe_new() };
         Self::setup_package_paths(&lua, self.host_options.as_ref())
             .map_err(|error| error.to_string())?;
         Self::register_vulcan_module(&lua, self.host_options.as_ref())
             .map_err(|error| error.to_string())?;
-        Self::populate_vulcan_luaexec_bridge(&lua, self.host_options.clone())?;
-        Self::register_skill_functions(&lua, &self.skills)?;
+        Self::populate_vulcan_luaexec_bridge(
+            &lua,
+            self.host_options.clone(),
+            self.runlua_pool.clone(),
+            skills.clone(),
+            entry_registry.clone(),
+            self.lancedb_host.clone(),
+            self.sqlite_host.clone(),
+        )?;
+        Self::register_skill_functions(&lua, skills.as_ref())?;
         Self::populate_vulcan_call_for_lua(
             &lua,
-            &self.skills,
-            &self.entry_registry,
+            skills.as_ref(),
+            entry_registry.as_ref(),
             self.host_options.clone(),
             self.lancedb_host.clone(),
             self.sqlite_host.clone(),
@@ -3424,11 +3469,45 @@ impl LuaEngine {
         self.pool.acquire(|| self.create_vm())
     }
 
+    /// Build a fresh isolated runlua VM instance with current runtime state registered.
+    /// 创建一个带有当前运行时状态注册信息的全新隔离 runlua 虚拟机实例。
+    fn create_runlua_vm(
+        skills: &HashMap<String, LoadedSkill>,
+        entry_registry: &BTreeMap<String, ResolvedEntryTarget>,
+        host_options: Arc<LuaRuntimeHostOptions>,
+        lancedb_host: Option<Arc<LanceDbSkillHost>>,
+        sqlite_host: Option<Arc<SqliteSkillHost>>,
+    ) -> Result<LuaVm, String> {
+        let lua = unsafe { Lua::unsafe_new() };
+        Self::setup_package_paths(&lua, host_options.as_ref())
+            .map_err(|error| error.to_string())?;
+        Self::register_vulcan_module(&lua, host_options.as_ref())
+            .map_err(|error| error.to_string())?;
+        Self::register_skill_functions(&lua, skills)?;
+        Self::populate_vulcan_call_for_lua(
+            &lua,
+            skills,
+            entry_registry,
+            host_options,
+            lancedb_host,
+            sqlite_host,
+        )?;
+        Ok(LuaVm {
+            lua,
+            last_used_at: Instant::now(),
+        })
+    }
+
     /// Populate the `vulcan.runtime.lua.exec` bridge for normal skill VMs.
     /// 为普通 skill 虚拟机注入 `vulcan.runtime.lua.exec` 桥接函数。
     fn populate_vulcan_luaexec_bridge(
         lua: &Lua,
         host_options: Arc<LuaRuntimeHostOptions>,
+        runlua_pool: Arc<LuaVmPool>,
+        skills: Arc<HashMap<String, LoadedSkill>>,
+        entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
+        lancedb_host: Option<Arc<LanceDbSkillHost>>,
+        sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<(), String> {
         let runtime_lua = get_vulcan_runtime_lua_table(lua)?;
 
@@ -3448,8 +3527,16 @@ impl LuaEngine {
                 request.caller_tool_name = caller_tool_name
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty());
-                let rendered = LuaEngine::execute_runlua_request(&request, host_options.as_ref())
-                    .map_err(mlua::Error::runtime)?;
+                let rendered = LuaEngine::execute_runlua_request_inline_with_runtime(
+                    &request,
+                    runlua_pool.clone(),
+                    skills.clone(),
+                    entry_registry.clone(),
+                    host_options.clone(),
+                    lancedb_host.clone(),
+                    sqlite_host.clone(),
+                )
+                .map_err(mlua::Error::runtime)?;
                 Ok(LuaValue::String(
                     lua.create_string(&rendered).map_err(mlua::Error::runtime)?,
                 ))
@@ -4644,129 +4731,61 @@ impl LuaEngine {
         }
     }
 
-    /// Execute one isolated runlua request and render it into Markdown text.
-    /// 执行一次隔离的 runlua 请求，并将结果渲染为 Markdown 文本。
-    fn execute_runlua_request(
-        request: &RunLuaExecRequest,
-        host_options: &LuaRuntimeHostOptions,
-    ) -> Result<String, String> {
-        Self::execute_runlua_request_in_subprocess(request, host_options)
+    /// Acquire one isolated runlua VM from the dedicated pool.
+    /// 从独立池中获取一个隔离 runlua 虚拟机。
+    fn acquire_runlua_vm(
+        runlua_pool: Arc<LuaVmPool>,
+        skills: Arc<HashMap<String, LoadedSkill>>,
+        entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
+        host_options: Arc<LuaRuntimeHostOptions>,
+        lancedb_host: Option<Arc<LanceDbSkillHost>>,
+        sqlite_host: Option<Arc<SqliteSkillHost>>,
+    ) -> Result<LuaVmLease, String> {
+        runlua_pool.acquire(move || {
+            Self::create_runlua_vm(
+                skills.as_ref(),
+                entry_registry.as_ref(),
+                host_options.clone(),
+                lancedb_host.clone(),
+                sqlite_host.clone(),
+            )
+        })
     }
 
-    /// Execute one isolated runlua request inside a dedicated subprocess.
-    /// 在独立子进程中执行一次隔离 runlua 请求。
-    fn execute_runlua_request_in_subprocess(
+    /// Execute one isolated runlua request through the dedicated pooled runtime.
+    /// 通过独立的池化运行时执行一次隔离 runlua 请求。
+    fn execute_runlua_request_inline_with_runtime(
         request: &RunLuaExecRequest,
-        host_options: &LuaRuntimeHostOptions,
+        runlua_pool: Arc<LuaVmPool>,
+        skills: Arc<HashMap<String, LoadedSkill>>,
+        entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
+        host_options: Arc<LuaRuntimeHostOptions>,
+        lancedb_host: Option<Arc<LanceDbSkillHost>>,
+        sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<String, String> {
-        let temp_root = host_options
-            .temp_dir
-            .clone()
-            .ok_or_else(|| "luaexec requires host_options.temp_dir".to_string())?;
-        std::fs::create_dir_all(&temp_root)
-            .map_err(|error| format!("Failed to prepare runtime temp dir: {}", error))?;
-        let luaexec_dir = temp_root.join("luaexec");
-        std::fs::create_dir_all(&luaexec_dir)
-            .map_err(|error| format!("Failed to create luaexec temp dir: {}", error))?;
-
-        let unique_suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let request_file = luaexec_dir.join(format!(
-            "luaexec_request_{}_{}.json",
-            std::process::id(),
-            unique_suffix
-        ));
-        let request_json = serde_json::to_string(request)
-            .map_err(|error| format!("Failed to serialize luaexec request: {}", error))?;
-        std::fs::write(&request_file, request_json)
-            .map_err(|error| format!("Failed to write luaexec request file: {}", error))?;
-
-        let current_exe = host_options
-            .luaexec_program
-            .clone()
-            .ok_or_else(|| "luaexec requires host_options.luaexec_program".to_string())?;
-        let exec_request = ExecRequest {
-            mode: ExecMode::Program {
-                program: current_exe.to_string_lossy().to_string(),
-                args: vec![
-                    "--internal-luaexec-request".to_string(),
-                    request_file.to_string_lossy().to_string(),
-                ],
-            },
-            cwd: None,
-            env: HashMap::new(),
-            stdin: None,
-            timeout_ms: Some(request.timeout_ms),
-        };
-        let exec_result = execute_exec_request(exec_request);
-        let _ = std::fs::remove_file(&request_file);
-
-        if exec_result.timed_out {
-            return Ok(Self::render_runlua_error_markdown(
-                request,
-                &[],
-                format!(
-                    "luaexec execution timed out after {} ms",
-                    request.timeout_ms
-                )
-                .as_str(),
-            ));
-        }
-
-        if exec_result.success {
-            let rendered = exec_result
-                .stdout
-                .trim_end_matches(['\r', '\n'])
-                .to_string();
-            if rendered.trim().is_empty() {
-                return Err("luaexec subprocess returned empty output".to_string());
-            }
-            return Ok(rendered);
-        }
-
-        let stderr = if exec_result.stderr.trim().is_empty() {
-            exec_result
-                .error
-                .unwrap_or_else(|| "luaexec subprocess failed".to_string())
-        } else {
-            exec_result.stderr
-        };
-        Err(format!("luaexec subprocess failed: {}", stderr))
-    }
-
-    /// Execute one isolated runlua request inside the current process.
-    /// 在当前进程内执行一次隔离 runlua 请求。
-    fn execute_runlua_request_inline(&self, request: &RunLuaExecRequest) -> Result<String, String> {
         if request.timeout_ms == 0 {
             return Err("luaexec timeout_ms must be greater than 0".to_string());
         }
         let (resolved_code, entry_file) = Self::resolve_runlua_source(request)?;
-        let lua = unsafe { Lua::unsafe_new() };
-        Self::setup_package_paths(&lua, self.host_options.as_ref())
-            .map_err(|error| error.to_string())?;
-        Self::register_vulcan_module(&lua, self.host_options.as_ref())
-            .map_err(|error| error.to_string())?;
-        Self::register_skill_functions(&lua, &self.skills)?;
-        Self::populate_vulcan_call_for_lua(
-            &lua,
-            &self.skills,
-            &self.entry_registry,
-            self.host_options.clone(),
-            self.lancedb_host.clone(),
-            self.sqlite_host.clone(),
-        )
-        .map_err(|error| error.to_string())?;
+        let mut lease = Self::acquire_runlua_vm(
+            runlua_pool,
+            skills,
+            entry_registry,
+            host_options.clone(),
+            lancedb_host,
+            sqlite_host,
+        )?;
+        let scope_guard = LuaVmRequestScopeGuard::new(&mut lease, host_options.as_ref())?;
+        let lua = scope_guard.lua();
         let simulated_request_context = build_luaexec_call_request_context();
         let simulated_invocation_context = LuaInvocationContext::new(
             Some(simulated_request_context),
             Value::Object(serde_json::Map::new()),
             Value::Object(serde_json::Map::new()),
         );
-        Self::populate_vulcan_request_context(&lua, Some(&simulated_invocation_context))?;
+        Self::populate_vulcan_request_context(lua, Some(&simulated_invocation_context))?;
         populate_vulcan_internal_execution_context(
-            &lua,
+            lua,
             &VulcanInternalExecutionContext {
                 tool_name: None,
                 skill_name: None,
@@ -4774,14 +4793,14 @@ impl LuaEngine {
                 luaexec_caller_tool_name: request.caller_tool_name.clone(),
             },
         )?;
-        populate_vulcan_file_context(&lua, None, entry_file.as_deref())?;
-        Self::populate_vulcan_lancedb_context(&lua, None, None)?;
-        Self::populate_vulcan_sqlite_context(&lua, None, None)?;
+        populate_vulcan_file_context(lua, None, entry_file.as_deref())?;
+        Self::populate_vulcan_lancedb_context(lua, None, None)?;
+        Self::populate_vulcan_sqlite_context(lua, None, None)?;
 
         let captured_output: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        Self::configure_runlua_execution_environment(&lua, captured_output.clone())?;
+        Self::configure_runlua_execution_environment(lua, captured_output.clone())?;
 
-        let args_table = json_to_lua_table(&lua, &request.args)?;
+        let args_table = json_to_lua_table(lua, &request.args)?;
         lua.globals()
             .set("__runlua_args", args_table)
             .map_err(|error| format!("Failed to set runlua args: {}", error))?;
@@ -4791,16 +4810,16 @@ impl LuaEngine {
             resolved_code
         );
 
-        Self::install_runlua_timeout_guard(&lua, request.timeout_ms)
+        Self::install_runlua_timeout_guard(lua, request.timeout_ms)
             .map_err(|error| error.to_string())?;
-        let execution_result = Self::execute_runlua_wrapper(&lua, &wrapper, entry_file.as_deref());
-        Self::remove_runlua_timeout_guard(&lua);
+        let execution_result = Self::execute_runlua_wrapper(lua, &wrapper, entry_file.as_deref());
+        Self::remove_runlua_timeout_guard(lua);
         let printed_output = captured_output
             .lock()
             .map_err(|_| "Failed to lock runlua output capture".to_string())?
             .clone();
 
-        match execution_result {
+        let render_result = match execution_result {
             Ok(returned_values) => {
                 let rendered_values = Self::collect_runlua_return_values(&returned_values)?;
                 Ok(Self::render_runlua_success_markdown(
@@ -4814,7 +4833,31 @@ impl LuaEngine {
                 &printed_output,
                 error.to_string().as_str(),
             )),
+        };
+        let cleanup_result = scope_guard.finish();
+        match (render_result, cleanup_result) {
+            (Ok(rendered), Ok(())) => Ok(rendered),
+            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(render_error), Ok(())) => Err(render_error),
+            (Err(render_error), Err(cleanup_error)) => Err(format!(
+                "{}; pooled runlua VM cleanup failed: {}",
+                render_error, cleanup_error
+            )),
         }
+    }
+
+    /// Execute one isolated runlua request using the current engine snapshots.
+    /// 使用当前引擎快照执行一次隔离 runlua 请求。
+    fn execute_runlua_request_inline(&self, request: &RunLuaExecRequest) -> Result<String, String> {
+        Self::execute_runlua_request_inline_with_runtime(
+            request,
+            self.runlua_pool.clone(),
+            Arc::new(self.skills.clone()),
+            Arc::new(self.entry_registry.clone()),
+            self.host_options.clone(),
+            self.lancedb_host.clone(),
+            self.sqlite_host.clone(),
+        )
     }
 
     /// Resolve one runlua request into concrete source text and optional entry file context.
@@ -5955,13 +5998,14 @@ fn lua_table_to_object(t: &Table) -> Result<Value, String> {
 mod tests {
     use super::{
         LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState, LuaVmRequestScopeGuard,
-        VulcanInternalExecutionContext, get_vulcan_context_table, get_vulcan_deps_table,
-        get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
-        normalize_host_visible_path_text, populate_vulcan_dependency_context,
+        VulcanInternalExecutionContext, default_runlua_vm_pool_config, get_vulcan_context_table,
+        get_vulcan_deps_table, get_vulcan_runtime_internal_table, get_vulcan_table,
+        json_to_lua_table, normalize_host_visible_path_text, populate_vulcan_dependency_context,
         populate_vulcan_file_context, populate_vulcan_internal_execution_context,
     };
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
     use crate::lua_skill::SkillMeta;
+    use crate::runtime_options::LuaRuntimeRunLuaPoolConfig;
     use crate::{LuaEngineOptions, LuaRuntimeHostOptions};
     use mlua::{Table, Value as LuaValue};
     use serde_json::json;
@@ -6032,6 +6076,7 @@ mod tests {
                 }),
                 condvar: Condvar::new(),
             }),
+            runlua_pool: Arc::new(LuaVmPool::new(default_runlua_vm_pool_config())),
             lancedb_host: None,
             sqlite_host: None,
             database_provider_callbacks: Arc::new(RuntimeDatabaseProviderCallbacks::default()),
@@ -6051,6 +6096,40 @@ mod tests {
             },
         })
         .expect("create runtime test engine")
+    }
+
+    /// Verify the isolated runlua pool uses the documented default sizing when the host does not override it.
+    /// 验证宿主未覆盖时隔离 runlua 池会使用文档声明的默认容量配置。
+    #[test]
+    fn runlua_pool_uses_default_config_when_host_does_not_override() {
+        let engine = make_runtime_test_engine();
+        assert_eq!(engine.runlua_pool.config.min_size, 1);
+        assert_eq!(engine.runlua_pool.config.max_size, 4);
+        assert_eq!(engine.runlua_pool.config.idle_ttl_secs, 60);
+    }
+
+    /// Verify the host can override the isolated runlua pool sizing with the same shape as the main VM pool.
+    /// 验证宿主可以使用与主虚拟机池相同的参数形状覆盖隔离 runlua 池容量。
+    #[test]
+    fn runlua_pool_honors_host_override_config() {
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.runlua_pool_config = Some(LuaRuntimeRunLuaPoolConfig {
+            min_size: 2,
+            max_size: 5,
+            idle_ttl_secs: 90,
+        });
+        let engine = LuaEngine::new(LuaEngineOptions {
+            host_options,
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create runtime test engine with custom runlua pool");
+        assert_eq!(engine.runlua_pool.config.min_size, 2);
+        assert_eq!(engine.runlua_pool.config.max_size, 5);
+        assert_eq!(engine.runlua_pool.config.idle_ttl_secs, 90);
     }
 
     /// Assert that one pooled Lua VM has returned to the neutral request baseline.
@@ -6446,6 +6525,26 @@ mod tests {
 
         let lease = engine.acquire_vm().expect("reacquire pooled vm");
         assert_vm_scope_is_clean(lease.lua());
+    }
+
+    /// Verify isolated `vulcan.runtime.lua.exec` calls reuse the dedicated runlua VM pool.
+    /// 验证隔离 `vulcan.runtime.lua.exec` 调用会复用独立的 runlua 虚拟机池。
+    #[test]
+    fn execute_runlua_request_inline_reuses_dedicated_pool() {
+        let engine = make_runtime_test_engine();
+        assert_eq!(engine.runlua_pool.total_count(), 0);
+
+        let first = engine
+            .execute_runlua_request_json_inline(r#"{"code":"return 1"}"#)
+            .expect("first inline runlua should succeed");
+        assert!(!first.trim().is_empty());
+        assert_eq!(engine.runlua_pool.total_count(), 1);
+
+        let second = engine
+            .execute_runlua_request_json_inline(r#"{"code":"return 2"}"#)
+            .expect("second inline runlua should succeed");
+        assert!(!second.trim().is_empty());
+        assert_eq!(engine.runlua_pool.total_count(), 1);
     }
 
     /// Verify that run_lua clears transient args after one failed execution.

@@ -38,7 +38,6 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("temp_dir", ctypes.c_char_p),
         ("resources_dir", ctypes.c_char_p),
         ("lua_packages_dir", ctypes.c_char_p),
-        ("luaexec_program", ctypes.c_char_p),
         ("host_provided_tool_root", ctypes.c_char_p),
         ("host_provided_lua_root", ctypes.c_char_p),
         ("host_provided_ffi_root", ctypes.c_char_p),
@@ -62,6 +61,7 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("space_controller_executable_path", ctypes.c_char_p),
         ("space_controller_process_mode", ctypes.c_int32),
         ("cache_config", ctypes.c_void_p),
+        ("runlua_pool_config", ctypes.c_void_p),
         ("reserved_entry_names", ctypes.POINTER(ctypes.c_char_p)),
         ("reserved_entry_names_len", ctypes.c_size_t),
         ("ignored_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
@@ -251,7 +251,6 @@ def build_engine_options(root: Path) -> FfiLuaEngineOptions:
     host.temp_dir = normalized_path(root / "temp").encode("utf-8")
     host.resources_dir = normalized_path(root / "resources").encode("utf-8")
     host.lua_packages_dir = normalized_path(root / "lua_packages").encode("utf-8")
-    host.luaexec_program = None
     host.host_provided_tool_root = normalized_path(root / "bin" / "tools").encode("utf-8")
     host.host_provided_lua_root = normalized_path(root / "lua_packages").encode("utf-8")
     host.host_provided_ffi_root = normalized_path(root / "libs").encode("utf-8")
@@ -275,6 +274,7 @@ def build_engine_options(root: Path) -> FfiLuaEngineOptions:
     host.space_controller_executable_path = None
     host.space_controller_process_mode = 0
     host.cache_config = None
+    host.runlua_pool_config = None
     host.reserved_entry_names = None
     host.reserved_entry_names_len = 0
     host.ignored_skill_ids = None

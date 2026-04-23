@@ -9,14 +9,14 @@ vulcan-luaskills 导出的公共高层 JSON FFI 接口面。
 */
 
 /*
-Beta integration contract for v0.1.0:
+Beta integration contract for v0.1.x:
 - This header is the public high-level JSON FFI for dynamic languages and rapid integrations.
 - Shared structs and free helpers come from vulcan_luaskills_ffi.h.
 - Returned buffers must be released only with the matching luaskills free function.
 - JSON callbacks must be registered before engine creation when callback-based modes are used.
 - Callbacks must not unwind across the C ABI boundary.
 - Same-thread reentry into the same engine is not supported.
-v0.1.0 beta 集成契约：
+v0.1.x beta 集成契约：
 - 当前头文件是面向动态语言与快速集成场景的公共高层 JSON FFI。
 - 共享结构体与释放辅助函数来自 vulcan_luaskills_ffi.h。
 - 所有返回缓冲都只能使用匹配的 luaskills 释放函数处理。

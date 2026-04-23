@@ -45,7 +45,7 @@ examples/ffi/standard_runtime/runtime_root
 ### MSVC 典型命令
 
 ```powershell
-cl /std:c11 /I include examples\ffi\c\demo.c /link /LIBPATH:target\debug vulcan_luaskills.dll.lib
+cl /utf-8 /std:c11 /I include examples\ffi\c\demo.c /link /LIBPATH:target\debug vulcan_luaskills.dll.lib
 ```
 
 ### MinGW GCC 典型命令

@@ -110,6 +110,21 @@ pub struct RuntimeSkillRoot {
     pub skills_dir: PathBuf,
 }
 
+/// Host-provided pool configuration for isolated runlua VMs.
+/// 宿主提供的隔离 runlua 虚拟机池配置。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LuaRuntimeRunLuaPoolConfig {
+    /// Minimum number of isolated runlua VMs kept warm.
+    /// 隔离 runlua 虚拟机需要常驻保温的最小数量。
+    pub min_size: usize,
+    /// Maximum number of isolated runlua VMs allowed in the pool.
+    /// 隔离 runlua 虚拟机池允许存在的最大数量。
+    pub max_size: usize,
+    /// Idle TTL in seconds before one excess isolated runlua VM may be retired.
+    /// 多余隔离 runlua 虚拟机在空闲多少秒后允许回收。
+    pub idle_ttl_secs: u64,
+}
+
 /// Host-provided filesystem and runtime paths consumed by the LuaSkills library.
 /// 宿主提供给 LuaSkills 库消费的文件系统与运行时路径集合。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -123,9 +138,6 @@ pub struct LuaRuntimeHostOptions {
     /// Optional lua_packages root used to build `package.path` and `package.cpath`.
     /// 用于拼接 `package.path` 与 `package.cpath` 的可选 lua_packages 根目录。
     pub lua_packages_dir: Option<PathBuf>,
-    /// Optional external program path used by `vulcan.runtime.lua.exec` subprocess mode.
-    /// `vulcan.runtime.lua.exec` 子进程模式使用的可选外部程序路径。
-    pub luaexec_program: Option<PathBuf>,
     /// Host-managed root directory used only to probe host-provided tool dependencies.
     /// 仅用于探测宿主提供工具依赖的宿主管理根目录。
     pub host_provided_tool_root: Option<PathBuf>,
@@ -188,6 +200,10 @@ pub struct LuaRuntimeHostOptions {
     /// Host-provided transient cache policy consumed by `vulcan.cache`.
     /// 由宿主提供并供 `vulcan.cache` 消费的临时缓存策略。
     pub cache_config: Option<ToolCacheConfig>,
+    /// Optional dedicated pool configuration for isolated `vulcan.runtime.lua.exec` VMs.
+    /// 供隔离 `vulcan.runtime.lua.exec` 虚拟机使用的可选独立池配置。
+    #[serde(default)]
+    pub runlua_pool_config: Option<LuaRuntimeRunLuaPoolConfig>,
     /// Host-reserved public entry names that LuaSkills canonical name generation must never occupy directly.
     /// 宿主保留的公开入口名称集合，LuaSkills 在生成 canonical 名称时必须直接避开这些名称。
     pub reserved_entry_names: Vec<String>,

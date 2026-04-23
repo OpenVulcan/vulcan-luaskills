@@ -20,7 +20,8 @@ use crate::runtime_help::{
 };
 use crate::runtime_options::{
     LuaInvocationContext, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions,
-    LuaRuntimeSpaceControllerOptions, LuaRuntimeSpaceControllerProcessMode, RuntimeSkillRoot,
+    LuaRuntimeRunLuaPoolConfig, LuaRuntimeSpaceControllerOptions,
+    LuaRuntimeSpaceControllerProcessMode, RuntimeSkillRoot,
 };
 use crate::skill::manager::{SkillInstallRequest, SkillUninstallOptions};
 use crate::skill::source::SkillInstallSourceType;
@@ -134,9 +135,6 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Optional lua_packages directory path.
     /// 可选 lua_packages 目录路径。
     pub lua_packages_dir: *const c_char,
-    /// Optional external luaexec program path.
-    /// 可选外部 luaexec 程序路径。
-    pub luaexec_program: *const c_char,
     /// Optional host-provided tools root path.
     /// 可选宿主提供工具根目录路径。
     pub host_provided_tool_root: *const c_char,
@@ -206,6 +204,9 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Optional tool-cache config pointer.
     /// 可选工具缓存配置指针。
     pub cache_config: *const FfiToolCacheConfig,
+    /// Optional dedicated isolated runlua VM pool config.
+    /// 可选的隔离 runlua 虚拟机独立池配置。
+    pub runlua_pool_config: *const FfiLuaVmPoolConfig,
     /// Reserved public entry names.
     /// 保留公开入口名称数组。
     pub reserved_entry_names: *const *const c_char,
@@ -852,6 +853,23 @@ fn parse_cache_config(value: *const FfiToolCacheConfig) -> Option<ToolCacheConfi
     }
 }
 
+/// Convert one optional C ABI runlua pool config pointer into one Rust runlua pool config.
+/// 将一个可选的 C ABI runlua 池配置指针转换为一个 Rust runlua 池配置。
+fn parse_runlua_pool_config(
+    value: *const FfiLuaVmPoolConfig,
+) -> Option<LuaRuntimeRunLuaPoolConfig> {
+    if value.is_null() {
+        None
+    } else {
+        let config = unsafe { &*value };
+        Some(LuaRuntimeRunLuaPoolConfig {
+            min_size: config.min_size,
+            max_size: config.max_size,
+            idle_ttl_secs: config.idle_ttl_secs,
+        })
+    }
+}
+
 /// Convert one C ABI host options struct into one Rust host options value.
 /// 将单个 C ABI 宿主选项结构转换为一个 Rust 宿主选项值。
 fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHostOptions, String> {
@@ -860,8 +878,6 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
         resources_dir: parse_optional_string(value.resources_dir, "resources_dir")?
             .map(PathBuf::from),
         lua_packages_dir: parse_optional_string(value.lua_packages_dir, "lua_packages_dir")?
-            .map(PathBuf::from),
-        luaexec_program: parse_optional_string(value.luaexec_program, "luaexec_program")?
             .map(PathBuf::from),
         host_provided_tool_root: parse_optional_string(
             value.host_provided_tool_root,
@@ -946,6 +962,7 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             ..LuaRuntimeSpaceControllerOptions::default()
         },
         cache_config: parse_cache_config(value.cache_config),
+        runlua_pool_config: parse_runlua_pool_config(value.runlua_pool_config),
         reserved_entry_names: parse_string_array(
             value.reserved_entry_names,
             value.reserved_entry_names_len,
@@ -3250,7 +3267,6 @@ mod tests {
             temp_dir: temp_dir_text.as_ptr(),
             resources_dir: resources_dir_text.as_ptr(),
             lua_packages_dir: lua_packages_dir_text.as_ptr(),
-            luaexec_program: ptr::null(),
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
@@ -3274,6 +3290,7 @@ mod tests {
             space_controller_executable_path: ptr::null(),
             space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
             cache_config: ptr::null(),
+            runlua_pool_config: ptr::null(),
             reserved_entry_names: ptr::null(),
             reserved_entry_names_len: 0,
             ignored_skill_ids: ptr::null(),
@@ -3425,7 +3442,6 @@ mod tests {
             temp_dir: temp_dir_text.as_ptr(),
             resources_dir: resources_dir_text.as_ptr(),
             lua_packages_dir: lua_packages_dir_text.as_ptr(),
-            luaexec_program: ptr::null(),
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
@@ -3449,6 +3465,7 @@ mod tests {
             space_controller_executable_path: ptr::null(),
             space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
             cache_config: ptr::null(),
+            runlua_pool_config: ptr::null(),
             reserved_entry_names: ptr::null(),
             reserved_entry_names_len: 0,
             ignored_skill_ids: ptr::null(),
@@ -3583,7 +3600,6 @@ mod tests {
             temp_dir: temp_dir_text.as_ptr(),
             resources_dir: resources_dir_text.as_ptr(),
             lua_packages_dir: lua_packages_dir_text.as_ptr(),
-            luaexec_program: ptr::null(),
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
@@ -3607,6 +3623,7 @@ mod tests {
             space_controller_executable_path: ptr::null(),
             space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
             cache_config: ptr::null(),
+            runlua_pool_config: ptr::null(),
             reserved_entry_names: ptr::null(),
             reserved_entry_names_len: 0,
             ignored_skill_ids: ptr::null(),
@@ -3747,7 +3764,6 @@ mod tests {
             temp_dir: temp_dir_text.as_ptr(),
             resources_dir: resources_dir_text.as_ptr(),
             lua_packages_dir: lua_packages_dir_text.as_ptr(),
-            luaexec_program: ptr::null(),
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
@@ -3771,6 +3787,7 @@ mod tests {
             space_controller_executable_path: ptr::null(),
             space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
             cache_config: ptr::null(),
+            runlua_pool_config: ptr::null(),
             reserved_entry_names: ptr::null(),
             reserved_entry_names_len: 0,
             ignored_skill_ids: ptr::null(),
