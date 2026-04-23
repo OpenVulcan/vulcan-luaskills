@@ -24,3 +24,10 @@ target
 # Added by cargo
 
 /target
+
+# Ignore local FFI example build and test artifacts.
+# 忽略本地 FFI 示例的构建与测试产物。
+examples/ffi/c/*.exe
+examples/ffi/c/*.obj
+examples/ffi/**/__pycache__/
+examples/ffi/**/*.pyc
