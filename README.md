@@ -40,6 +40,36 @@
 crate-type = ["rlib", "cdylib", "staticlib"]
 ```
 
+## FFI Beta 摘要
+
+如果您是第一次打开这个仓库，并且主要关注 FFI，对当前 `v0.1.x / beta` 阶段可以直接这样理解：
+
+- Rust 直连仍然是主集成方式
+- 标准 C ABI 是低层正式宿主契约
+- 公共 `_json` FFI 是高层易用公共接口
+- 当前 FFI 更适合作为**受控宿主集成接口**
+- 当前运行时默认把 skill 当作受信代码看待，不提供 Lua skill 沙箱安全承诺
+
+也就是说：
+
+- Rust 宿主优先直接接 Rust API
+- C / C++ / Go 这类低层宿主优先看标准 C ABI
+- Python / Node.js / TypeScript 这类动态宿主优先看公共 `_json` FFI
+
+如果您只想先抓一份最短说明，建议按下面顺序阅读：
+
+1. [docs/FFI_BETA_RELEASE_NOTES.md](docs/FFI_BETA_RELEASE_NOTES.md)
+2. [docs/FFI_HOST_CHECKLIST.md](docs/FFI_HOST_CHECKLIST.md)
+3. [docs/FFI_INTEGRATION_GUIDE.md](docs/FFI_INTEGRATION_GUIDE.md)
+4. [docs/HOST_DATABASE_PROVIDER_GUIDE.md](docs/HOST_DATABASE_PROVIDER_GUIDE.md)
+
+如果您只想先看示例，建议按下面顺序阅读：
+
+1. [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
+2. [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
+3. [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
+4. [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
+
 ## 核心原则
 
 ### 1. 库不读取宿主配置文件
@@ -303,7 +333,7 @@ FFI 设计规则如下：
   - `vulcan_luaskills_ffi_buffer_free`
   释放
 - 结构化结果对象必须通过各自专用的 free 函数释放
-- 只有仍明确返回裸字符串指针的辅助接口，才使用：
+- 只有公共 JSON FFI / helper 层仍明确返回裸字符串指针的辅助接口，才使用：
   - `vulcan_luaskills_ffi_string_free`
 
 标准 C ABI 当前采用：
@@ -322,11 +352,51 @@ FFI 设计规则如下：
   标准 C ABI 仍会使用 JSON 字符串承载内容
 - 这是为了避免把任意 JSON 树硬编码成脆弱的固定 C 结构
 
+#### FFI 接口怎么选
+
+如果您是第一次决定接入方式，可以直接按下面的结论判断：
+
+- 如果宿主本身是 Rust：
+  - 优先直接引用 Rust API
+  - 不建议为了“统一接口”额外绕一层 FFI
+- 如果宿主是 C / C++ / Go / 其他能稳定处理结构体和 out 指针的语言：
+  - 优先使用标准 C ABI
+  - 这样更接近正式底层契约，后续升级路径也更稳定
+- 如果宿主是 Python / Node.js / TypeScript / 动态脚本环境：
+  - 优先使用公共 `_json` FFI
+  - 这样更省去复杂结构体绑定和生命周期细节管理
+- 如果宿主同时有“正式主链”与“快速扩展入口”两类需求：
+  - 可以混合使用
+  - 标准 C ABI 负责 `engine/load/list/call/lifecycle`
+  - 公共 `_json` FFI 负责动态安装、快速原型和调试链路
+
+当前 `beta / v0.1.x` 阶段的推荐理解是：
+
+- Rust 直连仍然是主集成方式
+- 标准 C ABI 是低层正式宿主契约
+- 公共 `_json` FFI 是高层易用公共接口
+- 两者不是互斥关系，而是面向不同接入成本与宿主能力的两层交付
+
+#### FFI 固定术语
+
+为了避免 README、对接指南和示例文档中出现多套混用叫法，当前固定使用下面这组术语：
+
+- `标准 C ABI`
+  - 指低层、结构化、面向正式宿主契约的 FFI 接口层
+- `公共 `_json` FFI`
+  - 指高层、JSON 包络、面向动态语言和快速集成的 FFI 接口层
+- `标准 C ABI 头文件`
+  - 指 [include/vulcan_luaskills_ffi.h](include/vulcan_luaskills_ffi.h)
+- `公共 `_json` FFI 头文件`
+  - 指 [include/vulcan_luaskills_json_ffi.h](include/vulcan_luaskills_json_ffi.h)
+
+如果后续文档里为了简化阅读而出现“标准 ABI”“标准接口”“JSON 接口”等缩写说法，都默认回指上面这两套固定术语。
+
 头文件位置：
 
 - 标准 C ABI：
   - [include/vulcan_luaskills_ffi.h](include/vulcan_luaskills_ffi.h)
-- 公共 JSON FFI：
+- 公共 `_json` FFI：
   - [include/vulcan_luaskills_json_ffi.h](include/vulcan_luaskills_json_ffi.h)
 
 当前已导出的核心 FFI 能力包括：
@@ -344,15 +414,23 @@ FFI 设计规则如下：
 
 完整对接文档：
 
+- [docs/FFI_BETA_RELEASE_NOTES.md](docs/FFI_BETA_RELEASE_NOTES.md)
 - [docs/FFI_INTEGRATION_GUIDE.md](docs/FFI_INTEGRATION_GUIDE.md)
+- [docs/FFI_HOST_CHECKLIST.md](docs/FFI_HOST_CHECKLIST.md)
 - [docs/HOST_DATABASE_PROVIDER_GUIDE.md](docs/HOST_DATABASE_PROVIDER_GUIDE.md)
 
 语言示例：
 
 - [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
 - [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
+- [examples/ffi/python/lifecycle_demo.py](examples/ffi/python/lifecycle_demo.py)
+- [examples/ffi/python/query_demo.py](examples/ffi/python/query_demo.py)
 - [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
+- [examples/ffi/go/lifecycle_demo/main.go](examples/ffi/go/lifecycle_demo/main.go)
+- [examples/ffi/go/query_demo/main.go](examples/ffi/go/query_demo/main.go)
 - [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
+- [examples/ffi/typescript/lifecycle_demo.ts](examples/ffi/typescript/lifecycle_demo.ts)
+- [examples/ffi/typescript/query_demo.ts](examples/ffi/typescript/query_demo.ts)
 - [examples/ffi/c/README.md](examples/ffi/c/README.md)
 - [examples/ffi/standard_runtime/README.md](examples/ffi/standard_runtime/README.md)
 - [examples/ffi/demo_runtime/README.md](examples/ffi/demo_runtime/README.md)
@@ -361,14 +439,55 @@ FFI 设计规则如下：
 这些示例当前遵循两类接入方式：
 
 - `c/demo.c`
-  - 通过标准头文件与链接产物直接演示标准 C ABI 下的 `version / engine_new / load_from_roots / list_entries / engine_free`
+  - 通过标准头文件与链接产物直接演示标准 C ABI 下的 `version / engine_new / load_from_roots / list_entries / call_skill / run_lua / engine_free`
 - Python / Go / TypeScript / standard_runtime / demo_runtime / host_provider_demo
   - 通过环境变量 `VULCAN_LUASKILLS_LIB` 指向动态库文件
+- `python/lifecycle_demo.py`
+  - 额外演示标准 ABI 下的 `disable_skill / enable_skill` 生命周期切换
+- `python/query_demo.py`
+  - 额外演示标准 ABI 下的 `is_skill / skill_name_for_tool / prompt_argument_completions`
+- `go/lifecycle_demo/main.go`
+  - 额外演示标准 ABI 下的 `disable_skill / enable_skill` 生命周期切换
+- `go/query_demo/main.go`
+  - 额外演示标准 ABI 下的 `is_skill / skill_name_for_tool / prompt_argument_completions`
+- `typescript/lifecycle_demo.ts`
+  - 额外演示标准 ABI 下的 `disable_skill / enable_skill` 生命周期切换
+- `typescript/query_demo.ts`
+  - 额外演示标准 ABI 下的 `is_skill / skill_name_for_tool / prompt_argument_completions`
 - `standard_runtime` 目录提供标准 ABI 示例共用的最小 skill 夹具
-- Python / Go / TypeScript 标准示例当前也已覆盖 `load_from_roots + list_entries` 的结构化结果读取
+- Python / Go / TypeScript 标准示例当前也已覆盖 `load_from_roots + list_entries + call_skill + run_lua` 的结构化结果读取
 - `demo_runtime` 目录额外提供一条真实的安装与调用烟测链
 - 动态安装与调用部分通过公共 `_json` FFI 完成
 - `host_provider_demo` 目录额外提供一条“宿主通过 host_callback 模式接管 SQLite 数据库落点”的独立烟测链
+
+#### FFI 示例怎么选
+
+如果您是第一次接触当前 FFI 接口，建议直接按目标选择示例，而不要一次性把所有目录都读完：
+
+- 想先跑通标准 ABI 的最短闭环：
+  - 先看 [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
+  - 或看 [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
+  - 或看 [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
+  - 或看 [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
+- 想看技能启停后的运行时变化：
+  - 看 [examples/ffi/python/lifecycle_demo.py](examples/ffi/python/lifecycle_demo.py)
+  - 看 [examples/ffi/go/lifecycle_demo/main.go](examples/ffi/go/lifecycle_demo/main.go)
+  - 看 [examples/ffi/typescript/lifecycle_demo.ts](examples/ffi/typescript/lifecycle_demo.ts)
+- 想看查询辅助接口：
+  - 看 [examples/ffi/python/query_demo.py](examples/ffi/python/query_demo.py)
+  - 看 [examples/ffi/go/query_demo/main.go](examples/ffi/go/query_demo/main.go)
+  - 看 [examples/ffi/typescript/query_demo.ts](examples/ffi/typescript/query_demo.ts)
+- 想看标准 ABI 示例共用的最小 skill 夹具：
+  - 看 [examples/ffi/standard_runtime/README.md](examples/ffi/standard_runtime/README.md)
+- 想看动态安装与真实调用烟测：
+  - 看 [examples/ffi/demo_runtime/README.md](examples/ffi/demo_runtime/README.md)
+- 想看宿主如何接管数据库 provider：
+  - 看 [examples/ffi/host_provider_demo/README.md](examples/ffi/host_provider_demo/README.md)
+
+一句话建议：
+
+- 标准 C ABI 学习入口优先从 `demo / lifecycle_demo / query_demo` 这一组看
+- 公共 `_json` FFI 与宿主 provider 接管链路，再按需要进入 `demo_runtime / host_provider_demo`
 
 #### 宿主数据库 Provider
 

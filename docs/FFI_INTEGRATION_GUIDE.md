@@ -4,6 +4,11 @@
 
 本文档用于说明 `vulcan-luaskills` 当前导出的 FFI 接口设计、启动条件、参数模型、调用顺序、返回规则、内存释放方式，以及 install / update / uninstall 等整条链路的处理逻辑。
 
+如果您希望先按最短路径做宿主自检，而不是从头读完整文档，请先看：
+
+- [FFI_BETA_RELEASE_NOTES.md](FFI_BETA_RELEASE_NOTES.md)
+- [FFI_HOST_CHECKLIST.md](FFI_HOST_CHECKLIST.md)
+
 本文档覆盖当前对外公开的两层 FFI：
 
 - 标准 C ABI
@@ -105,6 +110,26 @@
 
 - [HOST_DATABASE_PROVIDER_GUIDE.md](HOST_DATABASE_PROVIDER_GUIDE.md)
 
+### 2.5 固定术语
+
+为了避免正文里同时出现“标准 ABI”“标准接口”“标准 FFI”“JSON 接口”等多套说法，当前统一固定为：
+
+- `标准 C ABI`
+  - 指低层、结构化、面向正式宿主契约的 FFI 接口层
+- `公共 `_json` FFI`
+  - 指高层、JSON 包络、面向动态语言和快速集成的 FFI 接口层
+- `标准 C ABI 头文件`
+  - 指 [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
+- `公共 `_json` FFI 头文件`
+  - 指 [include/vulcan_luaskills_json_ffi.h](../include/vulcan_luaskills_json_ffi.h)
+
+如果正文里为了简化阅读出现：
+
+- `标准 C ABI 接口`
+- `公共 `_json` FFI 接口`
+
+也都只是上面这两套固定术语的缩写表达。
+
 ## 3. 动态库与头文件
 
 当前产物方向：
@@ -182,11 +207,11 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 **创建引擎后，必须先完成至少一次加载。**
 
-## 5. 标准接口返回与错误模型
+## 5. 标准 C ABI 接口返回与错误模型
 
-### 5.1 标准接口统一规则
+### 5.1 标准 C ABI 接口统一规则
 
-标准接口一般采用：
+标准 C ABI 接口一般采用：
 
 - 返回值：`int32_t`
 - 成功：`0`
@@ -200,10 +225,10 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 也就是说：
 
-- 标准接口的失败信息不再通过裸 `char **` 传出
+- 标准 C ABI 接口的失败信息不再通过裸 `char **` 传出
 - 调用方应把 `error_out` 当作 UTF-8 错误缓冲读取
 - 读取完成后应通过 `vulcan_luaskills_ffi_buffer_free` 释放
-- 标准接口中的直接文本输出也在逐步收敛到 `FfiOwnedBuffer`
+- 标准 C ABI 接口中的直接文本输出也在逐步收敛到 `FfiOwnedBuffer`
 - 当前 `version_out`、`skill_id_out`、`result_json_out` 都应按拥有型缓冲读取与释放
 - 当前 `FfiRuntimeInvocationResult`
   - `content`
@@ -294,7 +319,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 ## 6. 内存所有权与释放规则
 
-### 6.1 字符串
+### 6.1 字符串辅助函数
 
 由 FFI 返回的独立堆分配字符串必须由调用方释放：
 
@@ -303,6 +328,12 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 适用于：
 
 - `vulcan_luaskills_ffi_string_clone` 这类字符串辅助函数返回值
+
+说明：
+
+- 这组接口当前属于**公共 JSON FFI / 辅助函数层**
+- 标准 C ABI 主结果通道不再推荐依赖裸 `char *`
+- 标准 C ABI 应优先使用 `FfiOwnedBuffer` 与结构体专用 free 函数
 
 ### 6.2 字符串数组
 
@@ -325,9 +356,9 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 适用于：
 
-- 标准接口中的 `version_out`
-- 标准接口中的 `skill_id_out`
-- 标准接口中的 `result_json_out`
+- 标准 C ABI 接口中的 `version_out`
+- 标准 C ABI 接口中的 `skill_id_out`
+- 标准 C ABI 接口中的 `result_json_out`
 - `_json` 接口返回值
 - JSON callback 的 `response_out`
 - JSON callback 的 `error_out`
@@ -338,7 +369,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 ### 6.3 结构化列表与结果
 
-当前标准接口返回的结构化对象，都有对应 free 函数：
+当前标准 C ABI 接口返回的结构化对象，都有对应 free 函数：
 
 - `vulcan_luaskills_ffi_entry_list_free`
 - `vulcan_luaskills_ffi_help_list_free`
@@ -364,8 +395,8 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 当前 `v0.1.x / beta` 阶段已经对现有 FFI 做了一轮直接收敛。  
 如果宿主参考的是更早的示例或旧草稿，请优先按下面的对应关系理解：
 
-- 旧：标准接口大量使用 `char **error_out`
-  - 新：标准接口统一改成 `FfiOwnedBuffer *error_out`
+- 旧：标准 C ABI 接口大量使用 `char **error_out`
+  - 新：标准 C ABI 接口统一改成 `FfiOwnedBuffer *error_out`
 - 旧：`version_out` / `skill_id_out` / `result_json_out` 这类文本输出按裸字符串读取
   - 新：这些文本输出都应按 `FfiOwnedBuffer` 读取，并通过 `vulcan_luaskills_ffi_buffer_free` 释放
 - 旧：`_json` 请求输入依赖 NUL 终止字符串
@@ -374,6 +405,10 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
   - 新：JSON provider callback 通过 `FfiOwnedBuffer response_out / error_out` 返回
 - 旧：标准 SQLite / LanceDB provider callback 的 `input_json` 是裸字符串
   - 新：标准 provider request 的 `input_json` 统一改成 `FfiBorrowedBuffer`
+- 旧：标准 `call_skill / run_lua / render_skill_help_detail` 的请求级 JSON 输入按裸字符串传入
+  - 新：这些输入当前统一改成 `FfiBorrowedBuffer`
+- 旧：`FfiLuaInvocationContext` 里的三个 JSON 字段按裸字符串传入
+  - 新：`FfiLuaInvocationContext` 当前统一改成三段 `FfiBorrowedBuffer`
 - 旧：`FfiStringArray.items` 与 `related_entries` 数组元素按 `char **` 理解
   - 新：这类数组元素已经统一收敛为 `FfiOwnedBuffer *`
 - 旧：结构体内部文本字段多数按裸 `char *` 处理
@@ -656,7 +691,16 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 说明：
 
-这些字段在标准接口里仍是 JSON 文本，不强行展开成固定 C 结构。  
+这些字段在标准 C ABI 接口里仍承载 JSON 内容，但当前已经统一改成：
+
+- `FfiBorrowedBuffer`
+
+也就是说：
+
+- 它们仍然是动态 JSON 结构
+- 但不再依赖 NUL 终止字符串
+- 宿主应显式提供 `ptr + len`
+
 原因是这些值本身是动态结构，固定 ABI 代价高且易碎。
 
 ### 8.7 `FfiSkillInstallRequest`
@@ -675,7 +719,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 当前受管安装主链重点支持 GitHub。
 
-`source_type` 在标准 FFI 中采用稳定整数协议：
+`source_type` 在标准 C ABI 中采用稳定整数协议：
 
 - `-1`
   - absent
@@ -708,14 +752,14 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 ### 9.1 基础接口
 
-标准接口：
+标准 C ABI 接口：
 
 - `vulcan_luaskills_ffi_version`
 - `vulcan_luaskills_ffi_describe`
 - `vulcan_luaskills_ffi_engine_new`
 - `vulcan_luaskills_ffi_engine_free`
 
-JSON 接口：
+公共 `_json` FFI 接口：
 
 - `vulcan_luaskills_ffi_version_json`
 - `vulcan_luaskills_ffi_describe_json`
@@ -724,14 +768,14 @@ JSON 接口：
 
 ### 9.2 加载与重载接口
 
-标准接口：
+标准 C ABI 接口：
 
 - `vulcan_luaskills_ffi_load_from_dirs`
 - `vulcan_luaskills_ffi_load_from_roots`
 - `vulcan_luaskills_ffi_reload_from_dirs`
 - `vulcan_luaskills_ffi_reload_from_roots`
 
-JSON 接口：
+公共 `_json` FFI 接口：
 
 - `vulcan_luaskills_ffi_load_from_dirs_json`
 - `vulcan_luaskills_ffi_load_from_roots_json`
@@ -740,7 +784,7 @@ JSON 接口：
 
 ### 9.3 描述与帮助接口
 
-标准接口：
+标准 C ABI 接口：
 
 - `vulcan_luaskills_ffi_list_entries`
 - `vulcan_luaskills_ffi_list_skill_help`
@@ -749,7 +793,7 @@ JSON 接口：
 - `vulcan_luaskills_ffi_is_skill`
 - `vulcan_luaskills_ffi_skill_name_for_tool`
 
-JSON 接口：
+公共 `_json` FFI 接口：
 
 - `vulcan_luaskills_ffi_list_entries_json`
 - `vulcan_luaskills_ffi_list_skill_help_json`
@@ -760,19 +804,19 @@ JSON 接口：
 
 ### 9.4 调用接口
 
-标准接口：
+标准 C ABI 接口：
 
 - `vulcan_luaskills_ffi_call_skill`
 - `vulcan_luaskills_ffi_run_lua`
 
-JSON 接口：
+公共 `_json` FFI 接口：
 
 - `vulcan_luaskills_ffi_call_skill_json`
 - `vulcan_luaskills_ffi_run_lua_json`
 
 ### 9.5 生命周期接口
 
-标准接口：
+标准 C ABI 接口：
 
 - `vulcan_luaskills_ffi_disable_skill_in_dirs`
 - `vulcan_luaskills_ffi_disable_skill`
@@ -787,7 +831,7 @@ JSON 接口：
 - `vulcan_luaskills_ffi_update_skill`
 - `vulcan_luaskills_ffi_system_update_skill`
 
-JSON 接口：
+公共 `_json` FFI 接口：
 
 - `vulcan_luaskills_ffi_disable_skill_in_dirs_json`
 - `vulcan_luaskills_ffi_disable_skill_json`
@@ -934,6 +978,11 @@ JSON 接口：
 - `flow_name`
 - 可选请求上下文
 
+说明：
+
+- 标准 C ABI 接口中的请求上下文当前通过 `FfiBorrowedBuffer request_context_json` 传入
+- 传空缓冲表示“不附带请求上下文”
+
 ### 10.9 `prompt_argument_completions`
 
 作用：
@@ -962,6 +1011,12 @@ JSON 接口：
 作用：
 
 - 调用一个已加载的 skill entry
+
+说明：
+
+- `args_json` 当前通过 `FfiBorrowedBuffer` 传入
+- `invocation_context` 中的三个 JSON 字段也都通过 `FfiBorrowedBuffer` 传入
+- 这两部分仍承载 JSON 内容，但标准 ABI 不再要求宿主提供 NUL 终止字符串
 
 参数：
 
@@ -1018,6 +1073,12 @@ JSON 接口：
 - 调试
 - 宿主 smoke test
 - 系统能力验证
+
+说明：
+
+- `code` 仍然是普通 UTF-8 字符串
+- `args_json` 当前通过 `FfiBorrowedBuffer` 传入
+- 返回值 `result_json_out` 继续通过 `FfiOwnedBuffer` 返回
 
 ## 11. 生命周期链路处理逻辑
 
@@ -1174,6 +1235,30 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 当前协议允许这种混合使用。
 
+### 14.4 一页式选型结论
+
+如果宿主正在做第一次技术选型，可以直接按下面的结论判断：
+
+- Rust 宿主：
+  - 优先直接引用 Rust API
+  - 不建议额外包装成 FFI 再回调自己
+- C / C++ / Go / 能稳定处理结构体与 out 指针的宿主：
+  - 优先选择标准 C ABI
+  - 适合把它当成正式低层契约长期维护
+- Python / Node.js / TypeScript / 动态脚本宿主：
+  - 优先选择公共 `_json` FFI
+  - 适合快速接入、原型验证和减少 ABI 绑定成本
+- 一个宿主同时需要“稳定主链”和“动态扩展链”时：
+  - 可以混合使用
+  - 标准 C ABI 承载 `engine/load/list/call/lifecycle`
+  - 公共 `_json` FFI 承载动态安装、调试和宿主快速桥接
+
+一句话总结：
+
+- 标准 C ABI 解决“正式低层接入”
+- 公共 `_json` FFI 解决“快速跨语言接入”
+- Rust API 解决“同语言直接集成”
+
 ## 15. C / Python / Go / TypeScript 示例说明
 
 示例位置：
@@ -1182,10 +1267,16 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
   - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
 - Python：
   - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
+  - [examples/ffi/python/lifecycle_demo.py](../examples/ffi/python/lifecycle_demo.py)
+  - [examples/ffi/python/query_demo.py](../examples/ffi/python/query_demo.py)
 - Go：
   - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
+  - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
+  - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
 - TypeScript：
   - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
+  - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
+  - [examples/ffi/typescript/query_demo.ts](../examples/ffi/typescript/query_demo.ts)
 
 当前示例主要演示：
 
@@ -1193,17 +1284,26 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - 创建引擎
 - 加载根链
 - 读取结构化 `list_entries` 结果
+- 通过 `FfiBorrowedBuffer` 调用标准 `call_skill`
+- 读取结构化调用结果
+- 通过 `FfiBorrowedBuffer` 调用标准 `run_lua`
+- 读取 JSON 结果缓冲
 - 释放引擎
 
 其中：
 
 - `c/demo.c` 更贴近底层标准 C ABI 契约
 - Python / Go / TypeScript 示例更适合展示各语言桥接方式
+- `python/lifecycle_demo.py` 额外聚焦标准 ABI 的 `disable_skill / enable_skill` 生命周期切换
+- `python/query_demo.py` 额外聚焦标准 ABI 的查询辅助接口
+- `go/lifecycle_demo/main.go` 额外聚焦标准 ABI 的 `disable_skill / enable_skill` 生命周期切换
+- `go/query_demo/main.go` 额外聚焦标准 ABI 的查询辅助接口
+- `typescript/lifecycle_demo.ts` 额外聚焦标准 ABI 的 `disable_skill / enable_skill` 生命周期切换
+- `typescript/query_demo.ts` 额外聚焦标准 ABI 的查询辅助接口
 
-这是一组覆盖“版本 -> 引擎 -> 加载 -> 结构化枚举”的最小 smoke test。  
+这是一组覆盖“版本 -> 引擎 -> 加载 -> 结构化枚举 -> 标准调用 -> 标准 Lua 执行”的最小 smoke test。  
 后续如果宿主要做完整接入，建议直接按本文档把：
 
-- call_skill
 - install / update / uninstall
 
 接进去。
@@ -1217,6 +1317,9 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 - `standard_runtime`
   - 提供标准 ABI 示例共用的最小 skill 夹具
+  - 默认包含 `demo-standard-ffi-skill-ping`，可直接演示 `call_skill`
+  - 同时提供稳定 runtime 目录布局，便于标准示例继续演示 `run_lua`
+  - 也可直接配合 `python/lifecycle_demo.py` 演示 `disable_skill / enable_skill`
 - `demo_runtime`
   - 提供动态安装与调用烟测链
 
@@ -1226,6 +1329,36 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - 动态安装 `OpenVulcan/luaskills-demo-skill`
 - 调用 `luaskills-demo-skill-demo-status`
 - 输出 success
+
+### 15.1 示例选型速查
+
+如果宿主只想先抓一条最短路径，请按目标直接看对应示例：
+
+- 想先理解标准 ABI 的主调用链：
+  - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
+  - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
+  - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
+  - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
+- 想看 `disable_skill / enable_skill`：
+  - [examples/ffi/python/lifecycle_demo.py](../examples/ffi/python/lifecycle_demo.py)
+  - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
+  - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
+- 想看 `is_skill / skill_name_for_tool / prompt_argument_completions`：
+  - [examples/ffi/python/query_demo.py](../examples/ffi/python/query_demo.py)
+  - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
+  - [examples/ffi/typescript/query_demo.ts](../examples/ffi/typescript/query_demo.ts)
+- 想看标准 ABI 示例共用的最小 skill 夹具：
+  - [examples/ffi/standard_runtime/README.md](../examples/ffi/standard_runtime/README.md)
+- 想看公共 `_json` FFI 驱动的动态安装烟测：
+  - [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
+- 想看宿主接管 SQLite / LanceDB provider：
+  - [examples/ffi/host_provider_demo/README.md](../examples/ffi/host_provider_demo/README.md)
+
+建议阅读顺序：
+
+1. 先从标准 ABI 的 `demo` 看最短闭环。
+2. 再根据需要进入 `lifecycle_demo` 或 `query_demo`。
+3. 最后再看 `demo_runtime` 和 `host_provider_demo` 这类更接近宿主集成的扩展场景。
 
 ## 16. 推荐接入顺序
 

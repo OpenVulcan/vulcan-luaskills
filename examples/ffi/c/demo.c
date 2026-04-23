@@ -173,8 +173,39 @@ static void print_entry_preview(const FfiRuntimeEntryDescriptorList *entry_list)
 }
 
 /*
-Run one version query, one root load, and one structured entry-list read through the standard C ABI.
-通过标准 C ABI 执行一次版本查询、一次根链加载和一次结构化入口列表读取。
+Build one borrowed UTF-8 buffer from one existing C string.
+从一个现有 C 字符串构造借用型 UTF-8 缓冲。
+*/
+static FfiBorrowedBuffer borrowed_buffer_from_text(const char *text) {
+    FfiBorrowedBuffer buffer;
+    if (text == NULL) {
+        buffer.ptr = NULL;
+        buffer.len = 0;
+        return buffer;
+    }
+    buffer.ptr = (const uint8_t *)text;
+    buffer.len = strlen(text);
+    return buffer;
+}
+
+/*
+Print one compact preview of one standard invocation result.
+输出一个标准调用结果的紧凑预览。
+*/
+static void print_invocation_preview(const FfiRuntimeInvocationResult *result) {
+    if (result == NULL) {
+        printf("Invocation result pointer is null.\n");
+        return;
+    }
+    print_nested_text("Call content: ", result->content);
+    printf("Call content bytes: %zu\n", result->content_bytes);
+    printf("Call content lines: %zu\n", result->content_lines);
+    print_nested_text("Call template hint: ", result->template_hint);
+}
+
+/*
+Run one version query, one root load, one structured entry-list read, one standard call_skill roundtrip, and one standard run_lua roundtrip.
+通过标准 C ABI 执行一次版本查询、一次根链加载、一次结构化入口列表读取、一次标准 call_skill 往返调用以及一次标准 run_lua 往返调用。
 */
 static void run_standard_ffi_demo(void) {
     const char *runtime_root = resolve_demo_runtime_root();
@@ -205,6 +236,15 @@ static void run_standard_ffi_demo(void) {
     uint64_t engine_id = 0;
     FfiRuntimeSkillRoot skill_roots[1];
     FfiRuntimeEntryDescriptorList *entry_list = NULL;
+    FfiRuntimeInvocationResult *invocation_result = NULL;
+    FfiOwnedBuffer run_lua_result_json = {0};
+    const char *args_json_text = "{\"note\":\"c\"}";
+    const char *run_lua_args_json_text = "{\"note\":\"c-lua\"}";
+    const char *request_context_json_text = "{\"transport_name\":\"c-demo\"}";
+    const char *client_budget_json_text = "{\"budget\":1}";
+    const char *tool_config_json_text = "{\"mode\":\"standard-demo\"}";
+    const char *run_lua_code =
+        "return { note = args.note, transport = vulcan.context.request.transport_name, budget = vulcan.context.client_budget.budget, mode = vulcan.context.tool_config.mode }";
 
     ensure_demo_runtime_layout(runtime_root);
     build_runtime_subpath(temp_dir, sizeof(temp_dir), runtime_root, "temp");
@@ -303,6 +343,62 @@ static void run_standard_ffi_demo(void) {
     }
     print_entry_preview(entry_list);
     vulcan_luaskills_ffi_entry_list_free(entry_list);
+
+    /*
+    Call one real fixture skill entry through borrowed JSON buffers and one structured invocation result.
+    通过借用型 JSON 缓冲和一个结构化调用结果来调用真实夹具技能入口。
+    */
+    error_buffer = (FfiOwnedBuffer){0};
+    {
+        FfiLuaInvocationContext invocation_context = {
+            .request_context_json = borrowed_buffer_from_text(request_context_json_text),
+            .client_budget_json = borrowed_buffer_from_text(client_budget_json_text),
+            .tool_config_json = borrowed_buffer_from_text(tool_config_json_text)
+        };
+        if (
+            vulcan_luaskills_ffi_call_skill(
+                engine_id,
+                "demo-standard-ffi-skill-ping",
+                borrowed_buffer_from_text(args_json_text),
+                &invocation_context,
+                &invocation_result,
+                &error_buffer
+            ) != 0
+        ) {
+            exit_with_owned_error("failed to call fixture skill", error_buffer);
+        }
+    }
+    if (invocation_result == NULL) {
+        exit_with_message("invocation result pointer is null");
+    }
+    print_invocation_preview(invocation_result);
+    vulcan_luaskills_ffi_invocation_result_free(invocation_result);
+
+    /*
+    Run one Lua snippet through borrowed JSON buffers and print the JSON result payload.
+    通过借用型 JSON 缓冲执行一段 Lua 代码并输出 JSON 结果载荷。
+    */
+    error_buffer = (FfiOwnedBuffer){0};
+    {
+        FfiLuaInvocationContext invocation_context = {
+            .request_context_json = borrowed_buffer_from_text(request_context_json_text),
+            .client_budget_json = borrowed_buffer_from_text(client_budget_json_text),
+            .tool_config_json = borrowed_buffer_from_text(tool_config_json_text)
+        };
+        if (
+            vulcan_luaskills_ffi_run_lua(
+                engine_id,
+                run_lua_code,
+                borrowed_buffer_from_text(run_lua_args_json_text),
+                &invocation_context,
+                &run_lua_result_json,
+                &error_buffer
+            ) != 0
+        ) {
+            exit_with_owned_error("failed to run fixture lua snippet", error_buffer);
+        }
+    }
+    print_owned_text("Run Lua result JSON: ", run_lua_result_json);
 
     error_buffer = (FfiOwnedBuffer){0};
     if (vulcan_luaskills_ffi_engine_free(engine_id, &error_buffer) != 0) {

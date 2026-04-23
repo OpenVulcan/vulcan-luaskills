@@ -1,7 +1,7 @@
 package main
 
 /*
-#cgo CFLAGS: -I../../../include
+#cgo CFLAGS: -I../../../../include
 #include <stdlib.h>
 #include "vulcan_luaskills_ffi.h"
 */
@@ -41,18 +41,18 @@ func readOwnedBufferText(buffer C.FfiOwnedBuffer) string {
 	return string(C.GoBytes(unsafe.Pointer(buffer.ptr), C.int(buffer.len)))
 }
 
-// makeBorrowedBuffer allocates one temporary borrowed UTF-8 buffer for one standard FFI request.
-// makeBorrowedBuffer 为一次标准 FFI 请求分配一个临时借用型 UTF-8 缓冲。
-func makeBorrowedBuffer(text string) (C.FfiBorrowedBuffer, unsafe.Pointer) {
-	payload := []byte(text)
-	if len(payload) == 0 {
-		return C.FfiBorrowedBuffer{}, nil
+// readStringArray copies one returned string-array structure into Go strings.
+// readStringArray 将一个返回的字符串数组结构复制为 Go 字符串切片。
+func readStringArray(values *C.FfiStringArray) []string {
+	if values == nil || values.items == nil || values.len == 0 {
+		return []string{}
 	}
-	storage := C.CBytes(payload)
-	return C.FfiBorrowedBuffer{
-		ptr: (*C.uint8_t)(storage),
-		len: C.size_t(len(payload)),
-	}, storage
+	valueSlice := unsafe.Slice(values.items, int(values.len))
+	results := make([]string, 0, len(valueSlice))
+	for _, item := range valueSlice {
+		results = append(results, readOwnedBufferText(item))
+	}
+	return results
 }
 
 // standardFixtureRuntimeRoot resolves the dedicated standard-ABI fixture runtime root.
@@ -60,9 +60,11 @@ func makeBorrowedBuffer(text string) (C.FfiBorrowedBuffer, unsafe.Pointer) {
 func standardFixtureRuntimeRoot() string {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
-		panic("failed to resolve demo.go path")
+		panic("failed to resolve query main.go path")
 	}
-	return filepath.Join(filepath.Dir(filepath.Dir(currentFile)), "standard_runtime", "runtime_root")
+	return filepath.Clean(
+		filepath.Join(filepath.Dir(currentFile), "..", "..", "standard_runtime", "runtime_root"),
+	)
 }
 
 // ensureStandardFixtureLayout creates the shared fixture runtime layout when it is missing.
@@ -85,17 +87,12 @@ func ensureStandardFixtureLayout(root string) {
 	}
 }
 
-// main demonstrates version, engine lifecycle, root loading, entry listing, one standard call_skill roundtrip, and one standard run_lua roundtrip.
-// main 演示版本查询、引擎生命周期、根链加载、入口列举、一次标准 call_skill 往返调用以及一次标准 run_lua 往返调用。
+// main demonstrates query-helper APIs through the standard ABI surface.
+// main 演示通过标准 ABI 接口调用查询辅助能力。
 func main() {
-	var version C.FfiOwnedBuffer
-	var errorOut C.FfiOwnedBuffer
-	mustOK(C.vulcan_luaskills_ffi_version(&version, &errorOut), errorOut)
-	fmt.Println("Version:", readOwnedBufferText(version))
-	C.vulcan_luaskills_ffi_buffer_free(version)
-
 	root := standardFixtureRuntimeRoot()
 	ensureStandardFixtureLayout(root)
+
 	host := C.FfiLuaRuntimeHostOptions{
 		temp_dir:                         C.CString(filepath.ToSlash(filepath.Join(root, "temp"))),
 		resources_dir:                    C.CString(filepath.ToSlash(filepath.Join(root, "resources"))),
@@ -149,7 +146,7 @@ func main() {
 	}
 
 	var engineID C.uint64_t
-	errorOut = C.FfiOwnedBuffer{}
+	var errorOut C.FfiOwnedBuffer
 	mustOK(C.vulcan_luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
 	fmt.Println("Engine created:", uint64(engineID))
 
@@ -175,87 +172,56 @@ func main() {
 	)
 	fmt.Println("Loaded roots from:", filepath.ToSlash(filepath.Join(root, "skills")))
 
-	var entryList *C.FfiRuntimeEntryDescriptorList
-	errorOut = C.FfiOwnedBuffer{}
-	mustOK(C.vulcan_luaskills_ffi_list_entries(engineID, &entryList, &errorOut), errorOut)
-	if entryList != nil {
-		defer C.vulcan_luaskills_ffi_entry_list_free(entryList)
-		entrySlice := unsafe.Slice(entryList.items, int(entryList.len))
-		fmt.Println("Entry count:", len(entrySlice))
-		if len(entrySlice) > 0 {
-			firstEntry := entrySlice[0]
-			fmt.Println("First canonical entry:", readOwnedBufferText(firstEntry.canonical_name))
-			fmt.Println("First entry skill id:", readOwnedBufferText(firstEntry.skill_id))
-			fmt.Println("First entry description:", readOwnedBufferText(firstEntry.description))
-			parameterSlice := unsafe.Slice(firstEntry.parameters, int(firstEntry.parameters_len))
-			fmt.Println("First entry parameter count:", len(parameterSlice))
-			if len(parameterSlice) > 0 {
-				firstParameter := parameterSlice[0]
-				fmt.Println("First parameter name:", readOwnedBufferText(firstParameter.name))
-				fmt.Println("First parameter type:", readOwnedBufferText(firstParameter.param_type))
-				fmt.Println("First parameter required:", firstParameter.required != 0)
-			}
-		} else {
-			fmt.Println("No entries were returned by the current fixture root.")
-		}
-	}
-
-	argsBuffer, argsStorage := makeBorrowedBuffer(`{"note":"go"}`)
-	requestBuffer, requestStorage := makeBorrowedBuffer(`{"transport_name":"go-demo"}`)
-	budgetBuffer, budgetStorage := makeBorrowedBuffer(`{"budget":1}`)
-	toolBuffer, toolStorage := makeBorrowedBuffer(`{"mode":"standard-demo"}`)
-	defer C.free(argsStorage)
-	defer C.free(requestStorage)
-	defer C.free(budgetStorage)
-	defer C.free(toolStorage)
-
-	invocationContext := C.FfiLuaInvocationContext{
-		request_context_json: requestBuffer,
-		client_budget_json:   budgetBuffer,
-		tool_config_json:     toolBuffer,
-	}
 	toolName := C.CString("demo-standard-ffi-skill-ping")
+	argumentName := C.CString("note")
 	defer C.free(unsafe.Pointer(toolName))
-	var invocationResult *C.FfiRuntimeInvocationResult
+	defer C.free(unsafe.Pointer(argumentName))
+
+	var isSkillValue C.uint8_t
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_call_skill(
+		C.vulcan_luaskills_ffi_is_skill(
 			engineID,
 			toolName,
-			argsBuffer,
-			&invocationContext,
-			&invocationResult,
+			&isSkillValue,
 			&errorOut,
 		),
 		errorOut,
 	)
-	if invocationResult != nil {
-		defer C.vulcan_luaskills_ffi_invocation_result_free(invocationResult)
-		fmt.Println("Call content:", readOwnedBufferText(invocationResult.content))
-		fmt.Println("Call content bytes:", uint64(invocationResult.content_bytes))
-		fmt.Println("Call content lines:", uint64(invocationResult.content_lines))
-		fmt.Println("Call template hint:", readOwnedBufferText(invocationResult.template_hint))
-	}
+	fmt.Println("Is skill tool:", isSkillValue != 0)
 
-	runLuaArgsBuffer, runLuaArgsStorage := makeBorrowedBuffer(`{"note":"go-lua"}`)
-	defer C.free(runLuaArgsStorage)
-	runLuaCode := C.CString("return { note = args.note, transport = vulcan.context.request.transport_name, budget = vulcan.context.client_budget.budget, mode = vulcan.context.tool_config.mode }")
-	defer C.free(unsafe.Pointer(runLuaCode))
-	var resultJSONOut C.FfiOwnedBuffer
+	var skillIDOut C.FfiOwnedBuffer
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_run_lua(
+		C.vulcan_luaskills_ffi_skill_name_for_tool(
 			engineID,
-			runLuaCode,
-			runLuaArgsBuffer,
-			&invocationContext,
-			&resultJSONOut,
+			toolName,
+			&skillIDOut,
 			&errorOut,
 		),
 		errorOut,
 	)
-	fmt.Println("Run Lua result JSON:", readOwnedBufferText(resultJSONOut))
-	C.vulcan_luaskills_ffi_buffer_free(resultJSONOut)
+	fmt.Println("Owning skill id:", readOwnedBufferText(skillIDOut))
+	C.vulcan_luaskills_ffi_buffer_free(skillIDOut)
+
+	var valuesOut *C.FfiStringArray
+	errorOut = C.FfiOwnedBuffer{}
+	mustOK(
+		C.vulcan_luaskills_ffi_prompt_argument_completions(
+			engineID,
+			toolName,
+			argumentName,
+			&valuesOut,
+			&errorOut,
+		),
+		errorOut,
+	)
+	if valuesOut != nil {
+		defer C.vulcan_luaskills_ffi_string_array_free(valuesOut)
+	}
+	values := readStringArray(valuesOut)
+	fmt.Println("Prompt completion count:", len(values))
+	fmt.Println("Prompt completions:", values)
 
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(C.vulcan_luaskills_ffi_engine_free(engineID, &errorOut), errorOut)

@@ -1,6 +1,6 @@
 /**
-Minimal TypeScript example for the standard LuaSkills FFI surface using koffi.
-使用 koffi 调用 LuaSkills 标准 FFI 接口的最小 TypeScript 示例。
+Minimal TypeScript lifecycle example for the standard LuaSkills FFI surface using koffi.
+使用 koffi 调用 LuaSkills 标准 FFI 生命周期接口的最小 TypeScript 示例。
  */
 
 import koffi from "koffi";
@@ -104,8 +104,88 @@ function mustOK(
 }
 
 /**
-Run one version query, one root load, one structured entry-list read, one standard call_skill roundtrip, and one standard run_lua roundtrip.
-通过标准 ABI 执行一次版本查询、一次根链加载、一次结构化入口列表读取、一次标准 call_skill 往返调用以及一次标准 run_lua 往返调用。
+Load the current entry list and return its count.
+读取当前入口列表并返回其数量。
+ */
+function printEntryCount(
+  engineId: bigint,
+  listEntries: (engineId: bigint, entriesOut: Array<Buffer | null>, errorOut: Array<{ ptr: Buffer | null; len: number | bigint }>) => number,
+  freeEntryList: (value: Buffer | null) => void,
+  freeBuffer: (buffer: { ptr: Buffer | null; len: number | bigint }) => void,
+  FfiRuntimeEntryDescriptorList: koffi.IKoffiStructType,
+): number {
+  const entriesOut = [null];
+  const errorOut = [{ ptr: null, len: 0 }];
+  mustOK(listEntries(engineId, entriesOut, errorOut), errorOut[0], freeBuffer);
+  try {
+    if (!entriesOut[0]) {
+      console.log("Current entry count:", 0);
+      return 0;
+    }
+    const entryList = koffi.decode(entriesOut[0], FfiRuntimeEntryDescriptorList) as {
+      items: Buffer | null;
+      len: number | bigint;
+    };
+    const entryCount = Number(entryList.len);
+    console.log("Current entry count:", entryCount);
+    return entryCount;
+  } finally {
+    if (entriesOut[0]) {
+      freeEntryList(entriesOut[0]);
+    }
+  }
+}
+
+/**
+Invoke the shared fixture skill entry and return its textual content.
+调用共享夹具技能入口并返回其文本内容。
+ */
+function callFixtureSkill(
+  engineId: bigint,
+  note: string,
+  callSkill: (
+    engineId: bigint,
+    toolName: string,
+    argsJson: { ptr: Buffer | null; len: number },
+    invocationContext: null,
+    resultOut: Array<Buffer | null>,
+    errorOut: Array<{ ptr: Buffer | null; len: number | bigint }>,
+  ) => number,
+  freeInvocationResult: (value: Buffer | null) => void,
+  freeBuffer: (buffer: { ptr: Buffer | null; len: number | bigint }) => void,
+  FfiRuntimeInvocationResult: koffi.IKoffiStructType,
+): string {
+  const argsJson = makeBorrowedBuffer(`{"note":"${note}"}`);
+  const invocationOut = [null];
+  const errorOut = [{ ptr: null, len: 0 }];
+  mustOK(
+    callSkill(
+      engineId,
+      "demo-standard-ffi-skill-ping",
+      argsJson.buffer,
+      null,
+      invocationOut,
+      errorOut,
+    ),
+    errorOut[0],
+    freeBuffer,
+  );
+  if (!invocationOut[0]) {
+    throw new Error("Invocation result pointer is null");
+  }
+  try {
+    const invocationResult = koffi.decode(invocationOut[0], FfiRuntimeInvocationResult) as {
+      content: { ptr: Buffer | null; len: number | bigint };
+    };
+    return readOwnedBuffer(invocationResult.content);
+  } finally {
+    freeInvocationResult(invocationOut[0]);
+  }
+}
+
+/**
+Run one lifecycle smoke flow through the standard ABI.
+通过标准 ABI 执行一条生命周期烟测链路。
  */
 function main(): void {
   const library = koffi.load(resolveLibraryPath());
@@ -166,33 +246,9 @@ function main(): void {
     len: "size_t",
   });
 
-  const FfiLuaInvocationContext = koffi.struct("FfiLuaInvocationContext", {
-    request_context_json: FfiBorrowedBuffer,
-    client_budget_json: FfiBorrowedBuffer,
-    tool_config_json: FfiBorrowedBuffer,
-  });
-
   const FfiRuntimeSkillRoot = koffi.struct("FfiRuntimeSkillRoot", {
     name: "str",
     skills_dir: "str",
-  });
-
-  const FfiRuntimeEntryParameterDescriptor = koffi.struct("FfiRuntimeEntryParameterDescriptor", {
-    name: FfiOwnedBuffer,
-    param_type: FfiOwnedBuffer,
-    description: FfiOwnedBuffer,
-    required: "uint8_t",
-  });
-
-  const FfiRuntimeEntryDescriptor = koffi.struct("FfiRuntimeEntryDescriptor", {
-    canonical_name: FfiOwnedBuffer,
-    skill_id: FfiOwnedBuffer,
-    local_name: FfiOwnedBuffer,
-    root_name: FfiOwnedBuffer,
-    skill_dir: FfiOwnedBuffer,
-    description: FfiOwnedBuffer,
-    parameters: "void *",
-    parameters_len: "size_t",
   });
 
   const FfiRuntimeEntryDescriptorList = koffi.struct("FfiRuntimeEntryDescriptorList", {
@@ -209,21 +265,15 @@ function main(): void {
   });
 
   const freeBuffer = library.func("void vulcan_luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
-  const version = library.func("int vulcan_luaskills_ffi_version(FfiOwnedBuffer *version_out, FfiOwnedBuffer *error_out)");
   const engineNew = library.func("int vulcan_luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
   const loadFromRoots = library.func("int vulcan_luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, FfiOwnedBuffer *error_out)");
   const listEntries = library.func("int vulcan_luaskills_ffi_list_entries(uint64_t engine_id, void **entries_out, FfiOwnedBuffer *error_out)");
-  const callSkill = library.func("int vulcan_luaskills_ffi_call_skill(uint64_t engine_id, const char *tool_name, FfiBorrowedBuffer args_json, const FfiLuaInvocationContext *invocation_context, void **result_out, FfiOwnedBuffer *error_out)");
-  const runLua = library.func("int vulcan_luaskills_ffi_run_lua(uint64_t engine_id, const char *code, FfiBorrowedBuffer args_json, const FfiLuaInvocationContext *invocation_context, FfiOwnedBuffer *result_json_out, FfiOwnedBuffer *error_out)");
+  const callSkill = library.func("int vulcan_luaskills_ffi_call_skill(uint64_t engine_id, const char *tool_name, FfiBorrowedBuffer args_json, void *invocation_context, void **result_out, FfiOwnedBuffer *error_out)");
+  const disableSkill = library.func("int vulcan_luaskills_ffi_disable_skill(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, const char *skill_id, const char *reason, FfiOwnedBuffer *error_out)");
+  const enableSkill = library.func("int vulcan_luaskills_ffi_enable_skill(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, const char *skill_id, FfiOwnedBuffer *error_out)");
   const freeEntryList = library.func("void vulcan_luaskills_ffi_entry_list_free(void *value)");
   const freeInvocationResult = library.func("void vulcan_luaskills_ffi_invocation_result_free(void *value)");
   const engineFree = library.func("int vulcan_luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
-
-  const versionOut = [{ ptr: null, len: 0 }];
-  const versionError = [{ ptr: null, len: 0 }];
-  mustOK(version(versionOut, versionError), versionError[0], freeBuffer);
-  console.log("Version:", readOwnedBuffer(versionOut[0]));
-  freeBuffer(versionOut[0]);
 
   const options = {
     pool: { min_size: 1, max_size: 1, idle_ttl_secs: 30 },
@@ -276,111 +326,63 @@ function main(): void {
   mustOK(loadFromRoots(engineIdOut[0], rootArray, rootArray.length, loadError), loadError[0], freeBuffer);
   console.log("Loaded roots from:", path.join(runtimeRoot, "skills"));
 
-  const entriesOut = [null];
-  const entriesError = [{ ptr: null, len: 0 }];
-  mustOK(listEntries(engineIdOut[0], entriesOut, entriesError), entriesError[0], freeBuffer);
-  if (entriesOut[0]) {
-    const entryList = koffi.decode(entriesOut[0], FfiRuntimeEntryDescriptorList) as {
-      items: Buffer | null;
-      len: number | bigint;
-    };
-    const entries = entryList.items
-      ? (koffi.decode(
-          entryList.items,
-          koffi.array(FfiRuntimeEntryDescriptor, Number(entryList.len)),
-        ) as Array<{
-          canonical_name: { ptr: Buffer | null; len: number | bigint };
-          skill_id: { ptr: Buffer | null; len: number | bigint };
-          description: { ptr: Buffer | null; len: number | bigint };
-          parameters: Buffer | null;
-          parameters_len: number | bigint;
-        }>)
-      : [];
-    console.log("Entry count:", entries.length);
-    if (entries.length > 0) {
-      const firstEntry = entries[0];
-      console.log("First canonical entry:", readOwnedBuffer(firstEntry.canonical_name));
-      console.log("First entry skill id:", readOwnedBuffer(firstEntry.skill_id));
-      console.log("First entry description:", readOwnedBuffer(firstEntry.description));
-      const parameters = firstEntry.parameters
-        ? (koffi.decode(
-            firstEntry.parameters,
-            koffi.array(FfiRuntimeEntryParameterDescriptor, Number(firstEntry.parameters_len)),
-          ) as Array<{
-            name: { ptr: Buffer | null; len: number | bigint };
-            param_type: { ptr: Buffer | null; len: number | bigint };
-            required: number | bigint;
-          }>)
-        : [];
-      console.log("First entry parameter count:", parameters.length);
-      if (parameters.length > 0) {
-        const firstParameter = parameters[0];
-        console.log("First parameter name:", readOwnedBuffer(firstParameter.name));
-        console.log("First parameter type:", readOwnedBuffer(firstParameter.param_type));
-        console.log("First parameter required:", Number(firstParameter.required) !== 0);
-      }
-    } else {
-      console.log("No entries were returned by the current fixture root.");
-    }
-    freeEntryList(entriesOut[0]);
-  }
+  printEntryCount(engineIdOut[0], listEntries, freeEntryList, freeBuffer, FfiRuntimeEntryDescriptorList);
+  console.log(
+    "Call before disable:",
+    callFixtureSkill(engineIdOut[0], "before-disable", callSkill, freeInvocationResult, freeBuffer, FfiRuntimeInvocationResult),
+  );
 
-  const argsJson = makeBorrowedBuffer('{"note":"typescript"}');
-  const requestContext = makeBorrowedBuffer('{"transport_name":"ts-demo"}');
-  const clientBudget = makeBorrowedBuffer('{"budget":1}');
-  const toolConfig = makeBorrowedBuffer('{"mode":"standard-demo"}');
-  const invocationContext = [
-    {
-      request_context_json: requestContext.buffer,
-      client_budget_json: clientBudget.buffer,
-      tool_config_json: toolConfig.buffer,
-    },
-  ];
-  const invocationOut = [null];
-  const invocationError = [{ ptr: null, len: 0 }];
+  const disableError = [{ ptr: null, len: 0 }];
   mustOK(
-    callSkill(
+    disableSkill(
       engineIdOut[0],
-      "demo-standard-ffi-skill-ping",
-      argsJson.buffer,
-      invocationContext,
-      invocationOut,
-      invocationError,
+      rootArray,
+      rootArray.length,
+      "demo-standard-ffi-skill",
+      "maintenance window",
+      disableError,
     ),
-    invocationError[0],
+    disableError[0],
     freeBuffer,
   );
-  if (invocationOut[0]) {
-    const invocationResult = koffi.decode(invocationOut[0], FfiRuntimeInvocationResult) as {
-      content: { ptr: Buffer | null; len: number | bigint };
-      template_hint: { ptr: Buffer | null; len: number | bigint };
-      content_bytes: number | bigint;
-      content_lines: number | bigint;
-    };
-    console.log("Call content:", readOwnedBuffer(invocationResult.content));
-    console.log("Call content bytes:", Number(invocationResult.content_bytes));
-    console.log("Call content lines:", Number(invocationResult.content_lines));
-    console.log("Call template hint:", readOwnedBuffer(invocationResult.template_hint));
-    freeInvocationResult(invocationOut[0]);
-  }
+  console.log("Skill disabled: demo-standard-ffi-skill");
+  printEntryCount(engineIdOut[0], listEntries, freeEntryList, freeBuffer, FfiRuntimeEntryDescriptorList);
 
-  const runLuaArgs = makeBorrowedBuffer('{"note":"ts-lua"}');
-  const runLuaResult = [{ ptr: null, len: 0 }];
-  const runLuaError = [{ ptr: null, len: 0 }];
+  const disabledArgs = makeBorrowedBuffer('{"note":"after-disable"}');
+  const disabledResultOut = [null];
+  const disabledError = [{ ptr: null, len: 0 }];
+  const disabledStatus = callSkill(
+    engineIdOut[0],
+    "demo-standard-ffi-skill-ping",
+    disabledArgs.buffer,
+    null,
+    disabledResultOut,
+    disabledError,
+  );
+  if (disabledStatus === 0) {
+    throw new Error("call_skill unexpectedly succeeded while the skill was disabled");
+  }
+  console.log("Call after disable failed as expected:", readOwnedBuffer(disabledError[0]));
+  freeBuffer(disabledError[0]);
+
+  const enableError = [{ ptr: null, len: 0 }];
   mustOK(
-    runLua(
+    enableSkill(
       engineIdOut[0],
-      "return { note = args.note, transport = vulcan.context.request.transport_name, budget = vulcan.context.client_budget.budget, mode = vulcan.context.tool_config.mode }",
-      runLuaArgs.buffer,
-      invocationContext,
-      runLuaResult,
-      runLuaError,
+      rootArray,
+      rootArray.length,
+      "demo-standard-ffi-skill",
+      enableError,
     ),
-    runLuaError[0],
+    enableError[0],
     freeBuffer,
   );
-  console.log("Run Lua result JSON:", readOwnedBuffer(runLuaResult[0]));
-  freeBuffer(runLuaResult[0]);
+  console.log("Skill enabled: demo-standard-ffi-skill");
+  printEntryCount(engineIdOut[0], listEntries, freeEntryList, freeBuffer, FfiRuntimeEntryDescriptorList);
+  console.log(
+    "Call after enable:",
+    callFixtureSkill(engineIdOut[0], "after-enable", callSkill, freeInvocationResult, freeBuffer, FfiRuntimeInvocationResult),
+  );
 
   const freeError = [{ ptr: null, len: 0 }];
   mustOK(engineFree(engineIdOut[0], freeError), freeError[0], freeBuffer);

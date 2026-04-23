@@ -41,6 +41,19 @@ typedef int32_t (*FfiJsonProviderCallback)(
 );
 
 /*
+Free one heap-allocated string returned by JSON/helper string-producing FFI functions.
+Only pass pointers returned by luaskills FFI string-producing helper functions to string_free.
+释放一段由 JSON 或辅助字符串型 FFI 函数返回的堆字符串。
+只能将 luaskills FFI 字符串辅助函数产出的指针传给 string_free。
+*/
+void vulcan_luaskills_ffi_string_free(char *value);
+/*
+Clone one host-owned string into one luaskills-owned heap string for helper returns.
+将宿主拥有的字符串克隆为 luaskills 自主管理的堆字符串，供辅助返回值使用。
+*/
+char *vulcan_luaskills_ffi_string_clone(const char *value);
+
+/*
 Register or clear the SQLite JSON callback before engine creation.
 在创建 engine 前注册或清理 SQLite JSON callback。
 */

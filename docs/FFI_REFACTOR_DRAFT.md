@@ -150,9 +150,24 @@
 8. 标准 `FfiRuntimeInvocationResult`、`FfiSkillApplyResult`、`FfiSkillUninstallResult` 的文本字段也开始收敛到 `FfiOwnedBuffer`
 9. 标准 `FfiRuntimeEntryParameterDescriptor`、`FfiRuntimeEntryDescriptor`、`FfiRuntimeHelpNodeDescriptor`、`FfiRuntimeSkillHelpDescriptor`、`FfiRuntimeHelpDetail` 的单值文本字段也开始收敛到 `FfiOwnedBuffer`
 10. 标准 `FfiStringArray` 与 `related_entries` 这类数组文本通道也开始收敛到 `FfiOwnedBuffer` 元素数组
-11. 标准 C / Python / Go / TypeScript 示例已经同步覆盖 `load_from_roots + list_entries` 的结构化结果读取
+11. 标准 C / Python / Go / TypeScript 示例已经同步覆盖 `load_from_roots + list_entries + call_skill + run_lua` 的结构化结果读取
 12. 标准 FFI 已补充入口列表、帮助详情与帮助树结果的嵌套 `FfiOwnedBuffer` 回归测试
 13. 已新增 `standard_runtime` 最小夹具目录，避免标准 ABI 示例依赖 host-provider 或动态安装场景
+14. `string_clone / string_free` 已从标准头文件移出，仅保留在公共 JSON FFI 头文件中
+15. 标准 `call_skill / run_lua / render_skill_help_detail` 的请求级 JSON 输入已收敛为 `FfiBorrowedBuffer`
+16. 标准 `disable / enable` 生命周期链路已补充回归测试，验证运行时视图会随状态切换即时更新
+17. 已新增 Python 标准生命周期示例，直接演示 `disable_skill / enable_skill` 的宿主接法
+18. 已新增 Go 标准生命周期示例，直接演示 `disable_skill / enable_skill` 的宿主接法
+19. 已新增 Python 标准查询辅助示例，直接演示 `is_skill / skill_name_for_tool / prompt_argument_completions`
+20. 已新增 Go 标准查询辅助示例，直接演示 `is_skill / skill_name_for_tool / prompt_argument_completions`
+21. 已新增 TypeScript 标准查询辅助示例，直接演示 `is_skill / skill_name_for_tool / prompt_argument_completions`
+22. 已新增 TypeScript 标准生命周期示例，直接演示 `disable_skill / enable_skill` 的宿主接法
+23. 已为 README / FFI 指南 / standard_runtime 文档补充“按目标选示例”的速查说明，降低社区首次接入成本
+24. 已为 README 与 FFI 指南补充“一页式选型结论”，明确 Rust API、标准 C ABI 与公共 `_json` FFI 的职责边界
+25. 已新增独立 FFI 宿主接入检查清单，便于 beta 阶段外部宿主按最短路径完成自检
+26. 已开始统一文档固定术语，将“标准 ABI / 标准接口 / JSON 接口”等表述收口为“标准 C ABI / 公共 `_json` FFI”
+27. 已新增独立 beta 发布说明文档，便于对外发布时快速说明当前 FFI 能力、边界与推荐接入顺序
+28. 已把 README 顶层补成 FFI beta 首页摘要，方便首次进入仓库时快速理解发布定位、文档入口与示例入口
 
 当前还没有完成的重点项主要是：
 

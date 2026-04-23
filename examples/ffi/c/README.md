@@ -9,6 +9,8 @@
 - 创建 `engine`
 - `load_from_roots`
 - `list_entries`
+- `call_skill`
+- `run_lua`
 - 释放 `engine`
 
 对应源码：
@@ -67,7 +69,9 @@ gcc -std=c11 -Iinclude examples/ffi/c/demo.c -Ltarget/debug -lvulcan_luaskills -
 3. `Loaded roots from: ...`
 4. `Entry count: ...`
 5. 若当前夹具根目录返回了入口，还会继续输出首个入口和首个参数预览
-6. `Engine freed`
+6. `Call content: standard-ffi-demo:c`
+7. `Run Lua result JSON: ...`
+8. `Engine freed`
 
 ## 5. 示例定位
 
@@ -76,11 +80,12 @@ gcc -std=c11 -Iinclude examples/ffi/c/demo.c -Ltarget/debug -lvulcan_luaskills -
 - 引擎生命周期
 - 根链加载
 - 结构化入口读取
+- `FfiBorrowedBuffer` 请求输入
+- `call_skill` 结构化结果读取
+- `run_lua` JSON 结果读取
 
 它仍然不负责演示：
 
-- `call_skill`
-- `run_lua`
 - `install/update/uninstall`
 
 如果需要看高层动态语言入口，请参考：

@@ -1,7 +1,7 @@
 package main
 
 /*
-#cgo CFLAGS: -I../../../include
+#cgo CFLAGS: -I../../../../include
 #include <stdlib.h>
 #include "vulcan_luaskills_ffi.h"
 */
@@ -60,9 +60,11 @@ func makeBorrowedBuffer(text string) (C.FfiBorrowedBuffer, unsafe.Pointer) {
 func standardFixtureRuntimeRoot() string {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
-		panic("failed to resolve demo.go path")
+		panic("failed to resolve lifecycle main.go path")
 	}
-	return filepath.Join(filepath.Dir(filepath.Dir(currentFile)), "standard_runtime", "runtime_root")
+	return filepath.Clean(
+		filepath.Join(filepath.Dir(currentFile), "..", "..", "standard_runtime", "runtime_root"),
+	)
 }
 
 // ensureStandardFixtureLayout creates the shared fixture runtime layout when it is missing.
@@ -85,17 +87,56 @@ func ensureStandardFixtureLayout(root string) {
 	}
 }
 
-// main demonstrates version, engine lifecycle, root loading, entry listing, one standard call_skill roundtrip, and one standard run_lua roundtrip.
-// main 演示版本查询、引擎生命周期、根链加载、入口列举、一次标准 call_skill 往返调用以及一次标准 run_lua 往返调用。
-func main() {
-	var version C.FfiOwnedBuffer
+// printEntryCount loads the current entry list and returns its length.
+// printEntryCount 读取当前入口列表并返回其长度。
+func printEntryCount(engineID C.uint64_t) int {
+	var entryList *C.FfiRuntimeEntryDescriptorList
 	var errorOut C.FfiOwnedBuffer
-	mustOK(C.vulcan_luaskills_ffi_version(&version, &errorOut), errorOut)
-	fmt.Println("Version:", readOwnedBufferText(version))
-	C.vulcan_luaskills_ffi_buffer_free(version)
+	mustOK(C.vulcan_luaskills_ffi_list_entries(engineID, &entryList, &errorOut), errorOut)
+	if entryList == nil {
+		fmt.Println("Current entry count: 0")
+		return 0
+	}
+	defer C.vulcan_luaskills_ffi_entry_list_free(entryList)
+	entryCount := int(entryList.len)
+	fmt.Println("Current entry count:", entryCount)
+	return entryCount
+}
 
+// callFixtureSkill invokes the shared fixture entry and returns its textual content.
+// callFixtureSkill 调用共享夹具入口并返回其文本内容。
+func callFixtureSkill(engineID C.uint64_t, note string) string {
+	argsBuffer, argsStorage := makeBorrowedBuffer(fmt.Sprintf(`{"note":"%s"}`, note))
+	defer C.free(argsStorage)
+	toolName := C.CString("demo-standard-ffi-skill-ping")
+	defer C.free(unsafe.Pointer(toolName))
+
+	var invocationResult *C.FfiRuntimeInvocationResult
+	var errorOut C.FfiOwnedBuffer
+	mustOK(
+		C.vulcan_luaskills_ffi_call_skill(
+			engineID,
+			toolName,
+			argsBuffer,
+			nil,
+			&invocationResult,
+			&errorOut,
+		),
+		errorOut,
+	)
+	if invocationResult == nil {
+		panic("invocation result pointer is nil")
+	}
+	defer C.vulcan_luaskills_ffi_invocation_result_free(invocationResult)
+	return readOwnedBufferText(invocationResult.content)
+}
+
+// main demonstrates disable and enable lifecycle transitions through the standard ABI.
+// main 演示通过标准 ABI 执行 disable 与 enable 生命周期切换。
+func main() {
 	root := standardFixtureRuntimeRoot()
 	ensureStandardFixtureLayout(root)
+
 	host := C.FfiLuaRuntimeHostOptions{
 		temp_dir:                         C.CString(filepath.ToSlash(filepath.Join(root, "temp"))),
 		resources_dir:                    C.CString(filepath.ToSlash(filepath.Join(root, "resources"))),
@@ -149,7 +190,7 @@ func main() {
 	}
 
 	var engineID C.uint64_t
-	errorOut = C.FfiOwnedBuffer{}
+	var errorOut C.FfiOwnedBuffer
 	mustOK(C.vulcan_luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
 	fmt.Println("Engine created:", uint64(engineID))
 
@@ -175,87 +216,62 @@ func main() {
 	)
 	fmt.Println("Loaded roots from:", filepath.ToSlash(filepath.Join(root, "skills")))
 
-	var entryList *C.FfiRuntimeEntryDescriptorList
+	printEntryCount(engineID)
+	fmt.Println("Call before disable:", callFixtureSkill(engineID, "before-disable"))
+
+	skillID := C.CString("demo-standard-ffi-skill")
+	disableReason := C.CString("maintenance window")
+	defer C.free(unsafe.Pointer(skillID))
+	defer C.free(unsafe.Pointer(disableReason))
 	errorOut = C.FfiOwnedBuffer{}
-	mustOK(C.vulcan_luaskills_ffi_list_entries(engineID, &entryList, &errorOut), errorOut)
-	if entryList != nil {
-		defer C.vulcan_luaskills_ffi_entry_list_free(entryList)
-		entrySlice := unsafe.Slice(entryList.items, int(entryList.len))
-		fmt.Println("Entry count:", len(entrySlice))
-		if len(entrySlice) > 0 {
-			firstEntry := entrySlice[0]
-			fmt.Println("First canonical entry:", readOwnedBufferText(firstEntry.canonical_name))
-			fmt.Println("First entry skill id:", readOwnedBufferText(firstEntry.skill_id))
-			fmt.Println("First entry description:", readOwnedBufferText(firstEntry.description))
-			parameterSlice := unsafe.Slice(firstEntry.parameters, int(firstEntry.parameters_len))
-			fmt.Println("First entry parameter count:", len(parameterSlice))
-			if len(parameterSlice) > 0 {
-				firstParameter := parameterSlice[0]
-				fmt.Println("First parameter name:", readOwnedBufferText(firstParameter.name))
-				fmt.Println("First parameter type:", readOwnedBufferText(firstParameter.param_type))
-				fmt.Println("First parameter required:", firstParameter.required != 0)
-			}
-		} else {
-			fmt.Println("No entries were returned by the current fixture root.")
-		}
-	}
+	mustOK(
+		C.vulcan_luaskills_ffi_disable_skill(
+			engineID,
+			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
+			C.size_t(len(skillRoots)),
+			skillID,
+			disableReason,
+			&errorOut,
+		),
+		errorOut,
+	)
+	fmt.Println("Skill disabled: demo-standard-ffi-skill")
+	printEntryCount(engineID)
 
-	argsBuffer, argsStorage := makeBorrowedBuffer(`{"note":"go"}`)
-	requestBuffer, requestStorage := makeBorrowedBuffer(`{"transport_name":"go-demo"}`)
-	budgetBuffer, budgetStorage := makeBorrowedBuffer(`{"budget":1}`)
-	toolBuffer, toolStorage := makeBorrowedBuffer(`{"mode":"standard-demo"}`)
-	defer C.free(argsStorage)
-	defer C.free(requestStorage)
-	defer C.free(budgetStorage)
-	defer C.free(toolStorage)
-
-	invocationContext := C.FfiLuaInvocationContext{
-		request_context_json: requestBuffer,
-		client_budget_json:   budgetBuffer,
-		tool_config_json:     toolBuffer,
-	}
+	disabledArgsBuffer, disabledArgsStorage := makeBorrowedBuffer(`{"note":"after-disable"}`)
+	defer C.free(disabledArgsStorage)
 	toolName := C.CString("demo-standard-ffi-skill-ping")
 	defer C.free(unsafe.Pointer(toolName))
-	var invocationResult *C.FfiRuntimeInvocationResult
+	var disabledInvocationResult *C.FfiRuntimeInvocationResult
 	errorOut = C.FfiOwnedBuffer{}
-	mustOK(
-		C.vulcan_luaskills_ffi_call_skill(
-			engineID,
-			toolName,
-			argsBuffer,
-			&invocationContext,
-			&invocationResult,
-			&errorOut,
-		),
-		errorOut,
+	disabledStatus := C.vulcan_luaskills_ffi_call_skill(
+		engineID,
+		toolName,
+		disabledArgsBuffer,
+		nil,
+		&disabledInvocationResult,
+		&errorOut,
 	)
-	if invocationResult != nil {
-		defer C.vulcan_luaskills_ffi_invocation_result_free(invocationResult)
-		fmt.Println("Call content:", readOwnedBufferText(invocationResult.content))
-		fmt.Println("Call content bytes:", uint64(invocationResult.content_bytes))
-		fmt.Println("Call content lines:", uint64(invocationResult.content_lines))
-		fmt.Println("Call template hint:", readOwnedBufferText(invocationResult.template_hint))
+	if disabledStatus == 0 {
+		panic("call_skill unexpectedly succeeded while the skill was disabled")
 	}
+	fmt.Println("Call after disable failed as expected:", readOwnedBufferText(errorOut))
+	C.vulcan_luaskills_ffi_buffer_free(errorOut)
 
-	runLuaArgsBuffer, runLuaArgsStorage := makeBorrowedBuffer(`{"note":"go-lua"}`)
-	defer C.free(runLuaArgsStorage)
-	runLuaCode := C.CString("return { note = args.note, transport = vulcan.context.request.transport_name, budget = vulcan.context.client_budget.budget, mode = vulcan.context.tool_config.mode }")
-	defer C.free(unsafe.Pointer(runLuaCode))
-	var resultJSONOut C.FfiOwnedBuffer
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_run_lua(
+		C.vulcan_luaskills_ffi_enable_skill(
 			engineID,
-			runLuaCode,
-			runLuaArgsBuffer,
-			&invocationContext,
-			&resultJSONOut,
+			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
+			C.size_t(len(skillRoots)),
+			skillID,
 			&errorOut,
 		),
 		errorOut,
 	)
-	fmt.Println("Run Lua result JSON:", readOwnedBufferText(resultJSONOut))
-	C.vulcan_luaskills_ffi_buffer_free(resultJSONOut)
+	fmt.Println("Skill enabled: demo-standard-ffi-skill")
+	printEntryCount(engineID)
+	fmt.Println("Call after enable:", callFixtureSkill(engineID, "after-enable"))
 
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(C.vulcan_luaskills_ffi_engine_free(engineID, &errorOut), errorOut)

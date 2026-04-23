@@ -273,15 +273,15 @@ pub struct FfiRuntimeSkillRoot {
 /// 标准非 JSON 调用路径使用的原生 C ABI 调用上下文。
 #[repr(C)]
 pub struct FfiLuaInvocationContext {
-    /// Optional request context encoded as JSON text.
-    /// 以 JSON 文本编码的可选请求上下文。
-    pub request_context_json: *const c_char,
-    /// Optional client budget encoded as JSON text.
-    /// 以 JSON 文本编码的可选客户端预算。
-    pub client_budget_json: *const c_char,
-    /// Optional tool config encoded as JSON text.
-    /// 以 JSON 文本编码的可选工具配置。
-    pub tool_config_json: *const c_char,
+    /// Optional request context encoded as one borrowed JSON byte buffer.
+    /// 以借用 JSON 字节缓冲编码的可选请求上下文。
+    pub request_context_json: FfiBorrowedBuffer,
+    /// Optional client budget encoded as one borrowed JSON byte buffer.
+    /// 以借用 JSON 字节缓冲编码的可选客户端预算。
+    pub client_budget_json: FfiBorrowedBuffer,
+    /// Optional tool config encoded as one borrowed JSON byte buffer.
+    /// 以借用 JSON 字节缓冲编码的可选工具配置。
+    pub tool_config_json: FfiBorrowedBuffer,
 }
 
 /// Plain C ABI managed install request used by standard lifecycle calls.
@@ -780,26 +780,53 @@ fn parse_string_array(
         .collect()
 }
 
-/// Parse one optional JSON string into one serde_json value object.
-/// 将单个可选 JSON 字符串解析为一个 serde_json 值对象。
-fn parse_json_value_or_empty_object(
-    value: *const c_char,
+/// Parse one optional borrowed UTF-8 buffer into one owned Rust string.
+/// 将单个可选借用 UTF-8 缓冲解析为一个 Rust 自有字符串。
+fn parse_optional_borrowed_text(
+    value: &FfiBorrowedBuffer,
+    field_name: &str,
+) -> Result<Option<String>, String> {
+    if value.len == 0 {
+        return Ok(None);
+    }
+    if value.ptr.is_null() {
+        return Err(format!(
+            "{} pointer must not be null when len > 0",
+            field_name
+        ));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
+    let text = std::str::from_utf8(bytes)
+        .map_err(|error| format!("{} contains invalid UTF-8: {}", field_name, error))?;
+    if text.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(text.to_string()))
+}
+
+/// Parse one optional borrowed JSON buffer into one serde_json value object.
+/// 将单个可选借用 JSON 缓冲解析为一个 serde_json 值对象。
+fn parse_json_value_or_empty_object_buffer(
+    value: &FfiBorrowedBuffer,
     field_name: &str,
 ) -> Result<Value, String> {
-    match parse_optional_string(value, field_name)? {
+    match parse_optional_borrowed_text(value, field_name)? {
         Some(text) => serde_json::from_str(&text)
             .map_err(|error| format!("{} contains invalid JSON: {}", field_name, error)),
         None => Ok(Value::Object(serde_json::Map::new())),
     }
 }
 
-/// Parse one optional request-context JSON string into one structured request context.
-/// 将单个可选请求上下文 JSON 字符串解析为一个结构化请求上下文。
-fn parse_request_context(value: *const c_char) -> Result<Option<RuntimeRequestContext>, String> {
-    match parse_optional_string(value, "request_context_json")? {
+/// Parse one optional borrowed request-context JSON buffer into one structured request context.
+/// 将单个可选借用请求上下文 JSON 缓冲解析为一个结构化请求上下文。
+fn parse_request_context_buffer(
+    value: &FfiBorrowedBuffer,
+    field_name: &str,
+) -> Result<Option<RuntimeRequestContext>, String> {
+    match parse_optional_borrowed_text(value, field_name)? {
         Some(text) => serde_json::from_str(&text)
             .map(Some)
-            .map_err(|error| format!("request_context_json contains invalid JSON: {}", error)),
+            .map_err(|error| format!("{} contains invalid JSON: {}", field_name, error)),
         None => Ok(None),
     }
 }
@@ -1019,9 +1046,9 @@ fn parse_invocation_context(
     }
     let context = unsafe { &*value };
     Ok(Some(LuaInvocationContext::new(
-        parse_request_context(context.request_context_json)?,
-        parse_json_value_or_empty_object(context.client_budget_json, "client_budget_json")?,
-        parse_json_value_or_empty_object(context.tool_config_json, "tool_config_json")?,
+        parse_request_context_buffer(&context.request_context_json, "request_context_json")?,
+        parse_json_value_or_empty_object_buffer(&context.client_budget_json, "client_budget_json")?,
+        parse_json_value_or_empty_object_buffer(&context.tool_config_json, "tool_config_json")?,
     )))
 }
 
@@ -2257,7 +2284,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
     engine_id: u64,
     skill_id: *const c_char,
     flow_name: *const c_char,
-    request_context_json: *const c_char,
+    request_context_json: FfiBorrowedBuffer,
     detail_out: *mut *mut FfiRuntimeHelpDetail,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
@@ -2274,10 +2301,11 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
         Ok(flow_name) => flow_name,
         Err(error) => return ffi_error_status(error_out, error),
     };
-    let request_context = match parse_request_context(request_context_json) {
-        Ok(request_context) => request_context,
-        Err(error) => return ffi_error_status(error_out, error),
-    };
+    let request_context =
+        match parse_request_context_buffer(&request_context_json, "request_context_json") {
+            Ok(request_context) => request_context,
+            Err(error) => return ffi_error_status(error_out, error),
+        };
     match with_engine(engine_id, |engine| {
         engine.render_skill_help_detail(&skill_id, &flow_name, request_context.as_ref())
     }) {
@@ -2390,7 +2418,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill(
     engine_id: u64,
     tool_name: *const c_char,
-    args_json: *const c_char,
+    args_json: FfiBorrowedBuffer,
     invocation_context: *const FfiLuaInvocationContext,
     result_out: *mut *mut FfiRuntimeInvocationResult,
     error_out: *mut FfiOwnedBuffer,
@@ -2404,7 +2432,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill(
         Ok(tool_name) => tool_name,
         Err(error) => return ffi_error_status(error_out, error),
     };
-    let args = match parse_json_value_or_empty_object(args_json, "args_json") {
+    let args = match parse_json_value_or_empty_object_buffer(&args_json, "args_json") {
         Ok(args) => args,
         Err(error) => return ffi_error_status(error_out, error),
     };
@@ -2429,7 +2457,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill(
 pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua(
     engine_id: u64,
     code: *const c_char,
-    args_json: *const c_char,
+    args_json: FfiBorrowedBuffer,
     invocation_context: *const FfiLuaInvocationContext,
     result_json_out: *mut FfiOwnedBuffer,
     error_out: *mut FfiOwnedBuffer,
@@ -2443,7 +2471,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua(
         Ok(code) => code,
         Err(error) => return ffi_error_status(error_out, error),
     };
-    let args = match parse_json_value_or_empty_object(args_json, "args_json") {
+    let args = match parse_json_value_or_empty_object_buffer(&args_json, "args_json") {
         Ok(args) => args,
         Err(error) => return ffi_error_status(error_out, error),
     };
@@ -2941,6 +2969,24 @@ mod tests {
         String::from_utf8(bytes.to_vec()).expect("buffer text must be utf-8")
     }
 
+    /// Build one borrowed buffer view over one UTF-8 text while keeping backing storage alive.
+    /// 在保持底层存储存活的前提下，为一段 UTF-8 文本构造借用缓冲视图。
+    fn make_borrowed_buffer(text: &str) -> (Vec<u8>, FfiBorrowedBuffer) {
+        let bytes = text.as_bytes().to_vec();
+        let buffer = if bytes.is_empty() {
+            FfiBorrowedBuffer {
+                ptr: ptr::null(),
+                len: 0,
+            }
+        } else {
+            FfiBorrowedBuffer {
+                ptr: bytes.as_ptr(),
+                len: bytes.len(),
+            }
+        };
+        (bytes, buffer)
+    }
+
     /// Verify buffer_clone copies one byte payload into luaskills-owned storage.
     /// 验证 buffer_clone 会把单个字节载荷复制到 luaskills 自主管理存储中。
     #[test]
@@ -3297,6 +3343,612 @@ mod tests {
         assert_eq!(parameter_ref.required, 0);
 
         unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+
+        let mut free_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        assert_eq!(free_status, FFI_STATUS_OK);
+        assert!(free_error.ptr.is_null());
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    /// Verify standard call_skill accepts borrowed JSON buffers for args and invocation context.
+    /// 验证标准 call_skill 会接受作为 args 与调用上下文输入的借用 JSON 缓冲。
+    #[test]
+    fn standard_ffi_call_skill_accepts_borrowed_json_buffers() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_standard_ffi_callskill_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+
+        let skills_root = temp_root.join("skills");
+        let skill_dir = skills_root.join("demo-skill");
+        std::fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime directory");
+        std::fs::create_dir_all(temp_root.join("temp")).expect("create temp directory");
+        std::fs::create_dir_all(temp_root.join("resources")).expect("create resources directory");
+        std::fs::create_dir_all(temp_root.join("lua_packages"))
+            .expect("create lua_packages directory");
+        std::fs::create_dir_all(temp_root.join("bin").join("tools"))
+            .expect("create tools directory");
+        std::fs::create_dir_all(temp_root.join("libs")).expect("create libs directory");
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: demo-skill\nversion: 0.1.0\nenable: true\nentries:\n  - name: ping\n    description: Ping entry.\n    lua_entry: runtime/ping.lua\n    lua_module: demo_skill_ping\n    parameters:\n      - name: note\n        type: string\n        description: Optional note.\n        required: false\n",
+        )
+        .expect("write skill yaml");
+        std::fs::write(
+            skill_dir.join("runtime").join("ping.lua"),
+            "return function(args)\n  local note = ''\n  if type(args) == 'table' and type(args.note) == 'string' then\n    note = args.note\n  end\n  if note ~= '' then\n    return 'standard-ffi-test:' .. note\n  end\n  return 'standard-ffi-test:ok'\nend\n",
+        )
+        .expect("write runtime lua");
+
+        let temp_dir_text =
+            CString::new(temp_root.join("temp").display().to_string()).expect("temp_dir cstring");
+        let resources_dir_text = CString::new(temp_root.join("resources").display().to_string())
+            .expect("resources_dir cstring");
+        let lua_packages_dir_text =
+            CString::new(temp_root.join("lua_packages").display().to_string())
+                .expect("lua_packages_dir cstring");
+        let tool_root_dir_text =
+            CString::new(temp_root.join("bin").join("tools").display().to_string())
+                .expect("tool_root_dir cstring");
+        let ffi_root_dir_text =
+            CString::new(temp_root.join("libs").display().to_string()).expect("ffi_root cstring");
+        let dependency_dir_name = CString::new("dependencies").expect("dependencies cstring");
+        let state_dir_name = CString::new("state").expect("state cstring");
+        let database_dir_name = CString::new("databases").expect("databases cstring");
+        let root_name = CString::new("ROOT").expect("root name cstring");
+        let skills_root_text =
+            CString::new(skills_root.display().to_string()).expect("skills root cstring");
+        let tool_name = CString::new("demo-skill-ping").expect("tool name cstring");
+
+        let host_options = FfiLuaRuntimeHostOptions {
+            temp_dir: temp_dir_text.as_ptr(),
+            resources_dir: resources_dir_text.as_ptr(),
+            lua_packages_dir: lua_packages_dir_text.as_ptr(),
+            luaexec_program: ptr::null(),
+            host_provided_tool_root: tool_root_dir_text.as_ptr(),
+            host_provided_lua_root: lua_packages_dir_text.as_ptr(),
+            host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            download_cache_root: ptr::null(),
+            dependency_dir_name: dependency_dir_name.as_ptr(),
+            state_dir_name: state_dir_name.as_ptr(),
+            database_dir_name: database_dir_name.as_ptr(),
+            protected_skill_ids: ptr::null(),
+            protected_skill_ids_len: 0,
+            allow_network_download: 0,
+            github_base_url: ptr::null(),
+            github_api_base_url: ptr::null(),
+            sqlite_library_path: ptr::null(),
+            sqlite_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            sqlite_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            lancedb_library_path: ptr::null(),
+            lancedb_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            lancedb_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            space_controller_endpoint: ptr::null(),
+            space_controller_auto_spawn: 0,
+            space_controller_executable_path: ptr::null(),
+            space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
+            cache_config: ptr::null(),
+            reserved_entry_names: ptr::null(),
+            reserved_entry_names_len: 0,
+            enable_skill_management_bridge: 0,
+        };
+        let engine_options = FfiLuaEngineOptions {
+            pool: FfiLuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 30,
+            },
+            host: host_options,
+        };
+
+        let mut engine_id = 0_u64;
+        let mut error_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let engine_status = unsafe {
+            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
+        };
+        assert_eq!(engine_status, FFI_STATUS_OK);
+        assert!(error_out.ptr.is_null());
+
+        let ffi_skill_roots = [FfiRuntimeSkillRoot {
+            name: root_name.as_ptr(),
+            skills_dir: skills_root_text.as_ptr(),
+        }];
+        let mut load_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let load_status = unsafe {
+            vulcan_luaskills_ffi_load_from_roots(
+                engine_id,
+                ffi_skill_roots.as_ptr(),
+                ffi_skill_roots.len(),
+                &mut load_error,
+            )
+        };
+        assert_eq!(load_status, FFI_STATUS_OK);
+        assert!(load_error.ptr.is_null());
+
+        let (_args_storage, args_buffer) = make_borrowed_buffer(r#"{"note":"ffi"}"#);
+        let (_request_storage, request_buffer) =
+            make_borrowed_buffer(r#"{"transport_name":"ffi-test"}"#);
+        let (_budget_storage, budget_buffer) = make_borrowed_buffer(r#"{"budget":7}"#);
+        let (_tool_storage, tool_buffer) = make_borrowed_buffer(r#"{"mode":"demo-mode"}"#);
+        let invocation_context = FfiLuaInvocationContext {
+            request_context_json: request_buffer,
+            client_budget_json: budget_buffer,
+            tool_config_json: tool_buffer,
+        };
+
+        let mut result_out: *mut FfiRuntimeInvocationResult = ptr::null_mut();
+        let mut call_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let call_status = unsafe {
+            vulcan_luaskills_ffi_call_skill(
+                engine_id,
+                tool_name.as_ptr(),
+                args_buffer,
+                &invocation_context,
+                &mut result_out,
+                &mut call_error,
+            )
+        };
+        assert_eq!(call_status, FFI_STATUS_OK);
+        assert!(call_error.ptr.is_null());
+        assert!(!result_out.is_null());
+
+        let result_ref = unsafe { &*result_out };
+        assert_eq!(
+            read_owned_buffer_text(&result_ref.content),
+            "standard-ffi-test:ffi"
+        );
+        assert_eq!(result_ref.content_lines, 1);
+        unsafe { vulcan_luaskills_ffi_invocation_result_free(result_out) };
+
+        let mut free_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        assert_eq!(free_status, FFI_STATUS_OK);
+        assert!(free_error.ptr.is_null());
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    /// Verify standard run_lua accepts borrowed JSON buffers for args and invocation context.
+    /// 验证标准 run_lua 会接受作为 args 与调用上下文输入的借用 JSON 缓冲。
+    #[test]
+    fn standard_ffi_run_lua_accepts_borrowed_json_buffers() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_standard_ffi_runlua_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+
+        std::fs::create_dir_all(temp_root.join("temp")).expect("create temp directory");
+        std::fs::create_dir_all(temp_root.join("resources")).expect("create resources directory");
+        std::fs::create_dir_all(temp_root.join("lua_packages"))
+            .expect("create lua_packages directory");
+        std::fs::create_dir_all(temp_root.join("bin").join("tools"))
+            .expect("create tools directory");
+        std::fs::create_dir_all(temp_root.join("libs")).expect("create libs directory");
+
+        let temp_dir_text =
+            CString::new(temp_root.join("temp").display().to_string()).expect("temp_dir cstring");
+        let resources_dir_text = CString::new(temp_root.join("resources").display().to_string())
+            .expect("resources_dir cstring");
+        let lua_packages_dir_text =
+            CString::new(temp_root.join("lua_packages").display().to_string())
+                .expect("lua_packages_dir cstring");
+        let tool_root_dir_text =
+            CString::new(temp_root.join("bin").join("tools").display().to_string())
+                .expect("tool_root_dir cstring");
+        let ffi_root_dir_text =
+            CString::new(temp_root.join("libs").display().to_string()).expect("ffi_root cstring");
+        let dependency_dir_name = CString::new("dependencies").expect("dependencies cstring");
+        let state_dir_name = CString::new("state").expect("state cstring");
+        let database_dir_name = CString::new("databases").expect("databases cstring");
+
+        let host_options = FfiLuaRuntimeHostOptions {
+            temp_dir: temp_dir_text.as_ptr(),
+            resources_dir: resources_dir_text.as_ptr(),
+            lua_packages_dir: lua_packages_dir_text.as_ptr(),
+            luaexec_program: ptr::null(),
+            host_provided_tool_root: tool_root_dir_text.as_ptr(),
+            host_provided_lua_root: lua_packages_dir_text.as_ptr(),
+            host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            download_cache_root: ptr::null(),
+            dependency_dir_name: dependency_dir_name.as_ptr(),
+            state_dir_name: state_dir_name.as_ptr(),
+            database_dir_name: database_dir_name.as_ptr(),
+            protected_skill_ids: ptr::null(),
+            protected_skill_ids_len: 0,
+            allow_network_download: 0,
+            github_base_url: ptr::null(),
+            github_api_base_url: ptr::null(),
+            sqlite_library_path: ptr::null(),
+            sqlite_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            sqlite_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            lancedb_library_path: ptr::null(),
+            lancedb_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            lancedb_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            space_controller_endpoint: ptr::null(),
+            space_controller_auto_spawn: 0,
+            space_controller_executable_path: ptr::null(),
+            space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
+            cache_config: ptr::null(),
+            reserved_entry_names: ptr::null(),
+            reserved_entry_names_len: 0,
+            enable_skill_management_bridge: 0,
+        };
+        let engine_options = FfiLuaEngineOptions {
+            pool: FfiLuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 30,
+            },
+            host: host_options,
+        };
+
+        let mut engine_id = 0_u64;
+        let mut error_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let engine_status = unsafe {
+            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
+        };
+        assert_eq!(engine_status, FFI_STATUS_OK);
+        assert!(error_out.ptr.is_null());
+
+        let code =
+            CString::new("return { note = args.note, transport = vulcan.context.request.transport_name, budget = vulcan.context.client_budget.budget, mode = vulcan.context.tool_config.mode }")
+                .expect("code cstring");
+        let (_args_storage, args_buffer) = make_borrowed_buffer(r#"{"note":"demo"}"#);
+        let (_request_storage, request_buffer) =
+            make_borrowed_buffer(r#"{"transport_name":"ffi-test"}"#);
+        let (_budget_storage, budget_buffer) = make_borrowed_buffer(r#"{"budget":7}"#);
+        let (_tool_storage, tool_buffer) = make_borrowed_buffer(r#"{"mode":"demo-mode"}"#);
+        let invocation_context = FfiLuaInvocationContext {
+            request_context_json: request_buffer,
+            client_budget_json: budget_buffer,
+            tool_config_json: tool_buffer,
+        };
+
+        let mut result_json_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut run_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let run_status = unsafe {
+            vulcan_luaskills_ffi_run_lua(
+                engine_id,
+                code.as_ptr(),
+                args_buffer,
+                &invocation_context,
+                &mut result_json_out,
+                &mut run_error,
+            )
+        };
+        assert_eq!(run_status, FFI_STATUS_OK);
+        assert!(run_error.ptr.is_null());
+
+        let result_json_text = read_owned_buffer_text(&result_json_out);
+        let result_json: Value =
+            serde_json::from_str(&result_json_text).expect("run_lua result must be valid json");
+        assert_eq!(result_json["note"], "demo");
+        assert_eq!(result_json["transport"], "ffi-test");
+        assert_eq!(result_json["budget"], 7);
+        assert_eq!(result_json["mode"], "demo-mode");
+        unsafe { vulcan_luaskills_ffi_buffer_free(result_json_out) };
+
+        let mut free_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        assert_eq!(free_status, FFI_STATUS_OK);
+        assert!(free_error.ptr.is_null());
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    /// Verify standard disable/enable lifecycle calls update the runtime view in place.
+    /// 验证标准 disable/enable 生命周期调用会原地更新运行时视图。
+    #[test]
+    fn standard_ffi_disable_and_enable_skill_round_trip() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_standard_ffi_lifecycle_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+
+        let skills_root = temp_root.join("skills");
+        let skill_dir = skills_root.join("demo-skill");
+        std::fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime directory");
+        std::fs::create_dir_all(temp_root.join("temp")).expect("create temp directory");
+        std::fs::create_dir_all(temp_root.join("resources")).expect("create resources directory");
+        std::fs::create_dir_all(temp_root.join("lua_packages"))
+            .expect("create lua_packages directory");
+        std::fs::create_dir_all(temp_root.join("bin").join("tools"))
+            .expect("create tools directory");
+        std::fs::create_dir_all(temp_root.join("libs")).expect("create libs directory");
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: demo-skill\nversion: 0.1.0\nenable: true\nentries:\n  - name: ping\n    description: Ping entry.\n    lua_entry: runtime/ping.lua\n    lua_module: demo_skill_ping\n    parameters:\n      - name: note\n        type: string\n        description: Optional note.\n        required: false\n",
+        )
+        .expect("write skill yaml");
+        std::fs::write(
+            skill_dir.join("runtime").join("ping.lua"),
+            "return function(args)\n  local note = ''\n  if type(args) == 'table' and type(args.note) == 'string' then\n    note = args.note\n  end\n  if note ~= '' then\n    return 'lifecycle:' .. note\n  end\n  return 'lifecycle:ok'\nend\n",
+        )
+        .expect("write runtime lua");
+
+        let temp_dir_text =
+            CString::new(temp_root.join("temp").display().to_string()).expect("temp_dir cstring");
+        let resources_dir_text = CString::new(temp_root.join("resources").display().to_string())
+            .expect("resources_dir cstring");
+        let lua_packages_dir_text =
+            CString::new(temp_root.join("lua_packages").display().to_string())
+                .expect("lua_packages_dir cstring");
+        let tool_root_dir_text =
+            CString::new(temp_root.join("bin").join("tools").display().to_string())
+                .expect("tool_root_dir cstring");
+        let ffi_root_dir_text =
+            CString::new(temp_root.join("libs").display().to_string()).expect("ffi_root cstring");
+        let dependency_dir_name = CString::new("dependencies").expect("dependencies cstring");
+        let state_dir_name = CString::new("state").expect("state cstring");
+        let database_dir_name = CString::new("databases").expect("databases cstring");
+        let root_name = CString::new("ROOT").expect("root name cstring");
+        let skills_root_text =
+            CString::new(skills_root.display().to_string()).expect("skills root cstring");
+        let skill_id = CString::new("demo-skill").expect("skill_id cstring");
+        let tool_name = CString::new("demo-skill-ping").expect("tool_name cstring");
+        let disable_reason = CString::new("maintenance").expect("disable reason cstring");
+
+        let host_options = FfiLuaRuntimeHostOptions {
+            temp_dir: temp_dir_text.as_ptr(),
+            resources_dir: resources_dir_text.as_ptr(),
+            lua_packages_dir: lua_packages_dir_text.as_ptr(),
+            luaexec_program: ptr::null(),
+            host_provided_tool_root: tool_root_dir_text.as_ptr(),
+            host_provided_lua_root: lua_packages_dir_text.as_ptr(),
+            host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            download_cache_root: ptr::null(),
+            dependency_dir_name: dependency_dir_name.as_ptr(),
+            state_dir_name: state_dir_name.as_ptr(),
+            database_dir_name: database_dir_name.as_ptr(),
+            protected_skill_ids: ptr::null(),
+            protected_skill_ids_len: 0,
+            allow_network_download: 0,
+            github_base_url: ptr::null(),
+            github_api_base_url: ptr::null(),
+            sqlite_library_path: ptr::null(),
+            sqlite_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            sqlite_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            lancedb_library_path: ptr::null(),
+            lancedb_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            lancedb_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            space_controller_endpoint: ptr::null(),
+            space_controller_auto_spawn: 0,
+            space_controller_executable_path: ptr::null(),
+            space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
+            cache_config: ptr::null(),
+            reserved_entry_names: ptr::null(),
+            reserved_entry_names_len: 0,
+            enable_skill_management_bridge: 0,
+        };
+        let engine_options = FfiLuaEngineOptions {
+            pool: FfiLuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 30,
+            },
+            host: host_options,
+        };
+
+        let mut engine_id = 0_u64;
+        let mut error_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let engine_status = unsafe {
+            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
+        };
+        assert_eq!(engine_status, FFI_STATUS_OK);
+        assert!(error_out.ptr.is_null());
+
+        let ffi_skill_roots = [FfiRuntimeSkillRoot {
+            name: root_name.as_ptr(),
+            skills_dir: skills_root_text.as_ptr(),
+        }];
+
+        let mut load_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let load_status = unsafe {
+            vulcan_luaskills_ffi_load_from_roots(
+                engine_id,
+                ffi_skill_roots.as_ptr(),
+                ffi_skill_roots.len(),
+                &mut load_error,
+            )
+        };
+        assert_eq!(load_status, FFI_STATUS_OK);
+        assert!(load_error.ptr.is_null());
+
+        let mut entries_out: *mut FfiRuntimeEntryDescriptorList = ptr::null_mut();
+        let mut list_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let list_status = unsafe {
+            vulcan_luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error)
+        };
+        assert_eq!(list_status, FFI_STATUS_OK);
+        assert!(list_error.ptr.is_null());
+        assert!(!entries_out.is_null());
+        let entries_ref = unsafe { &*entries_out };
+        assert_eq!(entries_ref.len, 1);
+        unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+
+        let (_before_disable_args_storage, before_disable_args_buffer) =
+            make_borrowed_buffer(r#"{"note":"before-disable"}"#);
+        let mut result_out: *mut FfiRuntimeInvocationResult = ptr::null_mut();
+        let mut call_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let call_status = unsafe {
+            vulcan_luaskills_ffi_call_skill(
+                engine_id,
+                tool_name.as_ptr(),
+                before_disable_args_buffer,
+                ptr::null(),
+                &mut result_out,
+                &mut call_error,
+            )
+        };
+        assert_eq!(call_status, FFI_STATUS_OK);
+        assert!(call_error.ptr.is_null());
+        let result_ref = unsafe { &*result_out };
+        assert_eq!(
+            read_owned_buffer_text(&result_ref.content),
+            "lifecycle:before-disable"
+        );
+        unsafe { vulcan_luaskills_ffi_invocation_result_free(result_out) };
+
+        let mut disable_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let disable_status = unsafe {
+            vulcan_luaskills_ffi_disable_skill(
+                engine_id,
+                ffi_skill_roots.as_ptr(),
+                ffi_skill_roots.len(),
+                skill_id.as_ptr(),
+                disable_reason.as_ptr(),
+                &mut disable_error,
+            )
+        };
+        assert_eq!(disable_status, FFI_STATUS_OK);
+        assert!(disable_error.ptr.is_null());
+
+        entries_out = ptr::null_mut();
+        list_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let disabled_list_status = unsafe {
+            vulcan_luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error)
+        };
+        assert_eq!(disabled_list_status, FFI_STATUS_OK);
+        assert!(list_error.ptr.is_null());
+        assert!(!entries_out.is_null());
+        let disabled_entries_ref = unsafe { &*entries_out };
+        assert_eq!(disabled_entries_ref.len, 0);
+        unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+
+        result_out = ptr::null_mut();
+        call_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let (_disabled_args_storage, disabled_args_buffer) =
+            make_borrowed_buffer(r#"{"note":"before-disable"}"#);
+        let disabled_call_status = unsafe {
+            vulcan_luaskills_ffi_call_skill(
+                engine_id,
+                tool_name.as_ptr(),
+                disabled_args_buffer,
+                ptr::null(),
+                &mut result_out,
+                &mut call_error,
+            )
+        };
+        assert_ne!(disabled_call_status, FFI_STATUS_OK);
+        assert!(result_out.is_null());
+        assert!(!call_error.ptr.is_null());
+        unsafe { vulcan_luaskills_ffi_buffer_free(call_error) };
+
+        let mut enable_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let enable_status = unsafe {
+            vulcan_luaskills_ffi_enable_skill(
+                engine_id,
+                ffi_skill_roots.as_ptr(),
+                ffi_skill_roots.len(),
+                skill_id.as_ptr(),
+                &mut enable_error,
+            )
+        };
+        assert_eq!(enable_status, FFI_STATUS_OK);
+        assert!(enable_error.ptr.is_null());
+
+        entries_out = ptr::null_mut();
+        list_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let enabled_list_status = unsafe {
+            vulcan_luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error)
+        };
+        assert_eq!(enabled_list_status, FFI_STATUS_OK);
+        assert!(list_error.ptr.is_null());
+        assert!(!entries_out.is_null());
+        let enabled_entries_ref = unsafe { &*entries_out };
+        assert_eq!(enabled_entries_ref.len, 1);
+        unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+
+        let (_enabled_args_storage, enabled_args_buffer) =
+            make_borrowed_buffer(r#"{"note":"after-enable"}"#);
+        result_out = ptr::null_mut();
+        call_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let enabled_call_status = unsafe {
+            vulcan_luaskills_ffi_call_skill(
+                engine_id,
+                tool_name.as_ptr(),
+                enabled_args_buffer,
+                ptr::null(),
+                &mut result_out,
+                &mut call_error,
+            )
+        };
+        assert_eq!(enabled_call_status, FFI_STATUS_OK);
+        assert!(call_error.ptr.is_null());
+        let enabled_result_ref = unsafe { &*result_out };
+        assert_eq!(
+            read_owned_buffer_text(&enabled_result_ref.content),
+            "lifecycle:after-enable"
+        );
+        unsafe { vulcan_luaskills_ffi_invocation_result_free(result_out) };
 
         let mut free_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),

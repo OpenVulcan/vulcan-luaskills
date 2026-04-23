@@ -134,9 +134,9 @@ typedef struct FfiRuntimeSkillRoot {
 } FfiRuntimeSkillRoot;
 
 typedef struct FfiLuaInvocationContext {
-    const char *request_context_json;
-    const char *client_budget_json;
-    const char *tool_config_json;
+    FfiBorrowedBuffer request_context_json;
+    FfiBorrowedBuffer client_budget_json;
+    FfiBorrowedBuffer tool_config_json;
 } FfiLuaInvocationContext;
 
 /*
@@ -357,18 +357,6 @@ typedef int32_t (*FfiLanceDbProviderCallback)(
 );
 
 /*
-Free one heap-allocated string returned by standard string-producing FFI functions.
-Only pass pointers returned by luaskills FFI string-producing functions to string_free.
-释放一段由标准字符串型 FFI 函数返回的堆字符串。
-只能将 luaskills FFI 产出的字符串指针传给 string_free。
-*/
-void vulcan_luaskills_ffi_string_free(char *value);
-/*
-Clone one host-owned string into one luaskills-owned heap string for callback returns.
-将宿主拥有的字符串克隆为 luaskills 自主管理的堆字符串，供 callback 返回使用。
-*/
-char *vulcan_luaskills_ffi_string_clone(const char *value);
-/*
 Clone one host-owned byte buffer into one luaskills-owned owned-buffer container.
 将宿主拥有的字节缓冲克隆为 luaskills 自主管理的拥有型缓冲容器。
 */
@@ -553,7 +541,7 @@ int32_t vulcan_luaskills_ffi_render_skill_help_detail(
     uint64_t engine_id,
     const char *skill_id,
     const char *flow_name,
-    const char *request_context_json,
+    FfiBorrowedBuffer request_context_json,
     FfiRuntimeHelpDetail **detail_out,
     FfiOwnedBuffer *error_out
 );
@@ -599,7 +587,7 @@ Call one loaded skill entry through the standard C ABI surface.
 int32_t vulcan_luaskills_ffi_call_skill(
     uint64_t engine_id,
     const char *tool_name,
-    const char *args_json,
+    FfiBorrowedBuffer args_json,
     const FfiLuaInvocationContext *invocation_context,
     FfiRuntimeInvocationResult **result_out,
     FfiOwnedBuffer *error_out
@@ -612,7 +600,7 @@ Execute arbitrary Lua code through the standard C ABI surface.
 int32_t vulcan_luaskills_ffi_run_lua(
     uint64_t engine_id,
     const char *code,
-    const char *args_json,
+    FfiBorrowedBuffer args_json,
     const FfiLuaInvocationContext *invocation_context,
     FfiOwnedBuffer *result_json_out,
     FfiOwnedBuffer *error_out

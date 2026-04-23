@@ -82,6 +82,46 @@ class FfiOwnedBuffer(ctypes.Structure):
     ]
 
 
+class FfiBorrowedBuffer(ctypes.Structure):
+    """
+    Borrowed byte-buffer container passed into standard FFI request fields.
+    传入标准 FFI 请求字段的借用型字节缓冲容器。
+    """
+
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
+class FfiLuaInvocationContext(ctypes.Structure):
+    """
+    Plain invocation-context object passed into standard runtime invocation APIs.
+    传入标准运行时调用接口的原生调用上下文对象。
+    """
+
+    _fields_ = [
+        ("request_context_json", FfiBorrowedBuffer),
+        ("client_budget_json", FfiBorrowedBuffer),
+        ("tool_config_json", FfiBorrowedBuffer),
+    ]
+
+
+class FfiRuntimeInvocationResult(ctypes.Structure):
+    """
+    Plain invocation-result object returned by the standard invocation API.
+    标准调用接口返回的原生调用结果对象。
+    """
+
+    _fields_ = [
+        ("content", FfiOwnedBuffer),
+        ("overflow_mode", ctypes.c_int32),
+        ("template_hint", FfiOwnedBuffer),
+        ("content_bytes", ctypes.c_size_t),
+        ("content_lines", ctypes.c_size_t),
+    ]
+
+
 class FfiRuntimeSkillRoot(ctypes.Structure):
     """
     Plain skill-root descriptor used by the standard root-chain loader.
@@ -203,6 +243,22 @@ def read_owned_buffer_text(buffer: FfiOwnedBuffer) -> str:
     return ctypes.string_at(buffer.ptr, buffer.len).decode("utf-8")
 
 
+def make_borrowed_buffer(text: str) -> tuple[ctypes.Array[ctypes.c_uint8], FfiBorrowedBuffer]:
+    """
+    Build one borrowed UTF-8 buffer whose payload stays alive in Python for one FFI call.
+    构造一个在一次 FFI 调用期间由 Python 保持有效的借用型 UTF-8 缓冲。
+    """
+
+    payload = text.encode("utf-8")
+    if not payload:
+        return (ctypes.c_uint8 * 0)(), FfiBorrowedBuffer()
+    payload_array = (ctypes.c_uint8 * len(payload))(*payload)
+    return payload_array, FfiBorrowedBuffer(
+        ptr=ctypes.cast(payload_array, ctypes.POINTER(ctypes.c_uint8)),
+        len=len(payload),
+    )
+
+
 def must_ok(status: int, error_buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> None:
     """
     Raise one Python exception when the standard FFI call reports failure.
@@ -217,8 +273,8 @@ def must_ok(status: int, error_buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> 
 
 def main() -> None:
     """
-    Demonstrate version, engine lifecycle, root loading, and one structured entry-list read.
-    演示版本查询、引擎生命周期、根链加载以及一次结构化入口列表读取。
+    Demonstrate version, engine lifecycle, root loading, entry listing, one standard call_skill roundtrip, and one standard run_lua roundtrip.
+    演示版本查询、引擎生命周期、根链加载、入口列举、一次标准 call_skill 往返调用以及一次标准 run_lua 往返调用。
     """
 
     library = load_library()
@@ -244,10 +300,30 @@ def main() -> None:
         ctypes.POINTER(ctypes.POINTER(FfiRuntimeEntryDescriptorList)),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
+    library.vulcan_luaskills_ffi_call_skill.argtypes = [
+        ctypes.c_uint64,
+        ctypes.c_char_p,
+        FfiBorrowedBuffer,
+        ctypes.POINTER(FfiLuaInvocationContext),
+        ctypes.POINTER(ctypes.POINTER(FfiRuntimeInvocationResult)),
+        ctypes.POINTER(FfiOwnedBuffer),
+    ]
+    library.vulcan_luaskills_ffi_run_lua.argtypes = [
+        ctypes.c_uint64,
+        ctypes.c_char_p,
+        FfiBorrowedBuffer,
+        ctypes.POINTER(FfiLuaInvocationContext),
+        ctypes.POINTER(FfiOwnedBuffer),
+        ctypes.POINTER(FfiOwnedBuffer),
+    ]
     library.vulcan_luaskills_ffi_entry_list_free.argtypes = [
         ctypes.POINTER(FfiRuntimeEntryDescriptorList),
     ]
     library.vulcan_luaskills_ffi_entry_list_free.restype = None
+    library.vulcan_luaskills_ffi_invocation_result_free.argtypes = [
+        ctypes.POINTER(FfiRuntimeInvocationResult),
+    ]
+    library.vulcan_luaskills_ffi_invocation_result_free.restype = None
     library.vulcan_luaskills_ffi_engine_free.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiOwnedBuffer),
@@ -361,6 +437,64 @@ def main() -> None:
     finally:
         if entries_ptr:
             library.vulcan_luaskills_ffi_entry_list_free(entries_ptr)
+
+    args_storage, args_buffer = make_borrowed_buffer('{"note":"python"}')
+    request_storage, request_buffer = make_borrowed_buffer('{"transport_name":"python-demo"}')
+    budget_storage, budget_buffer = make_borrowed_buffer('{"budget":1}')
+    tool_storage, tool_buffer = make_borrowed_buffer('{"mode":"standard-demo"}')
+    invocation_context = FfiLuaInvocationContext(
+        request_context_json=request_buffer,
+        client_budget_json=budget_buffer,
+        tool_config_json=tool_buffer,
+    )
+    borrowed_payloads = (
+        args_storage,
+        request_storage,
+        budget_storage,
+        tool_storage,
+    )
+
+    invocation_result_ptr = ctypes.POINTER(FfiRuntimeInvocationResult)()
+    error_buffer = FfiOwnedBuffer()
+    must_ok(
+        library.vulcan_luaskills_ffi_call_skill(
+            engine_id.value,
+            b"demo-standard-ffi-skill-ping",
+            args_buffer,
+            ctypes.byref(invocation_context),
+            ctypes.byref(invocation_result_ptr),
+            ctypes.byref(error_buffer),
+        ),
+        error_buffer,
+        library,
+    )
+    try:
+        invocation_result = invocation_result_ptr.contents
+        print("Call content:", read_owned_buffer_text(invocation_result.content))
+        print("Call content bytes:", invocation_result.content_bytes)
+        print("Call content lines:", invocation_result.content_lines)
+        print("Call template hint:", read_owned_buffer_text(invocation_result.template_hint))
+    finally:
+        if invocation_result_ptr:
+            library.vulcan_luaskills_ffi_invocation_result_free(invocation_result_ptr)
+
+    run_lua_args_storage, run_lua_args_buffer = make_borrowed_buffer('{"note":"python-lua"}')
+    run_lua_payloads = (run_lua_args_storage,)
+    result_json_buffer = FfiOwnedBuffer()
+    error_buffer = FfiOwnedBuffer()
+    must_ok(
+        library.vulcan_luaskills_ffi_run_lua(
+            engine_id.value,
+            b'return { note = args.note, transport = vulcan.context.request.transport_name, budget = vulcan.context.client_budget.budget, mode = vulcan.context.tool_config.mode }',
+            run_lua_args_buffer,
+            ctypes.byref(invocation_context),
+            ctypes.byref(result_json_buffer),
+            ctypes.byref(error_buffer),
+        ),
+        error_buffer,
+        library,
+    )
+    print("Run Lua result JSON:", read_owned_buffer_text_and_free(result_json_buffer, library))
 
     error_buffer = FfiOwnedBuffer()
     must_ok(
