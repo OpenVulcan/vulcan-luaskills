@@ -80,8 +80,9 @@
 
 推荐理解方式：
 
-- Rust SDK：走 `git + tag v0.2.0`
+- Rust SDK：走 `git + tag v0.2.1`
 - SDK 注册时宿主名使用 `client_name`，会话主键 `client_session_id` 由 controller 分配并由 SDK 内部自动管理
+- `v0.2.1` 额外修复了共享本地 endpoint 在 `auto_spawn` 场景下的重复拉起协调风险
 - controller 可执行程序：走宿主本地复制与管理
 - 共享还是独占：由 `endpoint` 决定
 

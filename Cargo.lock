@@ -259,7 +259,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1370,7 +1370,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1619,7 +1619,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1943,8 +1943,8 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vldb-controller-client"
-version = "0.2.0"
-source = "git+https://github.com/OpenVulcan/vldb-controller.git?tag=v0.2.0#cb6e6288bf39283238e5165efb171cf0d4879d0c"
+version = "0.2.1"
+source = "git+https://github.com/OpenVulcan/vldb-controller.git?tag=v0.2.1#3f66926fa2eab036d13025f9139287de6cee38c3"
 dependencies = [
  "prost",
  "protoc-bin-vendored",
