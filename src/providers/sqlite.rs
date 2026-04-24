@@ -908,7 +908,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let sql_text = sql.to_string();
             let mapped_params = map_controller_sqlite_params(&params);
             let result = bridge.run(move |client| async move {
@@ -979,7 +979,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let sql_text = sql.to_string();
             let mapped_rows = rows
                 .iter()
@@ -1048,7 +1048,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let sql_text = sql.to_string();
             let mapped_params = map_controller_sqlite_params(&params);
             let result = bridge.run(move |client| async move {
@@ -1136,7 +1136,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let sql_text = sql.to_string();
             let mapped_params = map_controller_sqlite_params(&params);
             let result = bridge.run(move |client| async move {
@@ -1460,7 +1460,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let text_value = text.to_string();
             let result = bridge.run(move |client| async move {
                 client
@@ -1559,7 +1559,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let word_value = word.to_string();
             let weight_value = u32::try_from(weight).unwrap_or(u32::MAX);
             let result = bridge.run(move |client| async move {
@@ -1619,7 +1619,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let word_value = word.to_string();
             let result = bridge.run(move |client| async move {
                 client
@@ -1669,7 +1669,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let result = bridge.run(move |client| async move {
                 client.list_sqlite_custom_words(space_id, binding_id).await
             })?;
@@ -1753,7 +1753,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let index_name_value = index_name.to_string();
             let result = bridge.run(move |client| async move {
                 client
@@ -1828,7 +1828,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let index_name_value = index_name.to_string();
             let result = bridge.run(move |client| async move {
                 client
@@ -1922,7 +1922,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let index_name_value = index_name.to_string();
             let id_value = id.to_string();
             let file_path_value = file_path.to_string();
@@ -2019,7 +2019,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let index_name_value = index_name.to_string();
             let id_value = id.to_string();
             let result = bridge.run(move |client| async move {
@@ -2102,7 +2102,7 @@ impl SqliteSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let index_name_value = index_name.to_string();
             let query_value = query.to_string();
             let limit_value = u32::try_from(limit).unwrap_or(u32::MAX);
@@ -2359,10 +2359,12 @@ impl SqliteSkillBinding {
         controller_space_id_for_binding(&self.provider_binding)
     }
 
-    /// Return the stable controller database-binding identifier for the current skill binding.
-    /// 返回当前 skill 绑定对应的稳定控制器数据库绑定标识。
-    fn controller_binding_id(&self) -> String {
-        self.provider_binding.binding_tag.clone()
+    /// Return the client-scoped controller database-binding identifier for the current skill binding.
+    /// 返回当前 skill 绑定对应的客户端隔离控制器数据库绑定标识。
+    fn controller_binding_id(&self) -> Result<String, String> {
+        Ok(self
+            .controller_bridge()?
+            .controller_binding_id_for_binding(&self.provider_binding))
     }
 }
 
@@ -2551,7 +2553,8 @@ impl SqliteSkillHost {
                 .ok_or_else(|| "SQLite space-controller bridge is unavailable".to_string())?
                 .clone();
             let controller_space_id = controller_space_id_for_binding(&binding_context);
-            let controller_binding_id = binding_context.binding_tag.clone();
+            let controller_binding_id =
+                controller.controller_binding_id_for_binding(&binding_context);
             let controller_database_path = database_path.clone();
             controller.attach_binding(&binding_context)?;
             controller.run(move |client| async move {

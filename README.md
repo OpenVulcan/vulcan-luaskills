@@ -579,6 +579,7 @@ FFI 设计规则如下：
   - 由 lib 把数据库请求转发给外部空间控制器
   - 代码层通过 `git + tag v0.2.1` 固定依赖 `vldb-controller-client`
   - 当前上游 Rust SDK 注册字段为 `client_name`，会话主键 `client_session_id` 由 SDK 内部自动管理
+  - 稳定 `binding_tag` 只保留诊断与命名语义，controller 实际使用的 `binding_id` 会由 lib 结合当前 client 会话域派生，避免不同客户端实例抢占同一 binding
   - `v0.2.1` 额外修复了本地共享 controller 自动拉起阶段的重复拉起协调风险
   - 服务进程本体不走 Cargo 依赖注入，而是由宿主复制本地 controller 可执行文件后，通过 `space_controller.executable_path` 指定启动路径
   - 宿主不指定 `endpoint` 时，默认连接共享端点 `http://127.0.0.1:19801`

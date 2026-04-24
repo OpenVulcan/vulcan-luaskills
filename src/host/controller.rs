@@ -17,6 +17,7 @@ use vldb_controller_client::{
 pub struct LuaRuntimeSpaceControllerBridge {
     client: ControllerClient,
     runtime: Mutex<Runtime>,
+    binding_scope_id: String,
 }
 
 impl LuaRuntimeSpaceControllerBridge {
@@ -69,9 +70,12 @@ impl LuaRuntimeSpaceControllerBridge {
             client.connect().await
         })
         .map_err(|error| format!("failed to connect space controller client: {}", error))?;
+        let binding_scope_id = resolve_controller_binding_scope_id(&runtime, &client)
+            .map_err(|error| format!("failed to resolve space controller session scope: {}", error))?;
         Ok(Arc::new(Self {
             client,
             runtime: Mutex::new(runtime),
+            binding_scope_id,
         }))
     }
 
@@ -103,6 +107,12 @@ impl LuaRuntimeSpaceControllerBridge {
         self.run(move |client| async move { client.attach_space(registration).await })
             .map(|_| ())
     }
+
+    /// Build one client-scoped controller binding identifier while preserving the stable host binding tag for diagnostics.
+    /// 构造一个按客户端实例隔离的控制器绑定标识，同时保留稳定宿主绑定标签用于诊断。
+    pub fn controller_binding_id_for_binding(&self, binding: &RuntimeDatabaseBindingContext) -> String {
+        build_controller_binding_id(binding.binding_tag.as_str(), self.binding_scope_id.as_str())
+    }
 }
 
 /// Execute one controller SDK operation safely from both sync code and threads already inside a Tokio runtime.
@@ -119,6 +129,26 @@ where
 {
     let client_clone = client.clone();
     run_future_on_bridge_runtime(runtime, operation(client_clone))
+}
+
+/// Resolve the current controller client session identifier and use it as the binding scope for this bridge instance.
+/// 解析当前控制器客户端会话标识，并将其作为本桥接实例的绑定作用域。
+fn resolve_controller_binding_scope_id(
+    runtime: &Runtime,
+    client: &ControllerClient,
+) -> Result<String, BoxError> {
+    run_controller_operation_with_client(runtime, client, |client| async move {
+        let mut snapshots = client.list_clients().await?.into_iter();
+        let snapshot = snapshots.next().ok_or_else(|| -> BoxError {
+            "space controller client did not expose one visible client session".into()
+        })?;
+        if snapshots.next().is_some() {
+            return Err::<String, BoxError>(
+                "space controller client exposed multiple visible client sessions".into(),
+            );
+        }
+        Ok(snapshot.client_session_id)
+    })
 }
 
 /// Execute one Send future on the bridge-owned Tokio runtime without depending on the host runtime flavor.
@@ -204,6 +234,12 @@ pub fn controller_space_id_for_binding(binding: &RuntimeDatabaseBindingContext) 
     format!("{}-{}", normalized_label, &hash_hex[..16])
 }
 
+/// Build one controller binding identifier from the stable host binding tag and one bridge-scoped client session marker.
+/// 基于稳定宿主绑定标签与桥接级客户端会话标识构造一个控制器绑定标识。
+fn build_controller_binding_id(binding_tag: &str, binding_scope_id: &str) -> String {
+    format!("{}@{}", binding_tag, binding_scope_id)
+}
+
 /// Normalize one host-provided space label into a controller-safe identifier prefix.
 /// 将宿主提供的空间标签标准化为控制器安全的标识符前缀。
 fn normalize_controller_space_label(space_label: &str) -> String {
@@ -227,7 +263,7 @@ fn normalize_controller_space_label(space_label: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::run_future_on_bridge_runtime;
+    use super::{build_controller_binding_id, run_future_on_bridge_runtime};
     use tokio::runtime::{Builder, Runtime};
     use vldb_controller_client::BoxError;
 
@@ -266,5 +302,15 @@ mod tests {
         .expect("current-thread host runtime path should not panic");
 
         assert_eq!(result, 11);
+    }
+
+    /// Verify controller binding ids preserve the stable host tag while adding one client-scoped suffix.
+    /// 验证控制器绑定标识会保留稳定宿主标签，并额外附加客户端作用域后缀。
+    #[test]
+    fn controller_binding_id_preserves_tag_and_adds_scope_suffix() {
+        assert_eq!(
+            build_controller_binding_id("ROOT-vulcan-ai-memory", "client-session-123"),
+            "ROOT-vulcan-ai-memory@client-session-123"
+        );
     }
 }

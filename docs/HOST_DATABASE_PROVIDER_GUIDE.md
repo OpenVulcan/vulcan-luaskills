@@ -85,6 +85,8 @@
 
 - Rust SDK：走 `git + tag v0.2.1`
 - SDK 注册时宿主名使用 `client_name`，会话主键 `client_session_id` 由 controller 分配并由 SDK 内部自动管理
+- `binding_tag` 仍保留为稳定数据库标签与诊断标签，但在 `space_controller` 模式下不会直接等同于 controller `binding_id`
+- lib 会基于稳定 `binding_tag` 与当前 controller client 会话域生成客户端隔离的 controller `binding_id`
 - `v0.2.1` 额外修复了共享本地 endpoint 在 `auto_spawn` 场景下的重复拉起协调风险
 - controller 可执行程序：走宿主本地复制与管理
 - 共享还是独占：由 `endpoint` 决定
@@ -185,6 +187,11 @@ lib 会一并提供稳定绑定上下文：
 - 宿主管理数据库命名空间
 - 共享数据库标签
 - 多进程稳定复用
+
+补充说明：
+
+- 在 `host_callback` 模式下，宿主可以直接基于 `binding_tag` 路由或命名真实数据库
+- 在 `space_controller` 模式下，`binding_tag` 仍然保持稳定，但 lib 会额外派生客户端隔离的 controller `binding_id`，避免不同 controller client 实例争抢同一 binding
 
 ### `default_database_path`
 

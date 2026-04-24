@@ -319,7 +319,7 @@ impl LanceDbSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let request_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
             let result = bridge.run(move |client| async move {
                 client
@@ -350,7 +350,7 @@ impl LanceDbSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let request_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
             let payload = data.to_vec();
             let result = bridge.run(move |client| async move {
@@ -430,7 +430,7 @@ impl LanceDbSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let request_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
             let result = bridge.run(move |client| async move {
                 client
@@ -501,7 +501,7 @@ impl LanceDbSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let request_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
             let result = bridge.run(move |client| async move {
                 client
@@ -533,7 +533,7 @@ impl LanceDbSkillBinding {
             let started_at = Instant::now();
             let bridge = self.controller_bridge()?;
             let space_id = self.controller_space_id();
-            let binding_id = self.controller_binding_id();
+            let binding_id = self.controller_binding_id()?;
             let table_name = require_string_field(input, "table_name")?.to_string();
             let result = bridge.run(move |client| async move {
                 client
@@ -714,10 +714,12 @@ impl LanceDbSkillBinding {
         controller_space_id_for_binding(&self.provider_binding)
     }
 
-    /// Return the stable controller database-binding identifier for the current skill binding.
-    /// 返回当前 skill 绑定对应的稳定控制器数据库绑定标识。
-    fn controller_binding_id(&self) -> String {
-        self.provider_binding.binding_tag.clone()
+    /// Return the client-scoped controller database-binding identifier for the current skill binding.
+    /// 返回当前 skill 绑定对应的客户端隔离控制器数据库绑定标识。
+    fn controller_binding_id(&self) -> Result<String, String> {
+        Ok(self
+            .controller_bridge()?
+            .controller_binding_id_for_binding(&self.provider_binding))
     }
 }
 
@@ -899,7 +901,8 @@ impl LanceDbSkillHost {
                 .ok_or_else(|| "LanceDB space-controller bridge is unavailable".to_string())?
                 .clone();
             let controller_space_id = controller_space_id_for_binding(&binding_context);
-            let controller_binding_id = binding_context.binding_tag.clone();
+            let controller_binding_id =
+                controller.controller_binding_id_for_binding(&binding_context);
             let controller_database_path = database_path.clone();
             controller.attach_binding(&binding_context)?;
             controller.run(move |client| async move {
