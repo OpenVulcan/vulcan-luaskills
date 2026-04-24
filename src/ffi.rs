@@ -213,6 +213,94 @@ struct OptionalSkillNameJsonResult {
     skill_id: Option<String>,
 }
 
+/// One JSON request used to list flattened skill config records.
+/// 用于列出扁平化技能配置记录的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+struct SkillConfigListJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    engine_id: u64,
+    /// Optional skill identifier used to restrict the listing scope.
+    /// 用于限制列举范围的可选技能标识符。
+    #[serde(default)]
+    skill_id: Option<String>,
+}
+
+/// One JSON request used to resolve one `(skill_id, key)` config pair.
+/// 用于解析单个 `(skill_id, key)` 配置对的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+struct SkillConfigGetJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    engine_id: u64,
+    /// Stable skill identifier that owns the current key.
+    /// 拥有当前键的稳定技能标识符。
+    skill_id: String,
+    /// Stable config key inside the current skill namespace.
+    /// 当前技能命名空间内的稳定配置键。
+    key: String,
+}
+
+/// One JSON request used to insert or replace one `(skill_id, key)` config pair.
+/// 用于插入或替换单个 `(skill_id, key)` 配置对的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+struct SkillConfigSetJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    engine_id: u64,
+    /// Stable skill identifier that owns the current key.
+    /// 拥有当前键的稳定技能标识符。
+    skill_id: String,
+    /// Stable config key inside the current skill namespace.
+    /// 当前技能命名空间内的稳定配置键。
+    key: String,
+    /// String config value written into the unified skill config store.
+    /// 写入统一技能配置存储的字符串配置值。
+    value: String,
+}
+
+/// One JSON result describing the lookup state of one skill config value.
+/// 描述单个技能配置值查找状态的 JSON 结果。
+#[derive(Debug, Serialize, Deserialize)]
+struct SkillConfigGetJsonResult {
+    /// Whether the requested config value currently exists.
+    /// 请求的配置值当前是否存在。
+    found: bool,
+    /// Stable skill identifier that was queried.
+    /// 被查询的稳定技能标识符。
+    skill_id: String,
+    /// Stable config key that was queried.
+    /// 被查询的稳定配置键。
+    key: String,
+    /// Optional string value returned when `found=true`.
+    /// 当 `found=true` 时返回的可选字符串值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+}
+
+/// One JSON result describing one successful skill config mutation.
+/// 描述单次技能配置变更成功结果的 JSON 结果。
+#[derive(Debug, Serialize, Deserialize)]
+struct SkillConfigMutationJsonResult {
+    /// Mutation action name such as `set` or `delete`.
+    /// 变更动作名称，例如 `set` 或 `delete`。
+    action: String,
+    /// Stable skill identifier that owns the current key.
+    /// 拥有当前键的稳定技能标识符。
+    skill_id: String,
+    /// Stable config key touched by the mutation.
+    /// 当前变更触及的稳定配置键。
+    key: String,
+    /// Optional value returned for `set`.
+    /// 为 `set` 动作返回的可选值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    /// Optional deletion flag returned for `delete`.
+    /// 为 `delete` 动作返回的可选删除标记。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deleted: Option<bool>,
+}
+
 /// One JSON request used to call one loaded skill entry.
 /// 用于调用单个已加载技能入口的 JSON 请求。
 #[derive(Debug, Serialize, Deserialize)]
@@ -524,6 +612,10 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "vulcan_luaskills_ffi_prompt_argument_completions",
         "vulcan_luaskills_ffi_is_skill",
         "vulcan_luaskills_ffi_skill_name_for_tool",
+        "vulcan_luaskills_ffi_skill_config_list",
+        "vulcan_luaskills_ffi_skill_config_get",
+        "vulcan_luaskills_ffi_skill_config_set",
+        "vulcan_luaskills_ffi_skill_config_delete",
         "vulcan_luaskills_ffi_call_skill",
         "vulcan_luaskills_ffi_run_lua",
         "vulcan_luaskills_ffi_disable_skill_in_dirs",
@@ -557,6 +649,10 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "vulcan_luaskills_ffi_prompt_argument_completions_json",
         "vulcan_luaskills_ffi_is_skill_json",
         "vulcan_luaskills_ffi_skill_name_for_tool_json",
+        "vulcan_luaskills_ffi_skill_config_list_json",
+        "vulcan_luaskills_ffi_skill_config_get_json",
+        "vulcan_luaskills_ffi_skill_config_set_json",
+        "vulcan_luaskills_ffi_skill_config_delete_json",
         "vulcan_luaskills_ffi_call_skill_json",
         "vulcan_luaskills_ffi_run_lua_json",
         "vulcan_luaskills_ffi_disable_skill_in_dirs_json",
@@ -882,6 +978,107 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool_json(
         Ok(engine.skill_name_for_tool(&request.tool_name))
     }) {
         Ok(skill_id) => ffi_ok(OptionalSkillNameJsonResult { skill_id }),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// List flattened skill config records through the JSON FFI surface.
+/// 通过 JSON FFI 入口列出扁平化技能配置记录。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_list_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<SkillConfigListJsonRequest>(
+        input_json,
+        "vulcan_luaskills_ffi_skill_config_list_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        engine.list_skill_config_entries(request.skill_id.as_deref())
+    }) {
+        Ok(entries) => ffi_ok(entries),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Read one optional skill config value through the JSON FFI surface.
+/// 通过 JSON FFI 入口读取单个可选技能配置值。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_get_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<SkillConfigGetJsonRequest>(
+        input_json,
+        "vulcan_luaskills_ffi_skill_config_get_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        engine.get_skill_config_value(&request.skill_id, &request.key)
+    }) {
+        Ok(value) => ffi_ok(SkillConfigGetJsonResult {
+            found: value.is_some(),
+            skill_id: request.skill_id,
+            key: request.key,
+            value,
+        }),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Insert or replace one skill config value through the JSON FFI surface.
+/// 通过 JSON FFI 入口插入或替换单个技能配置值。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_set_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<SkillConfigSetJsonRequest>(
+        input_json,
+        "vulcan_luaskills_ffi_skill_config_set_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine_mut(request.engine_id, |engine| {
+        engine.set_skill_config_value(&request.skill_id, &request.key, &request.value)
+    }) {
+        Ok(()) => ffi_ok(SkillConfigMutationJsonResult {
+            action: "set".to_string(),
+            skill_id: request.skill_id,
+            key: request.key,
+            value: Some(request.value),
+            deleted: None,
+        }),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Delete one skill config key through the JSON FFI surface.
+/// 通过 JSON FFI 入口删除单个技能配置键。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_delete_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<SkillConfigGetJsonRequest>(
+        input_json,
+        "vulcan_luaskills_ffi_skill_config_delete_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine_mut(request.engine_id, |engine| {
+        engine.delete_skill_config_value(&request.skill_id, &request.key)
+    }) {
+        Ok(deleted) => ffi_ok(SkillConfigMutationJsonResult {
+            action: "delete".to_string(),
+            skill_id: request.skill_id,
+            key: request.key,
+            value: None,
+            deleted: Some(deleted),
+        }),
         Err(error) => ffi_error(error),
     }
 }
@@ -1234,8 +1431,11 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_update_skill_json(
 mod tests {
     use super::{
         EngineHandleJsonResult, EngineIdJsonRequest, EngineNewJsonRequest, FFI_ENGINE_COUNTER,
-        FfiEngineSlot, ffi_engine_registry, vulcan_luaskills_ffi_engine_free_json,
-        vulcan_luaskills_ffi_engine_new_json, with_engine,
+        FfiEngineSlot, SkillConfigGetJsonRequest, SkillConfigListJsonRequest,
+        SkillConfigSetJsonRequest, ffi_engine_registry, vulcan_luaskills_ffi_engine_free_json,
+        vulcan_luaskills_ffi_engine_new_json, vulcan_luaskills_ffi_skill_config_delete_json,
+        vulcan_luaskills_ffi_skill_config_get_json, vulcan_luaskills_ffi_skill_config_list_json,
+        vulcan_luaskills_ffi_skill_config_set_json, with_engine,
     };
     use crate::ffi_standard::{
         FfiBorrowedBuffer, FfiOwnedBuffer, vulcan_luaskills_ffi_buffer_free,
@@ -1243,6 +1443,7 @@ mod tests {
     use crate::{LuaEngine, LuaEngineOptions, LuaVmPoolConfig};
     use std::ffi::CString;
     use std::sync::atomic::Ordering;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     /// Read one FFI JSON response string back into one serde_json value.
     /// 将单个 FFI JSON 响应字符串回读为一个 serde_json 值。
@@ -1267,6 +1468,16 @@ mod tests {
             ptr: bytes.as_ptr(),
             len: bytes.len(),
         }
+    }
+
+    /// Return one shared test guard that serializes FFI tests touching the global engine registry.
+    /// 返回一把用于串行化访问全局引擎注册表的共享测试锁。
+    fn ffi_test_guard() -> MutexGuard<'static, ()> {
+        static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        TEST_MUTEX
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("lock ffi test mutex")
     }
 
     /// One test-only registered engine handle that cleans itself from the global registry on drop.
@@ -1307,6 +1518,7 @@ mod tests {
     /// 验证可以通过 JSON FFI 入口创建并释放单个引擎。
     #[test]
     fn ffi_engine_new_and_free_roundtrip() {
+        let _guard = ffi_test_guard();
         let temp_root = std::env::temp_dir().join(format!(
             "vulcan_luaskills_ffi_engine_test_{}",
             std::process::id()
@@ -1329,6 +1541,7 @@ mod tests {
                     dependency_dir_name: "dependencies".to_string(),
                     state_dir_name: "state".to_string(),
                     database_dir_name: "databases".to_string(),
+                    skill_config_file_path: None,
                     protection: Default::default(),
                     allow_network_download: false,
                     github_base_url: None,
@@ -1374,10 +1587,162 @@ mod tests {
         assert_eq!(free_response["ok"], true);
     }
 
+    /// Verify the JSON FFI skill-config helpers support one full set/get/list/delete roundtrip.
+    /// 验证 JSON FFI 的技能配置辅助接口支持完整的 set/get/list/delete 往返流程。
+    #[test]
+    fn ffi_skill_config_json_roundtrip() {
+        let _guard = ffi_test_guard();
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_ffi_skill_config_json_test_{}",
+            std::process::id()
+        ));
+        let request = EngineNewJsonRequest {
+            options: LuaEngineOptions::new(
+                LuaVmPoolConfig {
+                    min_size: 1,
+                    max_size: 1,
+                    idle_ttl_secs: 30,
+                },
+                crate::LuaRuntimeHostOptions {
+                    temp_dir: Some(temp_root.join("temp")),
+                    resources_dir: Some(temp_root.join("resources")),
+                    lua_packages_dir: Some(temp_root.join("lua_packages")),
+                    host_provided_tool_root: Some(temp_root.join("bin").join("tools")),
+                    host_provided_lua_root: Some(temp_root.join("lua_packages")),
+                    host_provided_ffi_root: Some(temp_root.join("libs")),
+                    download_cache_root: Some(temp_root.join("temp").join("downloads")),
+                    dependency_dir_name: "dependencies".to_string(),
+                    state_dir_name: "state".to_string(),
+                    database_dir_name: "databases".to_string(),
+                    skill_config_file_path: Some(
+                        temp_root.join("config").join("skill_config.json"),
+                    ),
+                    protection: Default::default(),
+                    allow_network_download: false,
+                    github_base_url: None,
+                    github_api_base_url: None,
+                    sqlite_library_path: None,
+                    sqlite_provider_mode: crate::LuaRuntimeDatabaseProviderMode::DynamicLibrary,
+                    sqlite_callback_mode: crate::LuaRuntimeDatabaseCallbackMode::Standard,
+                    lancedb_library_path: None,
+                    lancedb_provider_mode: crate::LuaRuntimeDatabaseProviderMode::DynamicLibrary,
+                    lancedb_callback_mode: crate::LuaRuntimeDatabaseCallbackMode::Standard,
+                    space_controller: crate::LuaRuntimeSpaceControllerOptions::default(),
+                    cache_config: None,
+                    runlua_pool_config: None,
+                    reserved_entry_names: Vec::new(),
+                    ignored_skill_ids: Vec::new(),
+                    capabilities: Default::default(),
+                },
+            ),
+        };
+        let input = CString::new(serde_json::to_string(&request).expect("request json"))
+            .expect("request cstring");
+        let response = unsafe {
+            decode_response_json(vulcan_luaskills_ffi_engine_new_json(borrowed_json_buffer(
+                &input,
+            )))
+        };
+        assert_eq!(response["ok"], true);
+        let result: EngineHandleJsonResult =
+            serde_json::from_value(response["result"].clone()).expect("engine result should parse");
+
+        let set_request = CString::new(
+            serde_json::to_string(&SkillConfigSetJsonRequest {
+                engine_id: result.engine_id,
+                skill_id: "demo-skill".to_string(),
+                key: "api_token".to_string(),
+                value: "sk-json-ffi".to_string(),
+            })
+            .expect("set request json"),
+        )
+        .expect("set request cstring");
+        let set_response = unsafe {
+            decode_response_json(vulcan_luaskills_ffi_skill_config_set_json(
+                borrowed_json_buffer(&set_request),
+            ))
+        };
+        assert_eq!(set_response["ok"], true);
+        assert_eq!(set_response["result"]["action"], "set");
+        assert_eq!(set_response["result"]["skill_id"], "demo-skill");
+        assert_eq!(set_response["result"]["key"], "api_token");
+        assert_eq!(set_response["result"]["value"], "sk-json-ffi");
+
+        let get_request = CString::new(
+            serde_json::to_string(&SkillConfigGetJsonRequest {
+                engine_id: result.engine_id,
+                skill_id: "demo-skill".to_string(),
+                key: "api_token".to_string(),
+            })
+            .expect("get request json"),
+        )
+        .expect("get request cstring");
+        let get_response = unsafe {
+            decode_response_json(vulcan_luaskills_ffi_skill_config_get_json(
+                borrowed_json_buffer(&get_request),
+            ))
+        };
+        assert_eq!(get_response["ok"], true);
+        assert_eq!(get_response["result"]["found"], true);
+        assert_eq!(get_response["result"]["value"], "sk-json-ffi");
+
+        let list_request = CString::new(
+            serde_json::to_string(&SkillConfigListJsonRequest {
+                engine_id: result.engine_id,
+                skill_id: Some("demo-skill".to_string()),
+            })
+            .expect("list request json"),
+        )
+        .expect("list request cstring");
+        let list_response = unsafe {
+            decode_response_json(vulcan_luaskills_ffi_skill_config_list_json(
+                borrowed_json_buffer(&list_request),
+            ))
+        };
+        assert_eq!(list_response["ok"], true);
+        assert_eq!(list_response["result"].as_array().map(Vec::len), Some(1));
+        assert_eq!(list_response["result"][0]["skill_id"], "demo-skill");
+        assert_eq!(list_response["result"][0]["key"], "api_token");
+        assert_eq!(list_response["result"][0]["value"], "sk-json-ffi");
+
+        let delete_request = CString::new(
+            serde_json::to_string(&SkillConfigGetJsonRequest {
+                engine_id: result.engine_id,
+                skill_id: "demo-skill".to_string(),
+                key: "api_token".to_string(),
+            })
+            .expect("delete request json"),
+        )
+        .expect("delete request cstring");
+        let delete_response = unsafe {
+            decode_response_json(vulcan_luaskills_ffi_skill_config_delete_json(
+                borrowed_json_buffer(&delete_request),
+            ))
+        };
+        assert_eq!(delete_response["ok"], true);
+        assert_eq!(delete_response["result"]["action"], "delete");
+        assert_eq!(delete_response["result"]["deleted"], true);
+
+        let free_request = CString::new(
+            serde_json::to_string(&EngineIdJsonRequest {
+                engine_id: result.engine_id,
+            })
+            .expect("free request json"),
+        )
+        .expect("free request cstring");
+        let free_response = unsafe {
+            decode_response_json(vulcan_luaskills_ffi_engine_free_json(borrowed_json_buffer(
+                &free_request,
+            )))
+        };
+        assert_eq!(free_response["ok"], true);
+    }
+
     /// Verify that one engine operation no longer keeps the global registry mutex while running.
     /// 验证单次引擎操作执行期间不会继续持有全局注册表互斥锁。
     #[test]
     fn with_engine_releases_registry_lock_before_operation() {
+        let _guard = ffi_test_guard();
         let handle = register_test_engine();
         let result = with_engine(handle.engine_id, |_engine| {
             let registry_lock = ffi_engine_registry().try_lock();
@@ -1394,6 +1759,7 @@ mod tests {
     /// 验证同线程重入访问会返回明确错误，而不是直接死锁。
     #[test]
     fn with_engine_rejects_same_thread_reentry() {
+        let _guard = ffi_test_guard();
         let handle = register_test_engine();
         let outer_result = with_engine(handle.engine_id, |_engine| {
             let nested_result = with_engine(handle.engine_id, |_nested| Ok(()));

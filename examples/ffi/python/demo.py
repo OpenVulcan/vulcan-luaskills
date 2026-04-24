@@ -38,6 +38,7 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("dependency_dir_name", ctypes.c_char_p),
         ("state_dir_name", ctypes.c_char_p),
         ("database_dir_name", ctypes.c_char_p),
+        ("skill_config_file_path", ctypes.c_char_p),
         ("protected_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
         ("protected_skill_ids_len", ctypes.c_size_t),
         ("allow_network_download", ctypes.c_uint8),
@@ -356,6 +357,7 @@ def main() -> None:
     host.dependency_dir_name = b"dependencies"
     host.state_dir_name = b"state"
     host.database_dir_name = b"databases"
+    host.skill_config_file_path = None
     host.protected_skill_ids = None
     host.protected_skill_ids_len = 0
     host.allow_network_download = 0

@@ -120,6 +120,52 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 这不是自动 capability 反判定系统，也不是 skill 自己决定是否启用的机制。  
 最终是否忽略某个 skill，仍由宿主策略和用户安装/禁用意图决定。
 
+### 2.4 统一 Skill 配置系统
+
+当前 `luaskills` 已内建统一的 skill 配置存储协议：
+
+- 物理上只有一个主配置文件
+- 默认路径是 `<runtime_root>/config/skill_config.json`
+- 宿主可通过 `LuaRuntimeHostOptions.skill_config_file_path` 显式覆盖
+- 一旦显式提供 `skill_config_file_path`，运行时将不再推导默认 `runtime_root`
+- 显式路径会在引擎创建时固定成绝对路径，不会随进程 `cwd` 漂移
+- 即使 `skills/` 目录暂时还不存在，也会优先解析这条默认配置路径
+- 如果传入了多个 skill root 且它们映射到不同的 `runtime_root`，则必须显式提供 `skill_config_file_path`
+- 文件内部按 `skill_id` 分组存储
+- 第一版配置值统一为 `string`
+
+Lua 侧当前可直接使用：
+
+- `vulcan.config.get(key)`
+- `vulcan.config.set(key, value)`
+- `vulcan.config.delete(key)`
+- `vulcan.config.has(key)`
+- `vulcan.config.list()`
+
+其中：
+
+- Lua 侧默认只访问当前 skill 自己的配置命名空间
+- 未配置某个 key 时，不会自动让 skill 失效
+- 更推荐由 skill 自己返回提示，告知用户如何通过宿主配置工具补齐所需配置
+
+宿主侧则可通过 Rust API、标准 C ABI 或公共 `_json` FFI 包装成一个单工具，例如：
+
+```text
+runtime-config(action, skill_id?, key?, value?)
+```
+
+推荐动作只有四类：
+
+- `list`
+- `get`
+- `set`
+- `delete`
+
+也就是说：
+
+- skill 自己通过 `vulcan.config.*` 读写当前命名空间
+- 宿主与 AI 则通过一个统一的 `runtime-config` 工具跨 skill 管理配置
+
 ### 3. System 与 Skill 分层
 
 当前模型分为两层：

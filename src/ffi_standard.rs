@@ -156,6 +156,9 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Required database sibling directory name.
     /// 必填的数据库兄弟目录名称。
     pub database_dir_name: *const c_char,
+    /// Optional unified skill config file path owned by the host.
+    /// 由宿主拥有的可选统一技能配置文件路径。
+    pub skill_config_file_path: *const c_char,
     /// Protected skill identifiers reserved for the system plane.
     /// 为 system 平面保留的受保护技能标识符数组。
     pub protected_skill_ids: *const *const c_char,
@@ -748,6 +751,21 @@ fn parse_required_string(value: *const c_char, field_name: &str) -> Result<Strin
     Ok(text.to_string())
 }
 
+/// Parse one required UTF-8 string pointer while allowing one empty string payload.
+/// 解析单个必填 UTF-8 字符串指针，并允许空字符串载荷。
+fn parse_required_string_allow_empty(
+    value: *const c_char,
+    field_name: &str,
+) -> Result<String, String> {
+    if value.is_null() {
+        return Err(format!("{} must not be null", field_name));
+    }
+    unsafe { CStr::from_ptr(value) }
+        .to_str()
+        .map(|text| text.to_string())
+        .map_err(|error| format!("{} contains invalid UTF-8: {}", field_name, error))
+}
+
 /// Parse one optional UTF-8 string pointer.
 /// 解析单个可选 UTF-8 字符串指针。
 fn parse_optional_string(value: *const c_char, field_name: &str) -> Result<Option<String>, String> {
@@ -905,6 +923,11 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
         )?,
         state_dir_name: parse_required_string(value.state_dir_name, "state_dir_name")?,
         database_dir_name: parse_required_string(value.database_dir_name, "database_dir_name")?,
+        skill_config_file_path: parse_optional_string(
+            value.skill_config_file_path,
+            "skill_config_file_path",
+        )?
+        .map(PathBuf::from),
         protection: crate::skill::manager::SkillProtectionConfig {
             protected_skill_ids: parse_string_array(
                 value.protected_skill_ids,
@@ -2440,6 +2463,148 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
     }
 }
 
+/// List flattened skill config records through the standard C ABI surface.
+/// 通过标准 C ABI 接口列出扁平化技能配置记录。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_list(
+    engine_id: u64,
+    skill_id: *const c_char,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    clear_out_buffer(result_json_out);
+    if result_json_out.is_null() {
+        return ffi_error_status(error_out, "result_json_out must not be null");
+    }
+    let skill_id = match parse_optional_string(skill_id, "skill_id") {
+        Ok(skill_id) => skill_id,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match with_engine(engine_id, |engine| {
+        engine.list_skill_config_entries(skill_id.as_deref())
+    }) {
+        Ok(entries) => match serde_json::to_string(&entries) {
+            Ok(result_json) => {
+                unsafe { *result_json_out = alloc_owned_buffer_from_string(result_json) };
+                ffi_ok_status(error_out)
+            }
+            Err(error) => ffi_error_status(
+                error_out,
+                format!("failed to serialize skill config entries: {}", error),
+            ),
+        },
+        Err(error) => ffi_error_status(error_out, error),
+    }
+}
+
+/// Read one optional skill config value through the standard C ABI surface.
+/// 通过标准 C ABI 接口读取单个可选技能配置值。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_get(
+    engine_id: u64,
+    skill_id: *const c_char,
+    key: *const c_char,
+    value_out: *mut FfiOwnedBuffer,
+    found_out: *mut u8,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    clear_out_buffer(value_out);
+    clear_out_u8(found_out);
+    if value_out.is_null() {
+        return ffi_error_status(error_out, "value_out must not be null");
+    }
+    if found_out.is_null() {
+        return ffi_error_status(error_out, "found_out must not be null");
+    }
+    let skill_id = match parse_required_string(skill_id, "skill_id") {
+        Ok(skill_id) => skill_id,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    let key = match parse_required_string(key, "key") {
+        Ok(key) => key,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match with_engine(engine_id, |engine| {
+        engine.get_skill_config_value(&skill_id, &key)
+    }) {
+        Ok(value) => {
+            unsafe {
+                *found_out = u8::from(value.is_some());
+                *value_out = alloc_optional_owned_buffer_from_string(value.as_deref());
+            }
+            ffi_ok_status(error_out)
+        }
+        Err(error) => ffi_error_status(error_out, error),
+    }
+}
+
+/// Insert or replace one skill config value through the standard C ABI surface.
+/// 通过标准 C ABI 接口插入或替换单个技能配置值。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_set(
+    engine_id: u64,
+    skill_id: *const c_char,
+    key: *const c_char,
+    value: *const c_char,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    let skill_id = match parse_required_string(skill_id, "skill_id") {
+        Ok(skill_id) => skill_id,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    let key = match parse_required_string(key, "key") {
+        Ok(key) => key,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    let value = match parse_required_string_allow_empty(value, "value") {
+        Ok(value) => value,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match with_engine_mut(engine_id, |engine| {
+        engine.set_skill_config_value(&skill_id, &key, &value)
+    }) {
+        Ok(()) => ffi_ok_status(error_out),
+        Err(error) => ffi_error_status(error_out, error),
+    }
+}
+
+/// Delete one skill config key through the standard C ABI surface.
+/// 通过标准 C ABI 接口删除单个技能配置键。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_delete(
+    engine_id: u64,
+    skill_id: *const c_char,
+    key: *const c_char,
+    deleted_out: *mut u8,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    clear_out_u8(deleted_out);
+    if deleted_out.is_null() {
+        return ffi_error_status(error_out, "deleted_out must not be null");
+    }
+    let skill_id = match parse_required_string(skill_id, "skill_id") {
+        Ok(skill_id) => skill_id,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    let key = match parse_required_string(key, "key") {
+        Ok(key) => key,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match with_engine_mut(engine_id, |engine| {
+        engine.delete_skill_config_value(&skill_id, &key)
+    }) {
+        Ok(deleted) => {
+            unsafe { *deleted_out = u8::from(deleted) };
+            ffi_ok_status(error_out)
+        }
+        Err(error) => ffi_error_status(error_out, error),
+    }
+}
+
 /// Call one loaded skill entry through the standard C ABI surface.
 /// 通过标准 C ABI 接口调用单个已加载技能入口。
 #[unsafe(no_mangle)]
@@ -3274,6 +3439,7 @@ mod tests {
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
+            skill_config_file_path: ptr::null(),
             protected_skill_ids: ptr::null(),
             protected_skill_ids_len: 0,
             allow_network_download: 0,
@@ -3449,6 +3615,7 @@ mod tests {
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
+            skill_config_file_path: ptr::null(),
             protected_skill_ids: ptr::null(),
             protected_skill_ids_len: 0,
             allow_network_download: 0,
@@ -3607,6 +3774,7 @@ mod tests {
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
+            skill_config_file_path: ptr::null(),
             protected_skill_ids: ptr::null(),
             protected_skill_ids_len: 0,
             allow_network_download: 0,
@@ -3705,6 +3873,246 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_root);
     }
 
+    /// Verify the standard C ABI skill-config helpers support one full set/get/list/delete roundtrip.
+    /// 验证标准 C ABI 的技能配置辅助接口支持完整的 set/get/list/delete 往返流程。
+    #[test]
+    fn standard_ffi_skill_config_round_trip() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_luaskills_standard_ffi_skill_config_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+
+        std::fs::create_dir_all(temp_root.join("temp")).expect("create temp directory");
+        std::fs::create_dir_all(temp_root.join("resources")).expect("create resources directory");
+        std::fs::create_dir_all(temp_root.join("lua_packages"))
+            .expect("create lua_packages directory");
+        std::fs::create_dir_all(temp_root.join("bin").join("tools"))
+            .expect("create tools directory");
+        std::fs::create_dir_all(temp_root.join("libs")).expect("create libs directory");
+
+        let temp_dir_text =
+            CString::new(temp_root.join("temp").display().to_string()).expect("temp_dir cstring");
+        let resources_dir_text = CString::new(temp_root.join("resources").display().to_string())
+            .expect("resources_dir cstring");
+        let lua_packages_dir_text =
+            CString::new(temp_root.join("lua_packages").display().to_string())
+                .expect("lua_packages_dir cstring");
+        let tool_root_dir_text =
+            CString::new(temp_root.join("bin").join("tools").display().to_string())
+                .expect("tool_root_dir cstring");
+        let ffi_root_dir_text =
+            CString::new(temp_root.join("libs").display().to_string()).expect("ffi_root cstring");
+        let dependency_dir_name = CString::new("dependencies").expect("dependencies cstring");
+        let state_dir_name = CString::new("state").expect("state cstring");
+        let database_dir_name = CString::new("databases").expect("databases cstring");
+        let skill_config_file_path = CString::new(
+            temp_root
+                .join("config")
+                .join("skill_config.json")
+                .display()
+                .to_string(),
+        )
+        .expect("skill config file path cstring");
+        let skill_id = CString::new("demo-skill").expect("skill_id cstring");
+        let key = CString::new("api_token").expect("key cstring");
+        let value = CString::new("sk-standard-ffi").expect("value cstring");
+
+        let host_options = FfiLuaRuntimeHostOptions {
+            temp_dir: temp_dir_text.as_ptr(),
+            resources_dir: resources_dir_text.as_ptr(),
+            lua_packages_dir: lua_packages_dir_text.as_ptr(),
+            host_provided_tool_root: tool_root_dir_text.as_ptr(),
+            host_provided_lua_root: lua_packages_dir_text.as_ptr(),
+            host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            download_cache_root: ptr::null(),
+            dependency_dir_name: dependency_dir_name.as_ptr(),
+            state_dir_name: state_dir_name.as_ptr(),
+            database_dir_name: database_dir_name.as_ptr(),
+            skill_config_file_path: skill_config_file_path.as_ptr(),
+            protected_skill_ids: ptr::null(),
+            protected_skill_ids_len: 0,
+            allow_network_download: 0,
+            github_base_url: ptr::null(),
+            github_api_base_url: ptr::null(),
+            sqlite_library_path: ptr::null(),
+            sqlite_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            sqlite_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            lancedb_library_path: ptr::null(),
+            lancedb_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            lancedb_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            space_controller_endpoint: ptr::null(),
+            space_controller_auto_spawn: 0,
+            space_controller_executable_path: ptr::null(),
+            space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
+            cache_config: ptr::null(),
+            runlua_pool_config: ptr::null(),
+            reserved_entry_names: ptr::null(),
+            reserved_entry_names_len: 0,
+            ignored_skill_ids: ptr::null(),
+            ignored_skill_ids_len: 0,
+            enable_skill_management_bridge: 0,
+        };
+        let engine_options = FfiLuaEngineOptions {
+            pool: FfiLuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 30,
+            },
+            host: host_options,
+        };
+
+        let mut engine_id = 0_u64;
+        let mut error_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let engine_status = unsafe {
+            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
+        };
+        assert_eq!(engine_status, FFI_STATUS_OK);
+        assert!(error_out.ptr.is_null());
+
+        let mut set_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let set_status = unsafe {
+            vulcan_luaskills_ffi_skill_config_set(
+                engine_id,
+                skill_id.as_ptr(),
+                key.as_ptr(),
+                value.as_ptr(),
+                &mut set_error,
+            )
+        };
+        assert_eq!(set_status, FFI_STATUS_OK);
+        assert!(set_error.ptr.is_null());
+
+        let mut value_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut found_out = 0_u8;
+        let mut get_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let get_status = unsafe {
+            vulcan_luaskills_ffi_skill_config_get(
+                engine_id,
+                skill_id.as_ptr(),
+                key.as_ptr(),
+                &mut value_out,
+                &mut found_out,
+                &mut get_error,
+            )
+        };
+        assert_eq!(get_status, FFI_STATUS_OK);
+        assert!(get_error.ptr.is_null());
+        assert_eq!(found_out, 1);
+        assert_eq!(read_owned_buffer_text(&value_out), "sk-standard-ffi");
+        unsafe { vulcan_luaskills_ffi_buffer_free(value_out) };
+
+        let empty_value = CString::new("").expect("empty value cstring");
+        let mut empty_set_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let empty_set_status = unsafe {
+            vulcan_luaskills_ffi_skill_config_set(
+                engine_id,
+                skill_id.as_ptr(),
+                key.as_ptr(),
+                empty_value.as_ptr(),
+                &mut empty_set_error,
+            )
+        };
+        assert_eq!(empty_set_status, FFI_STATUS_OK);
+        assert!(empty_set_error.ptr.is_null());
+
+        let mut empty_value_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut empty_found_out = 0_u8;
+        let mut empty_get_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let empty_get_status = unsafe {
+            vulcan_luaskills_ffi_skill_config_get(
+                engine_id,
+                skill_id.as_ptr(),
+                key.as_ptr(),
+                &mut empty_value_out,
+                &mut empty_found_out,
+                &mut empty_get_error,
+            )
+        };
+        assert_eq!(empty_get_status, FFI_STATUS_OK);
+        assert!(empty_get_error.ptr.is_null());
+        assert_eq!(empty_found_out, 1);
+        assert_eq!(read_owned_buffer_text(&empty_value_out), "");
+        unsafe { vulcan_luaskills_ffi_buffer_free(empty_value_out) };
+
+        let mut list_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut list_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let list_status = unsafe {
+            vulcan_luaskills_ffi_skill_config_list(
+                engine_id,
+                skill_id.as_ptr(),
+                &mut list_out,
+                &mut list_error,
+            )
+        };
+        assert_eq!(list_status, FFI_STATUS_OK);
+        assert!(list_error.ptr.is_null());
+        let list_json: serde_json::Value = serde_json::from_str(&read_owned_buffer_text(&list_out))
+            .expect("skill config list json should parse");
+        assert_eq!(list_json.as_array().map(Vec::len), Some(1));
+        assert_eq!(list_json[0]["skill_id"], "demo-skill");
+        assert_eq!(list_json[0]["key"], "api_token");
+        assert_eq!(list_json[0]["value"], "");
+        unsafe { vulcan_luaskills_ffi_buffer_free(list_out) };
+
+        let mut deleted_out = 0_u8;
+        let mut delete_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let delete_status = unsafe {
+            vulcan_luaskills_ffi_skill_config_delete(
+                engine_id,
+                skill_id.as_ptr(),
+                key.as_ptr(),
+                &mut deleted_out,
+                &mut delete_error,
+            )
+        };
+        assert_eq!(delete_status, FFI_STATUS_OK);
+        assert!(delete_error.ptr.is_null());
+        assert_eq!(deleted_out, 1);
+
+        let mut free_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        assert_eq!(free_status, FFI_STATUS_OK);
+        assert!(free_error.ptr.is_null());
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
     /// Verify standard disable/enable lifecycle calls update the runtime view in place.
     /// 验证标准 disable/enable 生命周期调用会原地更新运行时视图。
     #[test]
@@ -3771,6 +4179,7 @@ mod tests {
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
+            skill_config_file_path: ptr::null(),
             protected_skill_ids: ptr::null(),
             protected_skill_ids_len: 0,
             allow_network_download: 0,

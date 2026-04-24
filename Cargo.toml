@@ -21,3 +21,6 @@ tar = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 vldb-controller-client = { git = "https://github.com/OpenVulcan/vldb-controller.git", tag = "v0.2.1", package = "vldb-controller-client" }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

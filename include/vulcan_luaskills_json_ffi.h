@@ -158,6 +158,30 @@ Resolve the owning skill id of one canonical tool name.
 FfiOwnedBuffer vulcan_luaskills_ffi_skill_name_for_tool_json(FfiBorrowedBuffer input_json);
 
 /*
+List flattened skill config records as JSON.
+以 JSON 形式列出扁平化技能配置记录。
+*/
+FfiOwnedBuffer vulcan_luaskills_ffi_skill_config_list_json(FfiBorrowedBuffer input_json);
+
+/*
+Read one optional skill config value as JSON.
+以 JSON 形式读取单个可选技能配置值。
+*/
+FfiOwnedBuffer vulcan_luaskills_ffi_skill_config_get_json(FfiBorrowedBuffer input_json);
+
+/*
+Insert or replace one skill config value as JSON.
+以 JSON 形式插入或替换单个技能配置值。
+*/
+FfiOwnedBuffer vulcan_luaskills_ffi_skill_config_set_json(FfiBorrowedBuffer input_json);
+
+/*
+Delete one skill config key as JSON.
+以 JSON 形式删除单个技能配置键。
+*/
+FfiOwnedBuffer vulcan_luaskills_ffi_skill_config_delete_json(FfiBorrowedBuffer input_json);
+
+/*
 Call one loaded skill entry using one JSON request.
 使用一段 JSON 请求调用单个已加载技能入口。
 */

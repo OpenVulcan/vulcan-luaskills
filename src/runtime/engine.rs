@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
@@ -20,6 +20,7 @@ use crate::host::callbacks::{
 use crate::host::database::RuntimeDatabaseProviderCallbacks;
 use crate::lancedb_host::{LanceDbSkillBinding, LanceDbSkillHost, disabled_skill_status_json};
 use crate::lua_skill::{SkillMeta, validate_luaskills_identifier, validate_luaskills_version};
+use crate::runtime::config::{SkillConfigEntry, SkillConfigStore};
 use crate::runtime_context::{RuntimeClientInfo, RuntimeRequestContext};
 use crate::runtime_help::{
     RuntimeHelpDetail, RuntimeHelpNodeDescriptor, RuntimeSkillHelpDescriptor,
@@ -81,6 +82,42 @@ fn render_host_visible_path(path: &Path) -> String {
 /// 为面向用户的运行时日志渲染文件系统路径，并去掉 Windows verbatim 前缀。
 fn render_log_friendly_path(path: &Path) -> String {
     render_host_visible_path(path)
+}
+
+/// Normalize one runtime-root path with stable lexical component folding.
+/// 使用稳定的词法组件折叠规则规范化单个运行时根目录路径。
+fn normalize_runtime_root_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    let mut can_pop_normal = false;
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => {
+                normalized.push(prefix.as_os_str());
+                can_pop_normal = false;
+            }
+            Component::RootDir => {
+                normalized.push(component.as_os_str());
+                can_pop_normal = false;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if can_pop_normal && normalized.pop() {
+                    can_pop_normal = !matches!(
+                        normalized.components().next_back(),
+                        Some(Component::Prefix(_)) | Some(Component::RootDir) | None
+                    );
+                } else if !path.is_absolute() {
+                    normalized.push(component.as_os_str());
+                    can_pop_normal = false;
+                }
+            }
+            Component::Normal(part) => {
+                normalized.push(part);
+                can_pop_normal = true;
+            }
+        }
+    }
+    normalized
 }
 
 /// Pool sizing configuration for Lua virtual machines.
@@ -154,6 +191,7 @@ pub struct LuaEngine {
     entry_registry: BTreeMap<String, ResolvedEntryTarget>,
     pool: Arc<LuaVmPool>,
     runlua_pool: Arc<LuaVmPool>,
+    skill_config_store: Arc<SkillConfigStore>,
     lancedb_host: Option<Arc<LanceDbSkillHost>>,
     sqlite_host: Option<Arc<SqliteSkillHost>>,
     database_provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
@@ -1218,6 +1256,21 @@ fn populate_vulcan_internal_execution_context(
     Ok(())
 }
 
+/// Resolve the active skill identifier currently stored in the internal `vulcan` execution context.
+/// 解析当前存储在内部 `vulcan` 执行上下文中的活动技能标识符。
+fn current_vulcan_config_skill_id(lua: &Lua, api_name: &str) -> Result<String, mlua::Error> {
+    let internal = get_vulcan_runtime_internal_table(lua)
+        .map_err(|error| mlua::Error::runtime(format!("{}: {}", api_name, error)))?;
+    let skill_name: Option<String> = internal
+        .get("skill_name")
+        .map_err(|error| mlua::Error::runtime(format!("{}: {}", api_name, error)))?;
+    skill_name
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            mlua::Error::runtime(format!("{} requires one active skill context", api_name))
+        })
+}
+
 /// Return whether one help payload should be executed as Lua instead of read as plain text.
 /// 判断某个帮助载荷是否应按 Lua 执行，而不是按纯文本读取。
 fn is_lua_help_file(relative_path: &str) -> bool {
@@ -1993,6 +2046,28 @@ impl LuaEngine {
             .ok_or_else(|| "at least one skill root is required".to_string())
     }
 
+    /// Resolve the canonical runtime root used by the unified skill-config file.
+    /// 解析统一技能配置文件所使用的规范运行时根目录。
+    fn canonical_skill_config_runtime_root(
+        &self,
+        skill_roots: &[RuntimeSkillRoot],
+    ) -> Result<PathBuf, String> {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        for skill_root in skill_roots {
+            let candidate = normalize_runtime_root_path(&self.runtime_root_for(skill_root));
+            if !candidates.iter().any(|existing| existing == &candidate) {
+                candidates.push(candidate);
+            }
+        }
+        match candidates.len() {
+            0 => Err("at least one skill root is required to resolve the unified skill config path".to_string()),
+            1 => Ok(candidates.remove(0)),
+            _ => Err(
+                "multiple runtime roots map to different parents; set host_options.skill_config_file_path explicitly".to_string()
+            ),
+        }
+    }
+
     /// Create a new LuaEngine with LuaJIT VM and registered globals.
     pub fn new(options: LuaEngineOptions) -> Result<Self, Box<dyn std::error::Error>> {
         let runlua_pool_config = options
@@ -2020,6 +2095,10 @@ impl LuaEngine {
             entry_registry: BTreeMap::new(),
             pool: Arc::new(LuaVmPool::new(options.pool_config)),
             runlua_pool: Arc::new(LuaVmPool::new(runlua_pool_config)),
+            skill_config_store: Arc::new(
+                SkillConfigStore::new(options.host_options.skill_config_file_path.clone())
+                    .map_err(std::io::Error::other)?,
+            ),
             lancedb_host: None,
             sqlite_host: None,
             database_provider_callbacks,
@@ -2027,26 +2106,28 @@ impl LuaEngine {
         })
     }
 
-    /// Build the sibling state root for one named skill root.
-    /// 为单个命名技能根构造同级状态根目录。
-    fn state_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
-        let parent = skill_root
+    /// Build the shared runtime root used by host-managed sibling directories.
+    /// 构造宿主管理同级目录所使用的共享运行时根目录。
+    fn runtime_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
+        skill_root
             .skills_dir
             .parent()
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| skill_root.skills_dir.clone());
-        parent.join(self.host_options.state_dir_name.as_str())
+            .unwrap_or_else(|| skill_root.skills_dir.clone())
+    }
+
+    /// Build the sibling state root for one named skill root.
+    /// 为单个命名技能根构造同级状态根目录。
+    fn state_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
+        self.runtime_root_for(skill_root)
+            .join(self.host_options.state_dir_name.as_str())
     }
 
     /// Build the sibling dependency root for one named skill root.
     /// 为单个命名技能根构造同级依赖根目录。
     fn dependency_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
-        let parent = skill_root
-            .skills_dir
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| skill_root.skills_dir.clone());
-        parent.join(self.host_options.dependency_dir_name.as_str())
+        self.runtime_root_for(skill_root)
+            .join(self.host_options.dependency_dir_name.as_str())
     }
 
     /// Return whether the host policy forces one skill identifier to be ignored.
@@ -2061,12 +2142,22 @@ impl LuaEngine {
     /// Build the sibling database root for one named skill root.
     /// 为单个命名技能根构造同级数据库根目录。
     fn database_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
-        let parent = skill_root
-            .skills_dir
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| skill_root.skills_dir.clone());
-        parent.join(self.host_options.database_dir_name.as_str())
+        self.runtime_root_for(skill_root)
+            .join(self.host_options.database_dir_name.as_str())
+    }
+
+    /// Capture the shared runtime root used by the unified skill config file.
+    /// 记录统一技能配置文件所使用的共享运行时根目录。
+    fn refresh_skill_config_runtime_root(
+        &self,
+        skill_roots: &[RuntimeSkillRoot],
+    ) -> Result<(), String> {
+        if self.skill_config_store.has_explicit_file_path() {
+            return Ok(());
+        }
+        let runtime_root = self.canonical_skill_config_runtime_root(skill_roots)?;
+        self.skill_config_store
+            .set_default_runtime_root(&runtime_root)
     }
 
     /// Build the dependency-manager configuration for one named skill root.
@@ -2351,6 +2442,10 @@ impl LuaEngine {
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if !skill_roots.is_empty() {
+            self.refresh_skill_config_runtime_root(skill_roots)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        }
         if skill_roots.iter().all(|root| !root.skills_dir.exists()) {
             return Ok(());
         }
@@ -2411,6 +2506,7 @@ impl LuaEngine {
                     &self.skills,
                     &self.entry_registry,
                     self.host_options.clone(),
+                    self.skill_config_store.clone(),
                     self.lancedb_host.clone(),
                     self.sqlite_host.clone(),
                 )
@@ -3437,12 +3533,17 @@ impl LuaEngine {
         let lua = unsafe { Lua::unsafe_new() };
         Self::setup_package_paths(&lua, self.host_options.as_ref())
             .map_err(|error| error.to_string())?;
-        Self::register_vulcan_module(&lua, self.host_options.as_ref())
-            .map_err(|error| error.to_string())?;
+        Self::register_vulcan_module(
+            &lua,
+            self.host_options.as_ref(),
+            self.skill_config_store.clone(),
+        )
+        .map_err(|error| error.to_string())?;
         Self::populate_vulcan_luaexec_bridge(
             &lua,
             self.host_options.clone(),
             self.runlua_pool.clone(),
+            self.skill_config_store.clone(),
             skills.clone(),
             entry_registry.clone(),
             self.lancedb_host.clone(),
@@ -3475,13 +3576,14 @@ impl LuaEngine {
         skills: &HashMap<String, LoadedSkill>,
         entry_registry: &BTreeMap<String, ResolvedEntryTarget>,
         host_options: Arc<LuaRuntimeHostOptions>,
+        skill_config_store: Arc<SkillConfigStore>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
         sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<LuaVm, String> {
         let lua = unsafe { Lua::unsafe_new() };
         Self::setup_package_paths(&lua, host_options.as_ref())
             .map_err(|error| error.to_string())?;
-        Self::register_vulcan_module(&lua, host_options.as_ref())
+        Self::register_vulcan_module(&lua, host_options.as_ref(), skill_config_store)
             .map_err(|error| error.to_string())?;
         Self::register_skill_functions(&lua, skills)?;
         Self::populate_vulcan_call_for_lua(
@@ -3504,6 +3606,7 @@ impl LuaEngine {
         lua: &Lua,
         host_options: Arc<LuaRuntimeHostOptions>,
         runlua_pool: Arc<LuaVmPool>,
+        skill_config_store: Arc<SkillConfigStore>,
         skills: Arc<HashMap<String, LoadedSkill>>,
         entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
@@ -3533,6 +3636,7 @@ impl LuaEngine {
                     skills.clone(),
                     entry_registry.clone(),
                     host_options.clone(),
+                    skill_config_store.clone(),
                     lancedb_host.clone(),
                     sqlite_host.clone(),
                 )
@@ -3783,6 +3887,42 @@ impl LuaEngine {
         self.entry_registry
             .get(tool_name)
             .map(|target| target.skill_id.clone())
+    }
+
+    /// List flattened skill config records for one optional skill namespace.
+    /// 列出某个可选技能命名空间下的扁平化技能配置记录。
+    pub fn list_skill_config_entries(
+        &self,
+        skill_id: Option<&str>,
+    ) -> Result<Vec<SkillConfigEntry>, String> {
+        self.skill_config_store.list_entries(skill_id)
+    }
+
+    /// Read one optional string config value for one `(skill_id, key)` pair.
+    /// 读取某个 `(skill_id, key)` 对下的可选字符串配置值。
+    pub fn get_skill_config_value(
+        &self,
+        skill_id: &str,
+        key: &str,
+    ) -> Result<Option<String>, String> {
+        self.skill_config_store.get_value(skill_id, key)
+    }
+
+    /// Insert or replace one string config value for one `(skill_id, key)` pair.
+    /// 为某个 `(skill_id, key)` 对插入或替换一个字符串配置值。
+    pub fn set_skill_config_value(
+        &mut self,
+        skill_id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        self.skill_config_store.set_value(skill_id, key, value)
+    }
+
+    /// Delete one config key from one skill namespace and report whether one value was removed.
+    /// 从某个技能命名空间删除单个配置键，并返回是否移除了一个值。
+    pub fn delete_skill_config_value(&mut self, skill_id: &str, key: &str) -> Result<bool, String> {
+        self.skill_config_store.delete_value(skill_id, key)
     }
 
     /// Populate per-request context into the `vulcan` module.
@@ -4738,6 +4878,7 @@ impl LuaEngine {
         skills: Arc<HashMap<String, LoadedSkill>>,
         entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
         host_options: Arc<LuaRuntimeHostOptions>,
+        skill_config_store: Arc<SkillConfigStore>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
         sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<LuaVmLease, String> {
@@ -4746,6 +4887,7 @@ impl LuaEngine {
                 skills.as_ref(),
                 entry_registry.as_ref(),
                 host_options.clone(),
+                skill_config_store.clone(),
                 lancedb_host.clone(),
                 sqlite_host.clone(),
             )
@@ -4760,6 +4902,7 @@ impl LuaEngine {
         skills: Arc<HashMap<String, LoadedSkill>>,
         entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
         host_options: Arc<LuaRuntimeHostOptions>,
+        skill_config_store: Arc<SkillConfigStore>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
         sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<String, String> {
@@ -4772,6 +4915,7 @@ impl LuaEngine {
             skills,
             entry_registry,
             host_options.clone(),
+            skill_config_store,
             lancedb_host,
             sqlite_host,
         )?;
@@ -4855,6 +4999,7 @@ impl LuaEngine {
             Arc::new(self.skills.clone()),
             Arc::new(self.entry_registry.clone()),
             self.host_options.clone(),
+            self.skill_config_store.clone(),
             self.lancedb_host.clone(),
             self.sqlite_host.clone(),
         )
@@ -5561,6 +5706,7 @@ end
     fn register_vulcan_module(
         lua: &Lua,
         host_options: &LuaRuntimeHostOptions,
+        skill_config_store: Arc<SkillConfigStore>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let vulcan = lua.create_table()?;
         let runtime = lua.create_table()?;
@@ -5573,6 +5719,7 @@ end
         let os = lua.create_table()?;
         let json = lua.create_table()?;
         let cache = lua.create_table()?;
+        let config = lua.create_table()?;
         let context = lua.create_table()?;
         let deps = lua.create_table()?;
 
@@ -5783,6 +5930,74 @@ end
         })?;
         cache.set("delete", cache_delete_fn)?;
 
+        let config_get_store = skill_config_store.clone();
+        let config_get_fn = lua.create_function(move |lua, key: LuaValue| {
+            let key = require_string_arg(key, "config.get", "key", false)?;
+            let skill_id = current_vulcan_config_skill_id(lua, "vulcan.config.get")?;
+            match config_get_store
+                .get_value(&skill_id, &key)
+                .map_err(mlua::Error::runtime)?
+            {
+                Some(value) => Ok(LuaValue::String(
+                    lua.create_string(&value).map_err(mlua::Error::runtime)?,
+                )),
+                None => Ok(LuaValue::Nil),
+            }
+        })?;
+        config.set("get", config_get_fn)?;
+
+        let config_has_store = skill_config_store.clone();
+        let config_has_fn = lua.create_function(move |lua, key: LuaValue| {
+            let key = require_string_arg(key, "config.has", "key", false)?;
+            let skill_id = current_vulcan_config_skill_id(lua, "vulcan.config.has")?;
+            config_has_store
+                .has_value(&skill_id, &key)
+                .map_err(mlua::Error::runtime)
+        })?;
+        config.set("has", config_has_fn)?;
+
+        let config_set_store = skill_config_store.clone();
+        let config_set_fn =
+            lua.create_function(move |lua, (key, value): (LuaValue, LuaValue)| {
+                let key = require_string_arg(key, "config.set", "key", false)?;
+                let value = require_string_arg(value, "config.set", "value", true)?;
+                let skill_id = current_vulcan_config_skill_id(lua, "vulcan.config.set")?;
+                config_set_store
+                    .set_value(&skill_id, &key, &value)
+                    .map_err(mlua::Error::runtime)?;
+                Ok(true)
+            })?;
+        config.set("set", config_set_fn)?;
+
+        let config_delete_store = skill_config_store.clone();
+        let config_delete_fn = lua.create_function(move |lua, key: LuaValue| {
+            let key = require_string_arg(key, "config.delete", "key", false)?;
+            let skill_id = current_vulcan_config_skill_id(lua, "vulcan.config.delete")?;
+            config_delete_store
+                .delete_value(&skill_id, &key)
+                .map_err(mlua::Error::runtime)
+        })?;
+        config.set("delete", config_delete_fn)?;
+
+        let config_list_store = skill_config_store.clone();
+        let config_list_fn = lua.create_function(move |lua, ()| {
+            let skill_id = current_vulcan_config_skill_id(lua, "vulcan.config.list")?;
+            let items = config_list_store
+                .list_skill_values(&skill_id)
+                .map_err(mlua::Error::runtime)?;
+            let table = lua.create_table().map_err(mlua::Error::runtime)?;
+            for (key, value) in items {
+                table
+                    .set(
+                        key,
+                        LuaValue::String(lua.create_string(&value).map_err(mlua::Error::runtime)?),
+                    )
+                    .map_err(mlua::Error::runtime)?;
+            }
+            Ok(LuaValue::Table(table))
+        })?;
+        config.set("list", config_list_fn)?;
+
         context.set("request", lua.create_table()?)?;
         context.set("client_info", LuaValue::Nil)?;
         context.set("client_capabilities", lua.create_table()?)?;
@@ -5886,6 +6101,7 @@ end
         vulcan.set("os", os)?;
         vulcan.set("json", json)?;
         vulcan.set("cache", cache)?;
+        vulcan.set("config", config)?;
         vulcan.set("context", context)?;
         vulcan.set("deps", deps)?;
 
@@ -5998,10 +6214,11 @@ fn lua_table_to_object(t: &Table) -> Result<Value, String> {
 mod tests {
     use super::{
         LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState, LuaVmRequestScopeGuard,
-        VulcanInternalExecutionContext, default_runlua_vm_pool_config, get_vulcan_context_table,
-        get_vulcan_deps_table, get_vulcan_runtime_internal_table, get_vulcan_table,
-        json_to_lua_table, normalize_host_visible_path_text, populate_vulcan_dependency_context,
-        populate_vulcan_file_context, populate_vulcan_internal_execution_context,
+        SkillConfigStore, VulcanInternalExecutionContext, default_runlua_vm_pool_config,
+        get_vulcan_context_table, get_vulcan_deps_table, get_vulcan_runtime_internal_table,
+        get_vulcan_table, json_to_lua_table, normalize_host_visible_path_text,
+        populate_vulcan_dependency_context, populate_vulcan_file_context,
+        populate_vulcan_internal_execution_context,
     };
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
     use crate::lua_skill::SkillMeta;
@@ -6077,6 +6294,9 @@ mod tests {
                 condvar: Condvar::new(),
             }),
             runlua_pool: Arc::new(LuaVmPool::new(default_runlua_vm_pool_config())),
+            skill_config_store: Arc::new(
+                SkillConfigStore::new(None).expect("create runtime test skill config store"),
+            ),
             lancedb_host: None,
             sqlite_host: None,
             database_provider_callbacks: Arc::new(RuntimeDatabaseProviderCallbacks::default()),
@@ -6096,6 +6316,53 @@ mod tests {
             },
         })
         .expect("create runtime test engine")
+    }
+
+    /// Build one temporary runtime root path for one isolated skill-config test case.
+    /// 为单个隔离技能配置测试用例构造一条临时运行时根目录路径。
+    fn make_temp_runtime_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "vulcan_luaskills_{}_{}_{}",
+            label,
+            std::process::id(),
+            label.len()
+        ))
+    }
+
+    /// Create one minimal runtime directory layout used by skill-config tests.
+    /// 创建技能配置测试使用的最小运行时目录结构。
+    fn create_runtime_test_layout(runtime_root: &Path) {
+        for relative_path in [
+            "skills",
+            "temp",
+            "resources",
+            "lua_packages",
+            "bin/tools",
+            "libs",
+        ] {
+            fs::create_dir_all(runtime_root.join(relative_path))
+                .expect("create runtime test layout path");
+        }
+    }
+
+    /// Write one minimal skill fixture that reads one value from `vulcan.config`.
+    /// 写入一个最小技能夹具，用于从 `vulcan.config` 读取单个值。
+    fn write_skill_config_test_skill(runtime_root: &Path, skill_id: &str) -> PathBuf {
+        let skill_dir = runtime_root.join("skills").join(skill_id);
+        fs::create_dir_all(skill_dir.join("runtime")).expect("create config test runtime dir");
+        fs::write(
+            skill_dir.join("skill.yaml"),
+            format!(
+                "name: {skill_id}\nversion: 0.1.0\nenable: true\ndebug: false\nentries:\n  - name: ping\n    description: Config ping entry.\n    lua_entry: runtime/ping.lua\n    lua_module: {skill_id}.ping\n"
+            ),
+        )
+        .expect("write config test skill yaml");
+        fs::write(
+            skill_dir.join("runtime").join("ping.lua"),
+            "return function(args)\n  local value = vulcan.config.get(\"api_token\")\n  if value == nil then\n    return \"missing\"\n  end\n  return value\nend\n",
+        )
+        .expect("write config test runtime entry");
+        skill_dir
     }
 
     /// Verify the isolated runlua pool uses the documented default sizing when the host does not override it.
@@ -6130,6 +6397,398 @@ mod tests {
         assert_eq!(engine.runlua_pool.config.min_size, 2);
         assert_eq!(engine.runlua_pool.config.max_size, 5);
         assert_eq!(engine.runlua_pool.config.idle_ttl_secs, 90);
+    }
+
+    /// Verify the engine host API persists string skill config values into one explicit config file.
+    /// 验证引擎宿主 API 会把字符串技能配置值持久化到显式配置文件中。
+    #[test]
+    fn skill_config_engine_api_persists_values_into_explicit_file() {
+        let runtime_root = make_temp_runtime_root("skill_config_explicit_path");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+        let config_file = runtime_root.join("custom").join("skill_config.json");
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.skill_config_file_path = Some(config_file.clone());
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options,
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create skill config test engine");
+
+        engine
+            .set_skill_config_value("demo-skill", "api_token", "sk-explicit")
+            .expect("set explicit skill config");
+        assert_eq!(
+            engine
+                .get_skill_config_value("demo-skill", "api_token")
+                .expect("read explicit skill config"),
+            Some("sk-explicit".to_string())
+        );
+        let entries = engine
+            .list_skill_config_entries(Some("demo-skill"))
+            .expect("list explicit skill config");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].skill_id, "demo-skill");
+        assert_eq!(entries[0].key, "api_token");
+        assert_eq!(entries[0].value, "sk-explicit");
+        assert!(config_file.exists());
+
+        let deleted = engine
+            .delete_skill_config_value("demo-skill", "api_token")
+            .expect("delete explicit skill config");
+        assert!(deleted);
+        assert_eq!(
+            engine
+                .get_skill_config_value("demo-skill", "api_token")
+                .expect("read deleted explicit skill config"),
+            None
+        );
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify the unified skill config store falls back to `<runtime_root>/config/skill_config.json` after roots load.
+    /// 验证统一技能配置存储会在加载根目录后回退到 `<runtime_root>/config/skill_config.json`。
+    #[test]
+    fn skill_config_store_uses_default_runtime_config_file_after_load() {
+        let runtime_root = make_temp_runtime_root("skill_config_default_path");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create default skill config test engine");
+
+        engine
+            .load_from_roots(&[crate::host::options::RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("skills"),
+            }])
+            .expect("load empty roots for default skill config path");
+
+        let expected_path = runtime_root.join("config").join("skill_config.json");
+        assert_eq!(
+            engine
+                .skill_config_store
+                .file_path()
+                .expect("resolve default skill config file path"),
+            expected_path
+        );
+
+        engine
+            .set_skill_config_value("demo-skill", "endpoint", "https://example.test")
+            .expect("write default skill config");
+        assert!(expected_path.exists());
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify the unified skill config store resolves the default config path even before the skills directory exists.
+    /// 验证统一技能配置存储会在技能目录尚未创建前解析默认配置路径。
+    #[test]
+    fn skill_config_store_initializes_default_path_before_skills_dir_exists() {
+        let runtime_root = make_temp_runtime_root("skill_config_without_skills_dir");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        fs::create_dir_all(&runtime_root).expect("create runtime root without skills dir");
+
+        let missing_skills_dir = runtime_root.join("skills");
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create config path initialization test engine");
+
+        engine
+            .load_from_roots(&[crate::host::options::RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: missing_skills_dir,
+            }])
+            .expect("load roots without an existing skills directory");
+
+        let expected_path = runtime_root.join("config").join("skill_config.json");
+        assert_eq!(
+            engine
+                .skill_config_store
+                .file_path()
+                .expect("resolve config path without skills directory"),
+            expected_path
+        );
+
+        engine
+            .set_skill_config_value("demo-skill", "api_token", "sk-before-install")
+            .expect("write config before any skills directory exists");
+        assert!(expected_path.exists());
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify reloading a different runtime root updates the default unified skill-config path.
+    /// 验证重新加载另一套运行时根目录时会同步更新默认统一技能配置路径。
+    #[test]
+    fn reload_from_roots_updates_default_skill_config_path() {
+        let first_runtime_root = make_temp_runtime_root("skill_config_reload_first");
+        let second_runtime_root = make_temp_runtime_root("skill_config_reload_second");
+        if first_runtime_root.exists() {
+            let _ = fs::remove_dir_all(&first_runtime_root);
+        }
+        if second_runtime_root.exists() {
+            let _ = fs::remove_dir_all(&second_runtime_root);
+        }
+        create_runtime_test_layout(&first_runtime_root);
+        create_runtime_test_layout(&second_runtime_root);
+
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create reload skill config test engine");
+
+        engine
+            .load_from_roots(&[crate::host::options::RuntimeSkillRoot {
+                name: "ROOT_FIRST".to_string(),
+                skills_dir: first_runtime_root.join("skills"),
+            }])
+            .expect("load first runtime root");
+        assert_eq!(
+            engine
+                .skill_config_store
+                .file_path()
+                .expect("resolve first config path"),
+            first_runtime_root.join("config").join("skill_config.json")
+        );
+
+        engine
+            .reload_from_roots(&[crate::host::options::RuntimeSkillRoot {
+                name: "ROOT_SECOND".to_string(),
+                skills_dir: second_runtime_root.join("skills"),
+            }])
+            .expect("reload second runtime root");
+        assert_eq!(
+            engine
+                .skill_config_store
+                .file_path()
+                .expect("resolve second config path"),
+            second_runtime_root.join("config").join("skill_config.json")
+        );
+
+        let _ = fs::remove_dir_all(&first_runtime_root);
+        let _ = fs::remove_dir_all(&second_runtime_root);
+    }
+
+    /// Verify explicit unified config file paths bypass ambiguous runtime-root inference.
+    /// 验证显式统一配置文件路径会绕过歧义运行时根目录推导。
+    #[test]
+    fn load_from_roots_accepts_explicit_skill_config_path_for_ambiguous_runtime_roots() {
+        let first_runtime_root = make_temp_runtime_root("skill_config_explicit_ambiguous_first");
+        let second_runtime_root = make_temp_runtime_root("skill_config_explicit_ambiguous_second");
+        if first_runtime_root.exists() {
+            let _ = fs::remove_dir_all(&first_runtime_root);
+        }
+        if second_runtime_root.exists() {
+            let _ = fs::remove_dir_all(&second_runtime_root);
+        }
+        fs::create_dir_all(&first_runtime_root)
+            .expect("create first explicit ambiguous runtime root");
+        fs::create_dir_all(&second_runtime_root)
+            .expect("create second explicit ambiguous runtime root");
+        let explicit_config_file = first_runtime_root.join("custom").join("skill_config.json");
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.skill_config_file_path = Some(explicit_config_file.clone());
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options,
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create explicit ambiguous root test engine");
+
+        engine
+            .load_from_roots(&[
+                crate::host::options::RuntimeSkillRoot {
+                    name: "ROOT_A".to_string(),
+                    skills_dir: first_runtime_root.join("skills"),
+                },
+                crate::host::options::RuntimeSkillRoot {
+                    name: "ROOT_B".to_string(),
+                    skills_dir: second_runtime_root.join("skills"),
+                },
+            ])
+            .expect("explicit config path should bypass ambiguous runtime roots");
+
+        assert_eq!(
+            engine
+                .skill_config_store
+                .file_path()
+                .expect("resolve explicit config path"),
+            explicit_config_file
+        );
+
+        let _ = fs::remove_dir_all(&first_runtime_root);
+        let _ = fs::remove_dir_all(&second_runtime_root);
+    }
+
+    /// Verify divergent runtime roots require one explicit unified skill config file path.
+    /// 验证运行时根目录分叉时必须显式提供统一技能配置文件路径。
+    #[test]
+    fn load_from_roots_rejects_ambiguous_default_skill_config_runtime_root() {
+        let first_runtime_root = make_temp_runtime_root("skill_config_ambiguous_first");
+        let second_runtime_root = make_temp_runtime_root("skill_config_ambiguous_second");
+        if first_runtime_root.exists() {
+            let _ = fs::remove_dir_all(&first_runtime_root);
+        }
+        if second_runtime_root.exists() {
+            let _ = fs::remove_dir_all(&second_runtime_root);
+        }
+        fs::create_dir_all(&first_runtime_root).expect("create first ambiguous runtime root");
+        fs::create_dir_all(&second_runtime_root).expect("create second ambiguous runtime root");
+
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create ambiguous root test engine");
+
+        let error = engine
+            .load_from_roots(&[
+                crate::host::options::RuntimeSkillRoot {
+                    name: "ROOT_A".to_string(),
+                    skills_dir: first_runtime_root.join("skills"),
+                },
+                crate::host::options::RuntimeSkillRoot {
+                    name: "ROOT_B".to_string(),
+                    skills_dir: second_runtime_root.join("skills"),
+                },
+            ])
+            .expect_err("ambiguous runtime roots should require an explicit config file path");
+        assert!(
+            error
+                .to_string()
+                .contains("set host_options.skill_config_file_path explicitly"),
+            "unexpected ambiguous root error: {error}"
+        );
+
+        let _ = fs::remove_dir_all(&first_runtime_root);
+        let _ = fs::remove_dir_all(&second_runtime_root);
+    }
+
+    /// Verify lexically equivalent runtime roots do not get misclassified as ambiguous.
+    /// 验证词法等价的运行时根目录不会被误判为歧义根目录。
+    #[test]
+    fn canonical_skill_config_runtime_root_normalizes_equivalent_runtime_roots() {
+        let runtime_root = make_temp_runtime_root("skill_config_equivalent_runtime_root");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+
+        let engine = LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create equivalent runtime root test engine");
+
+        let equivalent_root = runtime_root.join("nested").join("..").join("skills");
+        let resolved_runtime_root = engine
+            .canonical_skill_config_runtime_root(&[
+                crate::host::options::RuntimeSkillRoot {
+                    name: "ROOT_CANONICAL".to_string(),
+                    skills_dir: runtime_root.join("skills"),
+                },
+                crate::host::options::RuntimeSkillRoot {
+                    name: "ROOT_EQUIVALENT".to_string(),
+                    skills_dir: equivalent_root,
+                },
+            ])
+            .expect("equivalent runtime roots should resolve to one canonical root");
+
+        assert_eq!(resolved_runtime_root, runtime_root);
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify one loaded skill can read its own namespaced config through `vulcan.config.get`.
+    /// 验证单个已加载技能可以通过 `vulcan.config.get` 读取自己的命名空间配置。
+    #[test]
+    fn call_skill_reads_own_skill_config_namespace() {
+        let runtime_root = make_temp_runtime_root("skill_config_call_skill");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+        write_skill_config_test_skill(&runtime_root, "demo-skill");
+
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options: LuaRuntimeHostOptions::default(),
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create call_skill config test engine");
+        engine
+            .load_from_roots(&[crate::host::options::RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("skills"),
+            }])
+            .expect("load config test skill");
+        engine
+            .set_skill_config_value("demo-skill", "api_token", "sk-from-config")
+            .expect("seed skill config value");
+
+        let result = engine
+            .call_skill("demo-skill-ping", &json!({}), None)
+            .expect("call skill with config");
+        assert_eq!(result.content, "sk-from-config");
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify `vulcan.config.*` rejects calls that execute without one active skill context.
+    /// 验证 `vulcan.config.*` 会拒绝在没有活动技能上下文时执行的调用。
+    #[test]
+    fn run_lua_config_api_requires_active_skill_context() {
+        let engine = make_runtime_test_engine();
+        let error = engine
+            .run_lua("return vulcan.config.get('api_token')", &json!({}), None)
+            .expect_err("run_lua config access should require active skill context");
+        assert!(error.contains("vulcan.config.get requires one active skill context"));
     }
 
     /// Assert that one pooled Lua VM has returned to the neutral request baseline.

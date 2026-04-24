@@ -627,6 +627,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `runlua_pool_config`
 - `reserved_entry_names`
 - `ignored_skill_ids`
+- `skill_config_file_path`
 - `enable_skill_management_bridge`
 
 数据库后端模式规则如下：
@@ -667,6 +668,21 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 该字段适合宿主已经用原生、gRPC、VMM 或其他实现替代某个默认 skill 包时使用
 - 这不是 skill 自声明的 capability 判定，也不会自动推断宿主已有能力
 
+统一 skill 配置路径规则：
+
+- `skill_config_file_path`
+  - 显式指定统一主配置文件路径
+- 一旦显式指定：
+  - 将完全跳过默认 `runtime_root` 推导
+  - 会在引擎创建时固定成绝对路径，不会随进程 `cwd` 漂移
+- 未配置时默认使用：
+  - `<runtime_root>/config/skill_config.json`
+- 即使 `skills/` 目录尚未创建，也会优先解析这条默认配置路径
+- 如果同时传入多个 skill root，且它们映射到不同的 `runtime_root`，则必须显式传入 `skill_config_file_path`
+- 当前整个运行时只维护一个主配置文件
+- 文件内部按 `skill_id` 分组存储字符串配置值
+- 这不是按 skill root 分片的配置模型
+
 隔离 `runlua` 专用池规则：
 
 - `runlua_pool_config` 只作用于 `vulcan.runtime.lua.exec` 这条隔离执行链
@@ -677,6 +693,28 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 该配置不会改变普通 skill VM 池，也不会改变标准 `call_skill / run_lua` 主池配置
 - 当宿主预期会高频调用 `vulcan.runtime.lua.exec` 时，建议显式配置该字段，而不是误调普通 `pool`
 - 当前 `vulcan.runtime.lua.exec` 统一在当前进程内执行，不再支持单独配置外部 `luaexec` 执行器路径
+
+宿主配置管理建议：
+
+- 当前库已经提供 Rust API、标准 C ABI 与公共 `_json` FFI 的跨 skill 配置管理入口
+- 更推荐宿主把它们包装成一个统一工具，而不是暴露多个分散接口
+- 推荐工具签名：
+
+```text
+runtime-config(action, skill_id?, key?, value?)
+```
+
+推荐动作：
+
+- `list`
+- `get`
+- `set`
+- `delete`
+
+也就是说：
+
+- Lua / skill 作者使用 `vulcan.config.*`
+- 宿主与 AI 使用一个统一的 `runtime-config` 工具
 
 ### 8.4 `FfiLuaEngineOptions`
 
@@ -869,6 +907,22 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `vulcan_luaskills_ffi_update_skill_json`
 - `vulcan_luaskills_ffi_system_update_skill_json`
 
+### 9.6 Skill 配置接口
+
+标准 C ABI 接口：
+
+- `vulcan_luaskills_ffi_skill_config_list`
+- `vulcan_luaskills_ffi_skill_config_get`
+- `vulcan_luaskills_ffi_skill_config_set`
+- `vulcan_luaskills_ffi_skill_config_delete`
+
+公共 `_json` FFI 接口：
+
+- `vulcan_luaskills_ffi_skill_config_list_json`
+- `vulcan_luaskills_ffi_skill_config_get_json`
+- `vulcan_luaskills_ffi_skill_config_set_json`
+- `vulcan_luaskills_ffi_skill_config_delete_json`
+
 ## 10. 每类接口的调用逻辑
 
 ### 10.1 `version` / `describe`
@@ -948,6 +1002,30 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 作用：
 
 - 重新扫描技能根并重建运行时视图
+
+### 10.6 `skill_config_*`
+
+作用：
+
+- 统一管理按 `skill_id + key + value` 存储的字符串配置
+
+调用逻辑：
+
+1. 解析宿主显式配置的 `skill_config_file_path`
+   - 若已配置，则直接使用该路径并跳过默认 `runtime_root` 推导
+2. 若未配置，则使用默认主配置文件：
+   - `<runtime_root>/config/skill_config.json`
+   - 即使 `skills/` 目录尚未存在，也仍然先解析这条默认路径
+   - 若多个 skill root 指向不同的 `runtime_root`，则拒绝隐式猜测路径并要求宿主显式配置
+3. 在单一主配置文件中按 `skill_id` 读写当前配置
+4. `set` 统一承担新增与更新
+5. `delete` 返回是否真实删除了某个键
+
+宿主包装建议：
+
+- 推荐把这组底层 API 封装成单工具：
+  - `runtime-config(action, skill_id?, key?, value?)`
+- 不建议把 `list/get/set/delete` 暴露成四个独立终端工具，避免占用过多上下文
 
 调用逻辑：
 

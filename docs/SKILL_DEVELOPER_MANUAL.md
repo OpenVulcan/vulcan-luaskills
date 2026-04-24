@@ -249,6 +249,53 @@ return rendered
 - 即使宿主策略打开了，如果没有注册对应回调，也会返回明确错误。
 - `input` / 返回值结构是宿主桥接契约的一部分，建议由宿主侧文档或测试夹具统一约束。
 
+### 5.9 `vulcan.config.*`
+
+这组能力用于读取和维护**当前 skill 自己的字符串配置**。
+
+当前提供：
+
+- `vulcan.config.get(key)`
+- `vulcan.config.set(key, value)`
+- `vulcan.config.delete(key)`
+- `vulcan.config.has(key)`
+- `vulcan.config.list()`
+
+最小示例：
+
+```lua
+local api_token = vulcan.config.get("api_token")
+
+if not api_token or api_token == "" then
+    return "当前未配置 `api_token`。请使用宿主提供的 runtime-config 工具为当前 skill 设置 `api_token`。"
+end
+
+local endpoint = vulcan.config.get("endpoint") or "https://api.example.com"
+
+vulcan.config.set("last_endpoint", endpoint)
+
+return {
+    ok = true,
+    endpoint = endpoint,
+}
+```
+
+`list()` 当前返回的是当前 skill 命名空间下的平面表：
+
+```lua
+local config = vulcan.config.list()
+-- config.api_token
+-- config.endpoint
+```
+
+注意事项：
+
+- 当前配置值第一版统一为 `string`。
+- 如果你确实需要复杂结构，建议把 JSON 文本作为字符串存入，再由 skill 自己 `vulcan.json.decode(...)`。
+- 配置默认只作用于当前 skill，不能直接跨 skill 读写其他命名空间。
+- 当前不做“未配置即不加载”的自动策略；更推荐 skill 在缺配置时返回明确提示，告知用户如何完成配置。
+- 统一主配置文件默认位于 `<runtime_root>/config/skill_config.json`；宿主也可以显式覆盖路径。
+
 ## 6. `vulcan.fs.*`
 
 ### 6.1 支持的方法

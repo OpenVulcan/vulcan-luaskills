@@ -159,6 +159,9 @@ pub struct LuaRuntimeHostOptions {
     /// Fixed sibling directory name used under one skill-root parent to store skill databases.
     /// 在单个技能根父目录下存放技能数据库时使用的固定兄弟目录名称。
     pub database_dir_name: String,
+    /// Optional unified skill config file path owned by the host.
+    /// 由宿主拥有的可选统一技能配置文件路径。
+    pub skill_config_file_path: Option<PathBuf>,
     /// Host-provided protected skill identifiers reserved for the system plane.
     /// 由宿主提供、保留给 system 平面的受保护技能标识符。
     pub protection: SkillProtectionConfig,

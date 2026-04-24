@@ -30,6 +30,7 @@ pub use runtime::cache::{
     DEFAULT_TOOL_CACHE_DEFAULT_TTL_SECS, DEFAULT_TOOL_CACHE_MAX_ENTRIES,
     DEFAULT_TOOL_CACHE_MAX_TTL_SECS, ToolCacheConfig,
 };
+pub use runtime::config::SkillConfigEntry;
 pub use runtime::context::{RuntimeClientInfo, RuntimeRequestContext};
 pub use runtime::engine::{LuaEngine, LuaEngineOptions, LuaVmPoolConfig};
 pub use runtime::entry::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
@@ -57,6 +58,7 @@ pub use skill::source::{InstalledSkillRecord, InstalledSkillSourceRecord, SkillI
 
 pub use host::options as runtime_options;
 pub use runtime::cache as tool_cache;
+pub use runtime::config as runtime_config_store;
 pub use runtime::context as runtime_context;
 pub use runtime::engine as lua_engine;
 pub use runtime::entry as entry_descriptor;

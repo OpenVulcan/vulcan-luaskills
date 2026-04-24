@@ -107,6 +107,7 @@ func main() {
 		dependency_dir_name:              C.CString("dependencies"),
 		state_dir_name:                   C.CString("state"),
 		database_dir_name:                C.CString("databases"),
+		skill_config_file_path:           nil,
 		protected_skill_ids:              nil,
 		protected_skill_ids_len:          0,
 		allow_network_download:           0,

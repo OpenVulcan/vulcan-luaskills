@@ -275,6 +275,7 @@ static void run_standard_ffi_demo(void) {
         .dependency_dir_name = "dependencies",
         .state_dir_name = "state",
         .database_dir_name = "databases",
+        .skill_config_file_path = NULL,
         .protected_skill_ids = NULL,
         .protected_skill_ids_len = 0,
         .allow_network_download = 0,

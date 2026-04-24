@@ -65,6 +65,11 @@ typedef struct FfiLuaRuntimeHostOptions {
     const char *dependency_dir_name;
     const char *state_dir_name;
     const char *database_dir_name;
+    /*
+    Optional unified skill config file path owned by the host.
+    由宿主拥有的可选统一技能配置文件路径。
+    */
+    const char *skill_config_file_path;
     const char **protected_skill_ids;
     size_t protected_skill_ids_len;
     uint8_t allow_network_download;
@@ -591,6 +596,54 @@ int32_t vulcan_luaskills_ffi_skill_name_for_tool(
     uint64_t engine_id,
     const char *tool_name,
     FfiOwnedBuffer *skill_id_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+List flattened skill config records through the standard C ABI surface.
+通过标准 C ABI 接口列出扁平化技能配置记录。
+*/
+int32_t vulcan_luaskills_ffi_skill_config_list(
+    uint64_t engine_id,
+    const char *skill_id,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Read one optional skill config value through the standard C ABI surface.
+通过标准 C ABI 接口读取单个可选技能配置值。
+*/
+int32_t vulcan_luaskills_ffi_skill_config_get(
+    uint64_t engine_id,
+    const char *skill_id,
+    const char *key,
+    FfiOwnedBuffer *value_out,
+    uint8_t *found_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Insert or replace one skill config value through the standard C ABI surface.
+通过标准 C ABI 接口插入或替换单个技能配置值。
+*/
+int32_t vulcan_luaskills_ffi_skill_config_set(
+    uint64_t engine_id,
+    const char *skill_id,
+    const char *key,
+    const char *value,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Delete one skill config key through the standard C ABI surface.
+通过标准 C ABI 接口删除单个技能配置键。
+*/
+int32_t vulcan_luaskills_ffi_skill_config_delete(
+    uint64_t engine_id,
+    const char *skill_id,
+    const char *key,
+    uint8_t *deleted_out,
     FfiOwnedBuffer *error_out
 );
 
