@@ -472,7 +472,7 @@ build_openssl() {
     local src_dir; src_dir=$(download_extract "$url" "$build_dir")
     echo "  ==> Building OpenSSL..."
     pushd "$src_dir" >/dev/null
-    ./config --prefix="$install_dir" --openssldir="$install_dir/ssl" no-tests no-shared
+    ./config --prefix="$install_dir" --openssldir="$install_dir/ssl" no-tests shared
     make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
     make install_sw
     popd >/dev/null
@@ -502,7 +502,10 @@ build_zlib() {
 build_pcre2() {
     local url="$1" build_dir="$2"
     local install_dir="$DEPS_DIR/pcre2"
-    [ -f "$install_dir/lib/libpcre2-8.a" ] && { echo "$install_dir"; return 0; }
+    if compgen -G "$install_dir/lib/libpcre2-8.so*" >/dev/null || compgen -G "$install_dir/lib/libpcre2-8.dylib*" >/dev/null || [ -f "$install_dir/lib/libpcre2-8.a" ]; then
+        echo "$install_dir"
+        return 0
+    fi
     echo "  ==> Downloading PCRE2..."
     ensure_dir "$build_dir"
     local src_dir; src_dir=$(download_extract "$url" "$build_dir")
@@ -512,7 +515,7 @@ build_pcre2() {
     ensure_dir "$build_sub"
     pushd "$build_sub" >/dev/null
     cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$install_dir" \
-        -DBUILD_SHARED_LIBS=OFF -DPCRE2_BUILD_PCRE2GREP=OFF -DPCRE2_SUPPORT_JIT=ON
+        -DBUILD_SHARED_LIBS=ON -DPCRE2_BUILD_PCRE2GREP=OFF -DPCRE2_SUPPORT_JIT=ON
     make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
     make install
     popd >/dev/null
@@ -523,7 +526,10 @@ build_pcre2() {
 build_libyaml() {
     local url="$1" build_dir="$2"
     local install_dir="$DEPS_DIR/libyaml"
-    [ -f "$install_dir/lib/libyaml.a" ] && { echo "$install_dir"; return 0; }
+    if compgen -G "$install_dir/lib/libyaml*.so*" >/dev/null || compgen -G "$install_dir/lib/libyaml*.dylib*" >/dev/null || [ -f "$install_dir/lib/libyaml.a" ]; then
+        echo "$install_dir"
+        return 0
+    fi
     echo "  ==> Downloading LibYAML..."
     ensure_dir "$build_dir"
     local src_dir; src_dir=$(download_extract "$url" "$build_dir")
@@ -532,7 +538,7 @@ build_libyaml() {
     local build_sub="$src_dir/build"
     ensure_dir "$build_sub"
     pushd "$build_sub" >/dev/null
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$install_dir" -DBUILD_SHARED_LIBS=OFF
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$install_dir" -DBUILD_SHARED_LIBS=ON
     make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
     make install
     popd >/dev/null
@@ -798,7 +804,14 @@ done
 
 # Priority 1: Pre-built from GitHub Releases
 PREBUILT_OK=false
-if [ "$GITHUB_REPO" != "{{GITHUB_USER}}/{{GITHUB_REPO}}" ]; then
+MISSING_STAGED_DEPS=false
+for dep_name in "${REQUIRED_DEPS[@]}"; do
+    if [ "${BUILT_DEPS[$dep_name]:-}" != "1" ]; then
+        MISSING_STAGED_DEPS=true
+        break
+    fi
+done
+if [ "$MISSING_STAGED_DEPS" = true ] && [ "$GITHUB_REPO" != "{{GITHUB_USER}}/{{GITHUB_REPO}}" ]; then
     if download_prebuilt_deps; then
         for dep_name in "${REQUIRED_DEPS[@]}"; do
             dep_dir="$DEPS_DIR/$dep_name"
@@ -847,7 +860,11 @@ echo "=== Step 4: Installing Lua packages ==="
 export PATH="$LUAJIT_DIR:$PATH"
 for dep_name in "${!DEP_INSTALLS[@]}"; do
     d="${DEP_INSTALLS[$dep_name]}"
-    [ -n "$d" ] && export PATH="$d/bin:$PATH"
+    if [ -n "$d" ]; then
+        export PATH="$d/bin:$PATH"
+        export LD_LIBRARY_PATH="$d/lib:${LD_LIBRARY_PATH:-}"
+        export DYLD_LIBRARY_PATH="$d/lib:${DYLD_LIBRARY_PATH:-}"
+    fi
 done
 # Add cmake to PATH if installed locally
 for dir in "${!LOCAL_TOOLS[@]}"; do

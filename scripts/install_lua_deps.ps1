@@ -1252,7 +1252,8 @@ if ($AllDepNames.Count -eq 0) {
     }
 
     # --- Priority 1: Pre-built from GitHub Releases ---
-    if ($GitHubRepo -ne "{{GITHUB_USER}}/{{GITHUB_REPO}}") {
+    $missingStagedDeps = @($AllDepNames | Where-Object { -not $DepPaths.ContainsKey($_) })
+    if ($missingStagedDeps.Count -gt 0 -and $GitHubRepo -ne "{{GITHUB_USER}}/{{GITHUB_REPO}}") {
         $PrebuiltResult = Download-Prebuilt-Deps
         if ($PrebuiltResult) {
             # Pre-built deps are laid out as: deps/openssl/, deps/zlib/, deps/pcre2/, deps/libyaml/
