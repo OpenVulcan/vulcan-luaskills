@@ -99,6 +99,51 @@ function New-TarFromDirectory {
     }
 }
 
+function Test-WindowsPackagePlatform {
+    <#
+    .SYNOPSIS
+    Check whether one package platform key targets Windows.
+    检查一个包平台标识是否面向 Windows。
+
+    .PARAMETER PlatformKey
+    Platform key such as windows-x64, linux-x64, or macos-arm64.
+    形如 windows-x64、linux-x64 或 macos-arm64 的平台标识。
+
+    .OUTPUTS
+    Boolean value indicating whether the platform is Windows.
+    表示平台是否为 Windows 的布尔值。
+    #>
+    param([string]$PlatformKey)
+
+    return $PlatformKey -like "windows-*"
+}
+
+function Remove-NonPlatformDemoScripts {
+    <#
+    .SYNOPSIS
+    Remove demo launchers that do not match the target package platform.
+    移除与目标包平台不匹配的 demo 启动脚本。
+
+    .PARAMETER PackageRoot
+    Package root that contains generated launchers.
+    包含已生成启动脚本的包根目录。
+
+    .PARAMETER Platform
+    Target package platform used to choose the launcher family.
+    用于选择启动脚本类型的目标包平台。
+    #>
+    param(
+        [string]$PackageRoot,
+        [string]$Platform
+    )
+
+    if (Test-WindowsPackagePlatform -PlatformKey $Platform) {
+        Remove-Item -Force -LiteralPath (Join-Path $PackageRoot "run.sh") -ErrorAction SilentlyContinue
+    } else {
+        Remove-Item -Force -LiteralPath (Join-Path $PackageRoot "run.ps1") -ErrorAction SilentlyContinue
+    }
+}
+
 function Write-PackagedDemoScripts {
     <#
     .SYNOPSIS
@@ -112,10 +157,15 @@ function Write-PackagedDemoScripts {
     .PARAMETER PackageRoot
     Package root that receives run scripts.
     接收运行脚本的包根目录。
+
+    .PARAMETER Platform
+    Target package platform used to keep only one launcher family.
+    用于仅保留一类启动脚本的目标包平台。
     #>
     param(
         [string]$Mode,
-        [string]$PackageRoot
+        [string]$PackageRoot,
+        [string]$Platform
     )
 
     if ($Mode -eq "rust") {
@@ -176,6 +226,7 @@ fi
 
 LUASKILLS_RUNTIME_ROOT="$RUNTIME_ROOT" cargo run --manifest-path "$PACKAGE_ROOT/Cargo.toml"
 '@ | Set-Content -Path (Join-Path $PackageRoot "run.sh") -Encoding UTF8
+        Remove-NonPlatformDemoScripts -PackageRoot $PackageRoot -Platform $Platform
         return
     }
 
@@ -260,6 +311,7 @@ case "$(uname -s)" in
 esac
 VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/python/demo.py"
 '@ | Set-Content -Path (Join-Path $PackageRoot "run.sh") -Encoding UTF8
+    Remove-NonPlatformDemoScripts -PackageRoot $PackageRoot -Platform $Platform
 }
 
 if (-not $Platform) {
@@ -291,8 +343,11 @@ Copy-Item -Recurse -Force -Path "examples\demo-$Mode\*" -Destination $PackageRoo
 Remove-Item -Recurse -Force -LiteralPath (Join-Path $PackageRoot "target") -ErrorAction SilentlyContinue
 
 Copy-Item -Recurse -Force -Path "examples\ffi\standard_runtime\runtime_root\*" -Destination (Join-Path $PackageRoot "runtime") -ErrorAction SilentlyContinue
-Copy-Item -Force -LiteralPath "scripts\fetch_runtime_deps.ps1" -Destination (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1")
-Copy-Item -Force -LiteralPath "scripts\fetch_runtime_deps.sh" -Destination (Join-Path $PackageRoot "scripts\fetch_runtime_deps.sh")
+if (Test-WindowsPackagePlatform -PlatformKey $Platform) {
+    Copy-Item -Force -LiteralPath "scripts\fetch_runtime_deps.ps1" -Destination (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1")
+} else {
+    Copy-Item -Force -LiteralPath "scripts\fetch_runtime_deps.sh" -Destination (Join-Path $PackageRoot "scripts\fetch_runtime_deps.sh")
+}
 Copy-Item -Force -LiteralPath "LICENSE" -Destination (Join-Path $PackageRoot "licenses\LICENSE")
 
 if ($Mode -eq "ffi") {
@@ -312,7 +367,7 @@ if ($Mode -eq "ffi") {
     }
 }
 
-Write-PackagedDemoScripts -Mode $Mode -PackageRoot $PackageRoot
+Write-PackagedDemoScripts -Mode $Mode -PackageRoot $PackageRoot -Platform $Platform
 
 [ordered]@{
     schema_version = 1

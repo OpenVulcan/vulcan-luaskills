@@ -596,16 +596,56 @@ This package records the upstream license identifier and the source path used by
 "@ | Set-Content -Path (Join-Path $ComponentDir "LICENSE.reference.txt") -Encoding UTF8
 }
 
+function Test-WindowsPackagePlatform {
+    <#
+    .SYNOPSIS
+    Check whether one package platform key targets Windows.
+    检查一个包平台标识是否面向 Windows。
+
+    .PARAMETER PlatformKey
+    Platform key such as windows-x64, linux-x64, or macos-arm64.
+    形如 windows-x64、linux-x64 或 macos-arm64 的平台标识。
+
+    .OUTPUTS
+    Boolean value indicating whether the platform is Windows.
+    表示平台是否为 Windows 的布尔值。
+    #>
+    param([string]$PlatformKey)
+
+    return $PlatformKey -like "windows-*"
+}
+
 function Write-RuntimeEnvScripts {
     <#
     .SYNOPSIS
     Write helper scripts that let hosts include runtime/libs in the native loader path.
     写入帮助宿主把 runtime/libs 加入原生加载路径的辅助脚本。
+
+    .PARAMETER RuntimeRoot
+    Runtime package root that receives the helper script.
+    接收辅助脚本的 runtime 包根目录。
+
+    .PARAMETER Platform
+    Target package platform used to choose PowerShell or shell helpers.
+    用于选择 PowerShell 或 shell 辅助脚本的目标包平台。
     #>
-    param([string]$RuntimeRoot)
+    param(
+        [string]$RuntimeRoot,
+        [string]$Platform
+    )
 
     $ResourcesDir = Join-Path $RuntimeRoot "resources"
     Ensure-Dir $ResourcesDir
+
+    if (Test-WindowsPackagePlatform -PlatformKey $Platform) {
+        @'
+$RuntimeRoot = if ($env:RUNTIME_ROOT) { $env:RUNTIME_ROOT } else { Split-Path -Parent $PSScriptRoot }
+$Libs = Join-Path $RuntimeRoot "libs"
+$env:PATH = "$Libs;$env:PATH"
+'@ | Set-Content -Path (Join-Path $ResourcesDir "runtime-env.ps1") -Encoding UTF8
+        return
+    }
+
     @'
 #!/usr/bin/env bash
 RUNTIME_ROOT="${RUNTIME_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -614,18 +654,6 @@ case "$(uname -s)" in
   Linux) export LD_LIBRARY_PATH="$RUNTIME_ROOT/libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
 esac
 '@ | Set-Content -Path (Join-Path $ResourcesDir "runtime-env.sh") -Encoding UTF8
-
-    @'
-$RuntimeRoot = if ($env:RUNTIME_ROOT) { $env:RUNTIME_ROOT } else { Split-Path -Parent $PSScriptRoot }
-$Libs = Join-Path $RuntimeRoot "libs"
-if ($IsWindows -or $env:OS -eq "Windows_NT") {
-    $env:PATH = "$Libs;$env:PATH"
-} elseif ($IsMacOS) {
-    $env:DYLD_LIBRARY_PATH = "$Libs" + $(if ($env:DYLD_LIBRARY_PATH) { ":$env:DYLD_LIBRARY_PATH" } else { "" })
-} else {
-    $env:LD_LIBRARY_PATH = "$Libs" + $(if ($env:LD_LIBRARY_PATH) { ":$env:LD_LIBRARY_PATH" } else { "" })
-}
-'@ | Set-Content -Path (Join-Path $ResourcesDir "runtime-env.ps1") -Encoding UTF8
 }
 
 function Write-JsonFile {
@@ -706,7 +734,7 @@ Copy-LinkedRuntimeDependencies -ScanRoot $RuntimeRoot -LibsDir (Join-Path $Runti
 Copy-LinkedRuntimeDependencies -ScanRoot (Join-Path $ProjectRoot "target\release") -LibsDir (Join-Path $RuntimeRoot "libs")
 
 Copy-Item -Force -LiteralPath (Join-Path $ProjectRoot "scripts\lua_packages.txt") -Destination (Join-Path $RuntimeRoot "resources\lua_packages.txt")
-Write-RuntimeEnvScripts -RuntimeRoot $RuntimeRoot
+Write-RuntimeEnvScripts -RuntimeRoot $RuntimeRoot -Platform $Platform
 Copy-LicenseCandidates -ComponentName "luaskills" -SearchRoots @($ProjectRoot) -LicenseRoot (Join-Path $RuntimeRoot "licenses")
 
 $NativeLicenseRoots = @(

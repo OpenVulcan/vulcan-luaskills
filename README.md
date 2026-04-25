@@ -85,7 +85,7 @@ GitHub 端的 Lua 依赖构建不再只面向旧版 `deps-v1` 的 C 依赖包，
 - `luaskills-demo-ffi-{platform}.tar.gz`：动态库宿主 demo，面向 C / Python / Go / TypeScript 等 FFI 接入方式。
 - `luaskills-demo-rust-{platform}.tar.gz`：Rust 直连 demo，面向直接依赖 crate 的非 FFI 接入方式。
 
-运行期包只导出 `lua_packages/lib/lua`、`lua_packages/share/lua`、`libs`、`resources` 和 `licenses`。构建工具、LuaRocks、LuaJIT SDK、`lua51.dll` 等仅用于编译链路的内容不会作为 runtime 默认内容导出。打包脚本会迭代扫描 Lua C 模块、release 动态库以及已复制进 `libs/` 的下游依赖，将命中的 zlib、curl、OpenSSL、pcre2、libyaml 等运行库复制到 `libs/`，避免目标机器未安装对应系统包时运行失败。runtime 包还会生成 `resources/runtime-env.sh`、`resources/runtime-env.ps1` 与 `resources/bundled-libs.json`，用于声明动态库搜索路径和记录实际复制库的来源。
+运行期包只导出 `lua_packages/lib/lua`、`lua_packages/share/lua`、`libs`、`resources` 和 `licenses`。构建工具、LuaRocks、LuaJIT SDK、`lua51.dll` 等仅用于编译链路的内容不会作为 runtime 默认内容导出。打包脚本会迭代扫描 Lua C 模块、release 动态库以及已复制进 `libs/` 的下游依赖，将命中的 zlib、curl、OpenSSL、pcre2、libyaml 等运行库复制到 `libs/`，避免目标机器未安装对应系统包时运行失败。runtime 包还会按平台生成加载器辅助脚本：Windows 包携带 `resources/runtime-env.ps1`，Linux/macOS 包携带 `resources/runtime-env.sh`，并统一生成 `resources/bundled-libs.json` 记录实际复制库的来源。
 
 demo / 源码环境可使用统一拉取脚本：
 

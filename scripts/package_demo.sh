@@ -43,6 +43,23 @@ create_tar_from_dir() {
   tar -czf "$archive_path" -C "$source_dir" "${members[@]}"
 }
 
+platform_is_windows() {
+  # Return success when the package target is Windows.
+  # 当包目标平台是 Windows 时返回成功。
+  [[ "$PLATFORM" == windows-* ]]
+}
+
+prune_packaged_demo_scripts() {
+  # Remove launcher scripts that do not match the target package platform.
+  # 移除与目标平台不匹配的 demo 启动脚本。
+  local package_root="$1"
+  if platform_is_windows; then
+    rm -f "$package_root/run.sh"
+  else
+    rm -f "$package_root/run.ps1"
+  fi
+}
+
 write_packaged_demo_scripts() {
   # Write run scripts that work from the packaged demo root.
   # 写入可从发布 demo 包根目录直接运行的脚本。
@@ -107,6 +124,7 @@ fi
 LUASKILLS_RUNTIME_ROOT="$RUNTIME_ROOT" cargo run --manifest-path "$PACKAGE_ROOT/Cargo.toml"
 SH
     chmod +x "$package_root/run.sh"
+    prune_packaged_demo_scripts "$package_root"
     return
   fi
 
@@ -191,6 +209,7 @@ esac
 VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/python/demo.py"
 SH
   chmod +x "$package_root/run.sh"
+  prune_packaged_demo_scripts "$package_root"
 }
 
 if [ -z "$PLATFORM" ]; then
@@ -222,8 +241,12 @@ cp -a "examples/demo-$MODE"/. "$PACKAGE_ROOT"/
 rm -rf "$PACKAGE_ROOT/target"
 
 cp -a "examples/ffi/standard_runtime/runtime_root"/. "$PACKAGE_ROOT/runtime"/
-cp -f scripts/fetch_runtime_deps.ps1 "$PACKAGE_ROOT/scripts/fetch_runtime_deps.ps1"
-cp -f scripts/fetch_runtime_deps.sh "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh"
+if platform_is_windows; then
+  cp -f scripts/fetch_runtime_deps.ps1 "$PACKAGE_ROOT/scripts/fetch_runtime_deps.ps1"
+else
+  cp -f scripts/fetch_runtime_deps.sh "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh"
+  chmod +x "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh"
+fi
 cp -f LICENSE "$PACKAGE_ROOT/licenses/LICENSE"
 
 if [ "$MODE" = "ffi" ]; then

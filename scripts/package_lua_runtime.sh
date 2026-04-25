@@ -302,6 +302,15 @@ EOF
 write_loader_env_scripts() {
   # Add small opt-in environment helpers for hosts that launch the runtime package.
   # 为启动 runtime 包的宿主提供可选环境辅助脚本。
+  if [[ "$PLATFORM" == windows-* ]]; then
+    cat > "$RUNTIME_ROOT/resources/runtime-env.ps1" <<'PS1'
+$RuntimeRoot = if ($env:RUNTIME_ROOT) { $env:RUNTIME_ROOT } else { Split-Path -Parent $PSScriptRoot }
+$Libs = Join-Path $RuntimeRoot "libs"
+$env:PATH = "$Libs;$env:PATH"
+PS1
+    return
+  fi
+
   cat > "$RUNTIME_ROOT/resources/runtime-env.sh" <<'SH'
 #!/usr/bin/env bash
 RUNTIME_ROOT="${RUNTIME_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -311,17 +320,6 @@ case "$(uname -s)" in
 esac
 SH
   chmod +x "$RUNTIME_ROOT/resources/runtime-env.sh"
-  cat > "$RUNTIME_ROOT/resources/runtime-env.ps1" <<'PS1'
-$RuntimeRoot = if ($env:RUNTIME_ROOT) { $env:RUNTIME_ROOT } else { Split-Path -Parent $PSScriptRoot }
-$Libs = Join-Path $RuntimeRoot "libs"
-if ($IsWindows -or $env:OS -eq "Windows_NT") {
-    $env:PATH = "$Libs;$env:PATH"
-} elseif ($IsMacOS) {
-    $env:DYLD_LIBRARY_PATH = "$Libs" + $(if ($env:DYLD_LIBRARY_PATH) { ":$env:DYLD_LIBRARY_PATH" } else { "" })
-} else {
-    $env:LD_LIBRARY_PATH = "$Libs" + $(if ($env:LD_LIBRARY_PATH) { ":$env:LD_LIBRARY_PATH" } else { "" })
-}
-PS1
 }
 
 if [ -z "$PLATFORM" ]; then
