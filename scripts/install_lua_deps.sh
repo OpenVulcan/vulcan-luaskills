@@ -787,6 +787,15 @@ echo "  ==> Host native dependencies are managed by fetch_runtime_deps.sh and ar
 
 declare -A DEP_INSTALLS BUILT_DEPS
 
+# Priority 0: deps already staged by the workflow or caller.
+for dep_name in "${REQUIRED_DEPS[@]}"; do
+    dep_dir="$DEPS_DIR/$dep_name"
+    if [ -d "$dep_dir" ]; then
+        DEP_INSTALLS["$dep_name"]="$dep_dir"
+        BUILT_DEPS["$dep_name"]=1
+    fi
+done
+
 # Priority 1: Pre-built from GitHub Releases
 PREBUILT_OK=false
 if [ "$GITHUB_REPO" != "{{GITHUB_USER}}/{{GITHUB_REPO}}" ]; then
@@ -819,7 +828,8 @@ for dep_name in "${REQUIRED_DEPS[@]}"; do
         zlib)     install_dir=$(build_zlib "$url" "$build_dir") ;;
         pcre2)    install_dir=$(build_pcre2 "$url" "$build_dir") ;;
         libyaml)  install_dir=$(build_libyaml "$url" "$build_dir") ;;
-        *)        echo "  ==> Unknown dep: $dep_name, skipping" ;;
+        curl)     echo "  ==> curl must be provided by the prebuilt deps package or workflow-staged deps." >&2; exit 1 ;;
+        *)        echo "  ==> Unknown dep: $dep_name" >&2; exit 1 ;;
     esac
     if [ -n "$install_dir" ]; then
         DEP_INSTALLS["$dep_name"]="$install_dir"
@@ -893,6 +903,10 @@ echo ""
 echo "==> Install results:"
 for pkg in "${OK_PKGS[@]}"; do echo "  $pkg : OK"; done
 for pkg in "${FAILED_PKGS[@]}"; do echo "  $pkg : FAILED"; done
+if [ "${#FAILED_PKGS[@]}" -gt 0 ]; then
+    echo "ERROR: LuaRocks failed to install ${#FAILED_PKGS[@]} package(s): ${FAILED_PKGS[*]}" >&2
+    exit 1
+fi
 
 echo ""
 echo "==> Installed files:"

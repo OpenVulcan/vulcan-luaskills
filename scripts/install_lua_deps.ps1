@@ -1243,6 +1243,14 @@ if ($AllDepNames.Count -eq 0) {
 } else {
     Write-Host "  ==> Required C deps: $($AllDepNames -join ', ')"
 
+    # Priority 0: deps already staged by the workflow or caller.
+    foreach ($depName in $AllDepNames) {
+        $depDir = Join-Path $DepsDir $depName
+        if (Test-Path -LiteralPath $depDir) {
+            $DepPaths[$depName] = $depDir
+        }
+    }
+
     # --- Priority 1: Pre-built from GitHub Releases ---
     if ($GitHubRepo -ne "{{GITHUB_USER}}/{{GITHUB_REPO}}") {
         $PrebuiltResult = Download-Prebuilt-Deps
@@ -1312,6 +1320,7 @@ if ($AllDepNames.Count -eq 0) {
                     $InstallDir = switch ($depName) {
                         "zlib"    { Build-Zlib    -Url $url -BuildDir $BuildDir }
                         "libyaml" { Build-LibYAML -Url $url -BuildDir $BuildDir }
+                        "curl"    { throw "curl must be provided by vcpkg, the prebuilt deps package, or workflow-staged deps." }
                         default   { throw "Unknown bundled dep: $depName" }
                     }
                     $DepPaths[$depName] = $InstallDir
@@ -1424,6 +1433,10 @@ foreach ($pkg in $InstallResults.Keys | Sort-Object) {
     $status = if ($InstallResults[$pkg]) { "OK" } else { "FAILED" }
     $color = if ($InstallResults[$pkg]) { "Green" } else { "Yellow" }
     Write-Host "  $pkg : $status" -ForegroundColor $color
+}
+$FailedPackages = @($InstallResults.Keys | Where-Object { -not $InstallResults[$_] } | Sort-Object)
+if ($FailedPackages.Count -gt 0) {
+    throw "LuaRocks failed to install $($FailedPackages.Count) package(s): $($FailedPackages -join ', ')"
 }
 
 Write-Host "`n==> Installed files:"

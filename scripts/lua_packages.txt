@@ -26,6 +26,18 @@ pkg luasocket
 pkg luasec
   install windows path:scripts/luarocks_overrides/windows/luasec-1.3.2-1.rockspec
   dep openssl windows vcpkg https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz
+  dep openssl linux bundled https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz
+  dep openssl macos bundled https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz
+  depvar openssl linux OPENSSL_DIR dep:openssl
+  depvar openssl linux OPENSSL_LIBDIR dep:openssl/lib
+  depvar openssl linux OPENSSL_INCDIR dep:openssl/include
+  depvar openssl linux CRYPTO_LIBDIR dep:openssl/lib
+  depvar openssl linux CRYPTO_INCDIR dep:openssl/include
+  depvar openssl macos OPENSSL_DIR dep:openssl
+  depvar openssl macos OPENSSL_LIBDIR dep:openssl/lib
+  depvar openssl macos OPENSSL_INCDIR dep:openssl/include
+  depvar openssl macos CRYPTO_LIBDIR dep:openssl/lib
+  depvar openssl macos CRYPTO_INCDIR dep:openssl/include
   depvar openssl windows OPENSSL_LIBDIR dep:openssl/lib
   depvar openssl windows OPENSSL_INCDIR dep:openssl/include
   depvar openssl windows OPENSSL_BINDIR dep:openssl/bin
@@ -34,6 +46,14 @@ pkg luasec
 pkg lua-curl
   install windows path:scripts/luarocks_overrides/windows/lua-curl-0.3.13-1.rockspec
   dep curl windows vcpkg https://curl.se/download/curl-8.13.0.tar.gz
+  dep curl linux bundled https://curl.se/download/curl-8.13.0.tar.gz
+  dep curl macos bundled https://curl.se/download/curl-8.13.0.tar.gz
+  depvar curl linux CURL_DIR dep:curl
+  depvar curl linux CURL_LIBDIR dep:curl/lib
+  depvar curl linux CURL_INCDIR dep:curl/include
+  depvar curl macos CURL_DIR dep:curl
+  depvar curl macos CURL_LIBDIR dep:curl/lib
+  depvar curl macos CURL_INCDIR dep:curl/include
   depvar curl windows CURL_LIBDIR dep:curl/lib
   depvar curl windows CURL_INCDIR dep:curl/include
 
@@ -54,6 +74,18 @@ pkg lrexlib-pcre2
 pkg luaossl
   install windows path:scripts/luarocks_overrides/windows/luaossl-20250929-0.rockspec
   dep openssl windows vcpkg https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz
+  dep openssl linux bundled https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz
+  dep openssl macos bundled https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz
+  depvar openssl linux OPENSSL_DIR dep:openssl
+  depvar openssl linux OPENSSL_LIBDIR dep:openssl/lib
+  depvar openssl linux OPENSSL_INCDIR dep:openssl/include
+  depvar openssl linux CRYPTO_LIBDIR dep:openssl/lib
+  depvar openssl linux CRYPTO_INCDIR dep:openssl/include
+  depvar openssl macos OPENSSL_DIR dep:openssl
+  depvar openssl macos OPENSSL_LIBDIR dep:openssl/lib
+  depvar openssl macos OPENSSL_INCDIR dep:openssl/include
+  depvar openssl macos CRYPTO_LIBDIR dep:openssl/lib
+  depvar openssl macos CRYPTO_INCDIR dep:openssl/include
   depvar openssl windows OPENSSL_LIBDIR dep:openssl/lib
   depvar openssl windows OPENSSL_INCDIR dep:openssl/include
   depvar openssl windows CRYPTO_LIBDIR dep:openssl/lib
@@ -84,5 +116,13 @@ pkg serpent
 pkg lua-zlib
   env windows CMAKE_PREFIX_PATH dep:zlib
   dep zlib windows bundled https://zlib.net/zlib131.zip
+  dep zlib linux bundled https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+  dep zlib macos bundled https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+  depvar zlib linux ZLIB_DIR dep:zlib
+  depvar zlib linux ZLIB_LIBDIR dep:zlib/lib
+  depvar zlib linux ZLIB_INCDIR dep:zlib/include
+  depvar zlib macos ZLIB_DIR dep:zlib
+  depvar zlib macos ZLIB_LIBDIR dep:zlib/lib
+  depvar zlib macos ZLIB_INCDIR dep:zlib/include
   depvar zlib windows ZLIB_LIBDIR dep:zlib/lib
   depvar zlib windows ZLIB_INCDIR dep:zlib/include
