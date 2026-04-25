@@ -644,14 +644,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path $env:RELEASE_PACKAGE_DIR | Out-Null
+          Get-ChildItem -LiteralPath $env:DEPS_DIR -File -Filter "lua-deps*.tar*" -ErrorAction SilentlyContinue | Remove-Item -Force
+          $archivePath = Join-Path (Join-Path $env:GITHUB_WORKSPACE $env:RELEASE_PACKAGE_DIR) $env:ARCHIVE_NAME
           Push-Location $env:DEPS_DIR
           # PowerShell must pass archive members as explicit strings, otherwise trailing slashes can collapse into invalid args.
           # PowerShell 需要把归档成员作为显式字符串传入，否则尾部斜杠可能被折叠成无效参数。
           $archiveMembers = @("openssl", "curl", "zlib", "pcre2", "libyaml")
-          tar czf "$env:GITHUB_WORKSPACE\$env:ARCHIVE_NAME" @archiveMembers
+          tar czf $archivePath @archiveMembers
           Pop-Location
 
-          $sizeMb = (Get-Item "$env:GITHUB_WORKSPACE\$env:ARCHIVE_NAME").Length / 1MB
+          $sizeMb = (Get-Item $archivePath).Length / 1MB
           Write-Output "Package size: $("{0:F1}" -f $sizeMb) MB"
 
       - name: Package deps (Unix)
@@ -659,9 +662,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$RELEASE_PACKAGE_DIR"
+          find "$DEPS_DIR" -maxdepth 1 -type f -name 'lua-deps*.tar*' -delete
           cd "$DEPS_DIR"
-          tar czf "$GITHUB_WORKSPACE/$ARCHIVE_NAME" openssl/ curl/ zlib/ pcre2/ libyaml/
-          echo "Package size: $(du -h "$GITHUB_WORKSPACE/$ARCHIVE_NAME" | cut -f1)"
+          tar czf "$GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR/$ARCHIVE_NAME" openssl/ curl/ zlib/ pcre2/ libyaml/
+          echo "Package size: $(du -h "$GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR/$ARCHIVE_NAME" | cut -f1)"
 
       - name: Prepare Lua runtime dependency inputs (Windows)
         if: runner.os == 'Windows'
@@ -736,7 +741,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.ARCHIVE_NAME }}
             ${{ env.RELEASE_PACKAGE_DIR }}/*.tar.gz
           tag_name: ${{ inputs.version }}
           fail_on_unmatched_files: true

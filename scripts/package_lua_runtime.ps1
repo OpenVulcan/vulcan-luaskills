@@ -65,7 +65,7 @@ Set-Location $ProjectRoot
 
 # NativeRuntimeExtensions lists only files that are meaningful at runtime.
 # NativeRuntimeExtensions 只包含运行期真正需要的原生库扩展名。
-$NativeRuntimeExtensions = @("*.dll", "*.so", "*.dylib")
+$NativeRuntimeExtensions = @("*.dll", "*.so", "*.so.*", "*.dylib")
 
 # ExcludedRuntimeLibraryNames prevents build-only LuaJIT shims from leaking into runtime packages.
 # ExcludedRuntimeLibraryNames 防止仅用于构建的 LuaJIT 兼容库泄漏到运行期包中。
@@ -160,8 +160,36 @@ function Copy-LuaPackagesRuntimeTree {
     )
 
     $RuntimeLuaPackages = Join-Path $RuntimeRoot "lua_packages"
-    Copy-DirectoryContent -Source (Join-Path $LuaPackagesDir "lib\lua") -Destination (Join-Path $RuntimeLuaPackages "lib\lua")
-    Copy-DirectoryContent -Source (Join-Path $LuaPackagesDir "share\lua") -Destination (Join-Path $RuntimeLuaPackages "share\lua")
+    Copy-LuaRocksRuntimeDirectory -Source (Join-Path $LuaPackagesDir "lib\lua") -Destination (Join-Path $RuntimeLuaPackages "lib\lua")
+    Copy-LuaRocksRuntimeDirectory -Source (Join-Path $LuaPackagesDir "share\lua") -Destination (Join-Path $RuntimeLuaPackages "share\lua")
+}
+
+function Copy-LuaRocksRuntimeDirectory {
+    <#
+    .SYNOPSIS
+    Flatten LuaRocks' Lua 5.1 ABI directory into the runtime default layout.
+    将 LuaRocks 的 Lua 5.1 ABI 目录扁平化到 runtime 默认布局。
+    #>
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source)) {
+        return
+    }
+
+    Ensure-Dir $Destination
+    $VersionedSource = Join-Path $Source "5.1"
+    if (Test-Path -LiteralPath $VersionedSource) {
+        Copy-Item -Recurse -Force -Path (Join-Path $VersionedSource "*") -Destination $Destination -ErrorAction SilentlyContinue
+    }
+
+    Get-ChildItem -Force -LiteralPath $Source -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne "5.1" } |
+        ForEach-Object {
+            Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination $Destination
+        }
 }
 
 function Copy-NativeRuntimeLibraries {
@@ -399,8 +427,8 @@ function Copy-LicenseCandidates {
             continue
         }
 
-        Get-ChildItem -File -Path $SearchRoot -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE|README)(\.|$)' } |
+        Get-ChildItem -Recurse -File -Path $SearchRoot -Depth 5 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)(\.|$)' } |
             ForEach-Object {
                 Copy-Item -Force -LiteralPath $_.FullName -Destination (Join-Path $ComponentDir $_.Name)
             }
@@ -565,20 +593,31 @@ Write-RuntimeEnvScripts -RuntimeRoot $RuntimeRoot
 Copy-LicenseCandidates -ComponentName "luaskills" -SearchRoots @($ProjectRoot) -LicenseRoot (Join-Path $RuntimeRoot "licenses")
 
 $NativeLicenseRoots = @(
-    @{ name = "openssl"; roots = @("openssl-*", "deps\openssl") },
-    @{ name = "curl"; roots = @("curl-*", "deps\curl") },
-    @{ name = "zlib"; roots = @("zlib-*", "deps\zlib") },
-    @{ name = "pcre2"; roots = @("pcre2-*", "deps\pcre2") },
-    @{ name = "libyaml"; roots = @("yaml-*", "libyaml-*", "deps\libyaml") }
+    @{ name = "openssl"; roots = @("openssl-*", "deps\openssl", "target\lua_deps_build\openssl") },
+    @{ name = "curl"; roots = @("curl-*", "deps\curl", "target\lua_deps_build\curl") },
+    @{ name = "zlib"; roots = @("zlib-*", "deps\zlib", "target\lua_deps_build\zlib") },
+    @{ name = "pcre2"; roots = @("pcre2-*", "deps\pcre2", "target\lua_deps_build\pcre2") },
+    @{ name = "libyaml"; roots = @("yaml-*", "libyaml-*", "deps\libyaml", "target\lua_deps_build\libyaml") }
 )
 
 foreach ($Component in $NativeLicenseRoots) {
     $Roots = @()
     foreach ($RootPattern in $Component.roots) {
-        $Roots += Get-ChildItem -Path $ProjectRoot -Directory -Filter $RootPattern -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-        $Candidate = Join-Path $ThirdPartyPath $RootPattern
-        if (Test-Path -LiteralPath $Candidate) {
-            $Roots += $Candidate
+        if ($RootPattern -like "*\*" -or $RootPattern -like "*/*") {
+            $ProjectCandidate = Join-Path $ProjectRoot $RootPattern
+            if (Test-Path -LiteralPath $ProjectCandidate) {
+                $Roots += $ProjectCandidate
+            }
+            $ThirdPartyCandidate = Join-Path $ThirdPartyPath $RootPattern
+            if (Test-Path -LiteralPath $ThirdPartyCandidate) {
+                $Roots += $ThirdPartyCandidate
+            }
+        } else {
+            $Roots += Get-ChildItem -Path $ProjectRoot -Directory -Filter $RootPattern -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+            $Candidate = Join-Path $ThirdPartyPath $RootPattern
+            if (Test-Path -LiteralPath $Candidate) {
+                $Roots += $Candidate
+            }
         }
     }
     Copy-LicenseCandidates -ComponentName ("native\" + $Component.name) -SearchRoots $Roots -LicenseRoot (Join-Path $RuntimeRoot "licenses")

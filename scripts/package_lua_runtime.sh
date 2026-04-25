@@ -79,6 +79,19 @@ copy_tree_if_exists() {
   fi
 }
 
+copy_luarocks_runtime_dir() {
+  # Flatten LuaRocks' Lua 5.1 ABI directory into the runtime default layout.
+  # 将 LuaRocks 的 Lua 5.1 ABI 目录扁平化到 runtime 默认布局。
+  local source="$1"
+  local destination="$2"
+  [ -d "$source" ] || return 0
+  ensure_dir "$destination"
+  if [ -d "$source/5.1" ]; then
+    cp -a "$source/5.1"/. "$destination"/
+  fi
+  find "$source" -mindepth 1 -maxdepth 1 ! -name '5.1' -exec cp -a {} "$destination"/ \;
+}
+
 copy_native_runtime_libraries() {
   # Copy native runtime libraries and skip build-only LuaJIT files.
   # 复制原生运行库，并跳过仅用于构建的 LuaJIT 文件。
@@ -87,7 +100,7 @@ copy_native_runtime_libraries() {
   local libs_dir="$runtime_root/libs"
   ensure_dir "$libs_dir"
   [ -d "$deps_dir" ] || return 0
-  find "$deps_dir" -type f \( -name '*.dll' -o -name '*.so' -o -name '*.dylib' \) | while IFS= read -r file; do
+  find "$deps_dir" \( -type f -o -type l \) \( -name '*.dll' -o -name '*.so' -o -name '*.so.*' -o -name '*.dylib' \) | while IFS= read -r file; do
     local name
     name="$(basename "$file" | tr '[:upper:]' '[:lower:]')"
     case "$name" in
@@ -172,7 +185,7 @@ copy_license_candidates() {
   local destination="$2"
   [ -d "$source" ] || return 0
   ensure_dir "$destination"
-  find "$source" -maxdepth 1 -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'README*' \) -exec cp -f {} "$destination/" \;
+  find "$source" -maxdepth 5 -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) -exec cp -f {} "$destination/" \;
 }
 
 write_license_reference_if_missing() {
@@ -253,8 +266,8 @@ ensure_dir "$RUNTIME_ROOT/resources"
 ensure_dir "$RUNTIME_ROOT/licenses"
 ensure_dir "$OUTPUT_DIR"
 
-copy_tree_if_exists "$THIRD_PARTY_DIR/lua_packages/lib/lua" "$RUNTIME_ROOT/lua_packages/lib/lua"
-copy_tree_if_exists "$THIRD_PARTY_DIR/lua_packages/share/lua" "$RUNTIME_ROOT/lua_packages/share/lua"
+copy_luarocks_runtime_dir "$THIRD_PARTY_DIR/lua_packages/lib/lua" "$RUNTIME_ROOT/lua_packages/lib/lua"
+copy_luarocks_runtime_dir "$THIRD_PARTY_DIR/lua_packages/share/lua" "$RUNTIME_ROOT/lua_packages/share/lua"
 copy_native_runtime_libraries "$THIRD_PARTY_DIR/deps" "$RUNTIME_ROOT"
 copy_linked_runtime_dependencies "$RUNTIME_ROOT" "$RUNTIME_ROOT/libs"
 copy_linked_runtime_dependencies "$PROJECT_ROOT/target/release" "$RUNTIME_ROOT/libs"
@@ -265,8 +278,8 @@ copy_license_candidates "$PROJECT_ROOT" "$RUNTIME_ROOT/licenses/luaskills"
 
 for component in openssl curl zlib pcre2 libyaml; do
   case "$component" in
-    libyaml) patterns=("yaml-*" "libyaml-*" "$THIRD_PARTY_DIR/deps/libyaml") ;;
-    *) patterns=("$component-*" "$THIRD_PARTY_DIR/deps/$component") ;;
+    libyaml) patterns=("yaml-*" "libyaml-*" "$THIRD_PARTY_DIR/deps/libyaml" "target/lua_deps_build/libyaml" "target/lua_deps_build/libyaml/"*) ;;
+    *) patterns=("$component-*" "$THIRD_PARTY_DIR/deps/$component" "target/lua_deps_build/$component" "target/lua_deps_build/$component/"*) ;;
   esac
   for pattern in "${patterns[@]}"; do
     for path in $pattern; do
