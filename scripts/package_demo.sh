@@ -132,7 +132,7 @@ if (-not $Library) {
     throw "No LuaSkills FFI library found under package lib directory."
 }
 
-$CompatRuntime = Join-Path $PackageRoot "standard_runtime\runtime_root"
+$CompatRuntime = Join-Path $PackageRoot "examples\ffi\standard_runtime\runtime_root"
 New-Item -ItemType Directory -Force -Path $CompatRuntime | Out-Null
 Copy-Item -Recurse -Force -Path (Join-Path $RuntimeRoot "*") -Destination $CompatRuntime -ErrorAction SilentlyContinue
 $LibDir = Join-Path $PackageRoot "lib"
@@ -144,7 +144,7 @@ if ($IsWindows -or $env:OS -eq "Windows_NT") {
     $env:LD_LIBRARY_PATH = "$LibDir" + $(if ($env:LD_LIBRARY_PATH) { ":$env:LD_LIBRARY_PATH" } else { "" })
 }
 $env:VULCAN_LUASKILLS_LIB = $Library.FullName
-python (Join-Path $PackageRoot "python\demo.py")
+python (Join-Path $PackageRoot "examples\ffi\python\demo.py")
 PS1
   cat > "$package_root/run.sh" <<'SH'
 #!/usr/bin/env bash
@@ -165,17 +165,41 @@ fi
 
 LIBRARY="$(find "$PACKAGE_ROOT/lib" -maxdepth 1 -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) | head -1)"
 [ -n "$LIBRARY" ] || { echo "No LuaSkills FFI library found under package lib directory." >&2; exit 1; }
-mkdir -p "$PACKAGE_ROOT/standard_runtime/runtime_root"
-cp -a "$RUNTIME_ROOT"/. "$PACKAGE_ROOT/standard_runtime/runtime_root"/
+mkdir -p "$PACKAGE_ROOT/examples/ffi/standard_runtime/runtime_root"
+cp -a "$RUNTIME_ROOT"/. "$PACKAGE_ROOT/examples/ffi/standard_runtime/runtime_root"/
 case "$(uname -s)" in
   Darwin) export DYLD_LIBRARY_PATH="$PACKAGE_ROOT/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
   Linux) export LD_LIBRARY_PATH="$PACKAGE_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
 esac
-VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/python/demo.py"
+VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/examples/ffi/python/demo.py"
 SH
   chmod +x "$package_root/run.sh"
   write_packaged_dependency_upgrade_scripts "$package_root"
   prune_packaged_demo_scripts "$package_root"
+}
+
+copy_ffi_example_sources() {
+  # Copy every FFI demo source directory into the packaged demo.
+  # 将所有 FFI demo 源码目录复制到发布 demo 包中。
+  local package_root="$1"
+  mkdir -p "$package_root/examples"
+  rm -rf "$package_root/examples/ffi"
+  cp -a examples/ffi "$package_root/examples/"
+  # Generated runtime caches are useful after local smoke tests but should not ship in demo archives.
+  # 本地烟测后的运行缓存有调试价值，但不应该进入 demo 发布包。
+  find "$package_root/examples/ffi" -type d \( -name '__pycache__' -o -name 'node_modules' \) -prune -exec rm -rf {} +
+  find "$package_root/examples/ffi" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+  find "$package_root/examples/ffi" -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.db' \) -delete
+  while IFS= read -r generated_dir; do
+    find "$generated_dir" -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} +
+  done < <(
+    find "$package_root/examples/ffi" -type d \( \
+      -path '*/runtime_root/temp/downloads' -o \
+      -path '*/runtime_root/state/install_tmp' -o \
+      -path '*/runtime_root/state/installs' -o \
+      -path '*/runtime_root/dependencies/tools' \
+    \)
+  )
 }
 
 write_packaged_dependency_upgrade_scripts() {
@@ -233,7 +257,7 @@ write_packaged_demo_readme() {
   # 写入匹配发布 demo 包目录结构的包根 README。
   local mode="$1"
   local package_root="$2"
-  local shell_name run_command fetch_all_command fetch_lua_command fetch_vldb_command mode_description
+  local shell_name run_command fetch_all_command fetch_lua_command fetch_vldb_command mode_description examples_section
 
   if platform_is_windows; then
     shell_name="powershell"
@@ -250,9 +274,11 @@ write_packaged_demo_readme() {
   fi
 
   if [ "$mode" = "ffi" ]; then
-    mode_description='FFI demo 通过 `lib/` 下的动态库运行 `python/demo.py`，适合验证 C ABI 宿主接入。'
+    mode_description='FFI demo 默认通过 `lib/` 下的动态库运行 `examples/ffi/python/demo.py`，同时包含 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例。'
+    examples_section='- `examples/ffi/`：完整 FFI 示例源码，包含 C、Go、Python、TypeScript 与共享 runtime 夹具。'
   else
     mode_description='Rust demo 通过包内 `Cargo.toml` 直接依赖 `vulcan-luaskills` 的 `'"$RELEASE_TAG"'` tag，适合验证非 FFI 接入。'
+    examples_section=''
   fi
 
   {
@@ -263,7 +289,11 @@ write_packaged_demo_readme() {
     printf -- '- `runtime/`：demo 默认 runtime 根目录，可由拉取脚本安装 `lua-runtime-%s.tar.gz`。\n' "$PLATFORM"
     printf -- '- `scripts/`：仅包含当前平台可用的依赖拉取脚本。\n'
     printf -- '- `licenses/`：项目与随包组件授权材料。\n'
-    printf -- '- `demo-manifest.json`：包模式、平台、runtime 根和可拉取目标清单。\n\n'
+    printf -- '- `demo-manifest.json`：包模式、平台、runtime 根和可拉取目标清单。\n'
+    if [ -n "$examples_section" ]; then
+      printf '%s\n' "$examples_section"
+    fi
+    printf '\n'
     printf '%s\n\n' "$mode_description"
     printf '## 运行 / Run\n\n'
     printf '```%s\n%s\n```\n\n' "$shell_name" "$run_command"
@@ -316,9 +346,8 @@ cp -f LICENSE "$PACKAGE_ROOT/licenses/LICENSE"
 if [ "$MODE" = "ffi" ]; then
   ensure_dir "$PACKAGE_ROOT/include"
   ensure_dir "$PACKAGE_ROOT/lib"
-  ensure_dir "$PACKAGE_ROOT/python"
   cp -f include/*.h "$PACKAGE_ROOT/include/"
-  cp -a examples/ffi/python/. "$PACKAGE_ROOT/python"/
+  copy_ffi_example_sources "$PACKAGE_ROOT"
   find target/release -maxdepth 1 -type f \( -name '*.dll' -o -name '*.lib' -o -name '*.so' -o -name '*.dylib' -o -name '*.a' \) -exec cp -f {} "$PACKAGE_ROOT/lib/" \; 2>/dev/null || true
 else
   if [ -f "$PACKAGE_ROOT/Cargo.toml" ]; then

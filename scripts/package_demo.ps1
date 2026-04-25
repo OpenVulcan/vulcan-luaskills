@@ -234,7 +234,7 @@ if (-not $Library) {
     throw "No LuaSkills FFI library found under package lib directory."
 }
 
-$CompatRuntime = Join-Path $PackageRoot "standard_runtime\runtime_root"
+$CompatRuntime = Join-Path $PackageRoot "examples\ffi\standard_runtime\runtime_root"
 New-Item -ItemType Directory -Force -Path $CompatRuntime | Out-Null
 Copy-Item -Recurse -Force -Path (Join-Path $RuntimeRoot "*") -Destination $CompatRuntime -ErrorAction SilentlyContinue
 $LibDir = Join-Path $PackageRoot "lib"
@@ -246,7 +246,7 @@ if ($IsWindows -or $env:OS -eq "Windows_NT") {
     $env:LD_LIBRARY_PATH = "$LibDir" + $(if ($env:LD_LIBRARY_PATH) { ":$env:LD_LIBRARY_PATH" } else { "" })
 }
 $env:VULCAN_LUASKILLS_LIB = $Library.FullName
-python (Join-Path $PackageRoot "python\demo.py")
+python (Join-Path $PackageRoot "examples\ffi\python\demo.py")
 '@ | Set-Content -Path (Join-Path $PackageRoot "run.ps1") -Encoding UTF8
 
     @'
@@ -268,16 +268,55 @@ fi
 
 LIBRARY="$(find "$PACKAGE_ROOT/lib" -maxdepth 1 -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) | head -1)"
 [ -n "$LIBRARY" ] || { echo "No LuaSkills FFI library found under package lib directory." >&2; exit 1; }
-mkdir -p "$PACKAGE_ROOT/standard_runtime/runtime_root"
-cp -a "$RUNTIME_ROOT"/. "$PACKAGE_ROOT/standard_runtime/runtime_root"/
+mkdir -p "$PACKAGE_ROOT/examples/ffi/standard_runtime/runtime_root"
+cp -a "$RUNTIME_ROOT"/. "$PACKAGE_ROOT/examples/ffi/standard_runtime/runtime_root"/
 case "$(uname -s)" in
   Darwin) export DYLD_LIBRARY_PATH="$PACKAGE_ROOT/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
   Linux) export LD_LIBRARY_PATH="$PACKAGE_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
 esac
-VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/python/demo.py"
+VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/examples/ffi/python/demo.py"
 '@ | Set-Content -Path (Join-Path $PackageRoot "run.sh") -Encoding UTF8
     Write-PackagedDependencyUpgradeScripts -PackageRoot $PackageRoot
     Remove-NonPlatformDemoScripts -PackageRoot $PackageRoot -Platform $Platform
+}
+
+function Copy-FfiExampleSources {
+    <#
+    .SYNOPSIS
+    Copy every FFI demo source directory into the packaged demo.
+    将所有 FFI demo 源码目录复制到发布 demo 包中。
+
+    .PARAMETER PackageRoot
+    Package root that receives examples/ffi.
+    接收 examples/ffi 的发布包根目录。
+    #>
+    param([string]$PackageRoot)
+
+    $ExamplesRoot = Join-Path $PackageRoot "examples"
+    $FfiExamplesRoot = Join-Path $ExamplesRoot "ffi"
+    Ensure-Dir $ExamplesRoot
+    if (Test-Path -LiteralPath $FfiExamplesRoot) {
+        Remove-Item -LiteralPath $FfiExamplesRoot -Recurse -Force
+    }
+    Copy-Item -Recurse -Force -Path "examples\ffi" -Destination $ExamplesRoot
+    # Generated runtime caches are useful after local smoke tests but should not ship in demo archives.
+    # 本地烟测后的运行缓存有调试价值，但不应该进入 demo 发布包。
+    Get-ChildItem -Recurse -Directory -Path $FfiExamplesRoot -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+    Get-ChildItem -Recurse -Directory -Path $FfiExamplesRoot -Filter "node_modules" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+    Get-ChildItem -Recurse -File -Path $FfiExamplesRoot -Include "*.pyc","*.pyo" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -Recurse -File -Path $FfiExamplesRoot -Include "*.zip","*.exe","*.db" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -Recurse -Directory -Path $FfiExamplesRoot -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.FullName -match '[\\/]runtime_root[\\/]temp[\\/]downloads$' -or
+            $_.FullName -match '[\\/]runtime_root[\\/]state[\\/]install_tmp$' -or
+            $_.FullName -match '[\\/]runtime_root[\\/]state[\\/]installs$' -or
+            $_.FullName -match '[\\/]runtime_root[\\/]dependencies[\\/]tools$'
+        } |
+        ForEach-Object {
+            Get-ChildItem -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -ne ".gitkeep" } |
+                Remove-Item -Recurse -Force
+        }
 }
 
 function Write-PackagedDependencyUpgradeScripts {
@@ -371,7 +410,8 @@ function Write-PackagedDemoReadme {
     $FetchAllCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat" } else { "./upgrade_deps.sh" }
     $FetchLuaCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat lua" } else { "./upgrade_deps.sh lua" }
     $FetchVldbCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat vldb" } else { "./upgrade_deps.sh vldb" }
-    $ModeDescription = if ($Mode -eq "ffi") { 'FFI demo 通过 `lib/` 下的动态库运行 `python/demo.py`，适合验证 C ABI 宿主接入。' } else { "Rust demo 通过包内 ``Cargo.toml`` 直接依赖 ``vulcan-luaskills`` 的 ``$ReleaseTag`` tag，适合验证非 FFI 接入。" }
+    $ModeDescription = if ($Mode -eq "ffi") { 'FFI demo 默认通过 `lib/` 下的动态库运行 `examples/ffi/python/demo.py`，同时包含 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例。' } else { "Rust demo 通过包内 ``Cargo.toml`` 直接依赖 ``vulcan-luaskills`` 的 ``$ReleaseTag`` tag，适合验证非 FFI 接入。" }
+    $ExamplesSection = if ($Mode -eq "ffi") { "- ``examples/ffi/``：完整 FFI 示例源码，包含 C、Go、Python、TypeScript 与共享 runtime 夹具。" } else { "" }
     $ReadmeTemplate = @'
 # LuaSkills __MODE__ demo package
 
@@ -385,6 +425,7 @@ This README describes the extracted `luaskills-demo-__MODE__-__PLATFORM__.tar.gz
 - `scripts/`：仅包含当前平台可用的依赖拉取脚本。
 - `licenses/`：项目与随包组件授权材料。
 - `demo-manifest.json`：包模式、平台、runtime 根和可拉取目标清单。
+__EXAMPLES_SECTION__
 
 __MODE_DESCRIPTION__
 
@@ -416,6 +457,7 @@ Windows packages include `run.ps1`, `upgrade_deps.bat`, and `scripts/fetch_runti
     $ReadmeContent = $ReadmeContent.Replace("__MODE__", $Mode)
     $ReadmeContent = $ReadmeContent.Replace("__PLATFORM__", $Platform)
     $ReadmeContent = $ReadmeContent.Replace("__MODE_DESCRIPTION__", $ModeDescription)
+    $ReadmeContent = $ReadmeContent.Replace("__EXAMPLES_SECTION__", $ExamplesSection)
     $ReadmeContent = $ReadmeContent.Replace("__SHELL_NAME__", $ShellName)
     $ReadmeContent = $ReadmeContent.Replace("__RUN_COMMAND__", $RunCommand)
     $ReadmeContent = $ReadmeContent.Replace("__FETCH_ALL_COMMAND__", $FetchAllCommand)
@@ -463,9 +505,8 @@ Copy-Item -Force -LiteralPath "LICENSE" -Destination (Join-Path $PackageRoot "li
 if ($Mode -eq "ffi") {
     Ensure-Dir (Join-Path $PackageRoot "include")
     Ensure-Dir (Join-Path $PackageRoot "lib")
-    Ensure-Dir (Join-Path $PackageRoot "python")
     Copy-Item -Force -Path "include\*.h" -Destination (Join-Path $PackageRoot "include")
-    Copy-Item -Recurse -Force -Path "examples\ffi\python\*" -Destination (Join-Path $PackageRoot "python")
+    Copy-FfiExampleSources -PackageRoot $PackageRoot
     Get-ChildItem -File -Path "target\release\*" -Include "*.dll","*.lib","*.so","*.dylib","*.a" -ErrorAction SilentlyContinue | ForEach-Object {
         Copy-Item -Force -LiteralPath $_.FullName -Destination (Join-Path $PackageRoot "lib")
     }
