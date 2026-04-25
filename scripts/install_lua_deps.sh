@@ -64,6 +64,18 @@ resolve_config_ref() {
             return 1
         fi
         if [ -n "$relative_path" ]; then
+            if [ "$relative_path" = "lib" ]; then
+                # Prefer the explicit lib directory, but accept lib64 from Unix OpenSSL builds.
+                # 优先使用显式 lib 目录，同时兼容 Unix OpenSSL 构建生成的 lib64 目录。
+                if [ -d "$dep_root/lib" ]; then
+                    echo "$dep_root/lib"
+                    return 0
+                fi
+                if [ -d "$dep_root/lib64" ]; then
+                    echo "$dep_root/lib64"
+                    return 0
+                fi
+            fi
             echo "$dep_root/$relative_path"
         else
             echo "$dep_root"
@@ -466,13 +478,16 @@ for a in data.get('assets', []):
 build_openssl() {
     local url="$1" build_dir="$2"
     local install_dir="$DEPS_DIR/openssl"
-    [ -f "$install_dir/lib/libssl.a" ] && { echo "$install_dir"; return 0; }
+    if compgen -G "$install_dir/lib/libssl.*" >/dev/null || compgen -G "$install_dir/lib64/libssl.*" >/dev/null; then
+        echo "$install_dir"
+        return 0
+    fi
     echo "  ==> Downloading OpenSSL..."
     ensure_dir "$build_dir"
     local src_dir; src_dir=$(download_extract "$url" "$build_dir")
     echo "  ==> Building OpenSSL..."
     pushd "$src_dir" >/dev/null
-    ./config --prefix="$install_dir" --openssldir="$install_dir/ssl" no-tests shared
+    ./config --prefix="$install_dir" --openssldir="$install_dir/ssl" --libdir=lib no-tests shared
     make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
     make install_sw
     popd >/dev/null
@@ -862,8 +877,14 @@ for dep_name in "${!DEP_INSTALLS[@]}"; do
     d="${DEP_INSTALLS[$dep_name]}"
     if [ -n "$d" ]; then
         export PATH="$d/bin:$PATH"
-        export LD_LIBRARY_PATH="$d/lib:${LD_LIBRARY_PATH:-}"
-        export DYLD_LIBRARY_PATH="$d/lib:${DYLD_LIBRARY_PATH:-}"
+        for lib_dir in "$d/lib" "$d/lib64"; do
+            if [ -d "$lib_dir" ]; then
+                # Make staged dependency libraries visible to build probes and link-time checks.
+                # 让已暂存依赖库对构建探测与链接期检查可见。
+                export LD_LIBRARY_PATH="$lib_dir:${LD_LIBRARY_PATH:-}"
+                export DYLD_LIBRARY_PATH="$lib_dir:${DYLD_LIBRARY_PATH:-}"
+            fi
+        done
     fi
 done
 # Add cmake to PATH if installed locally
