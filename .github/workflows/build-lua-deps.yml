@@ -704,12 +704,20 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/install_lua_deps.ps1
 
-      - name: Install Lua packages (Unix)
-        if: runner.os != 'Windows'
+      - name: Install Lua packages (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           bash scripts/install_lua_deps.sh
+
+      - name: Install Lua packages (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install bash
+          "$(brew --prefix)/bin/bash" scripts/install_lua_deps.sh
 
       - name: Package release assets (Windows)
         if: runner.os == 'Windows'
