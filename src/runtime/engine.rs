@@ -5665,6 +5665,8 @@ end
         let cpath_pattern = format!(
             "{}/lib/lua/?.dylib;{}/lib/lua/?/init.dylib;{}/lib/lua/loadall.dylib;{}/?.dylib;",
             lua_packages.display(),
+            lua_packages.display(),
+            lua_packages.display(),
             lua_packages.display()
         );
 
