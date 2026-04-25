@@ -76,6 +76,28 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 4. [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
 5. [examples/ffi/typescript/README.md](examples/ffi/typescript/README.md)
 
+## 发布产物分层
+
+GitHub 端的 Lua 依赖构建不再只面向旧版 `deps-v1` 的 C 依赖包，而是按版本号 tag（例如 `v0.1.0`）拆成多类产物：
+
+- `lua-runtime-{platform}.tar.gz`：运行期 Lua 包、原生运行库、资源清单与授权材料。
+- `luaskills-ffi-sdk-{platform}.tar.gz`：FFI 头文件、动态库/链接库、SDK manifest 与授权材料。
+- `luaskills-demo-ffi-{platform}.tar.gz`：动态库宿主 demo，面向 C / Python / Go / TypeScript 等 FFI 接入方式。
+- `luaskills-demo-rust-{platform}.tar.gz`：Rust 直连 demo，面向直接依赖 crate 的非 FFI 接入方式。
+- `luaskills-source-deps-v0.1.0.tar.gz`：源码构建依赖包，提供 Lua 包清单、override、拉取脚本和依赖锁定信息。
+
+运行期包只导出 `lua_packages/lib/lua`、`lua_packages/share/lua`、`libs`、`resources` 和 `licenses`。构建工具、LuaRocks、LuaJIT SDK、`lua51.dll` 等仅用于编译链路的内容不会作为 runtime 默认内容导出。打包脚本会迭代扫描 Lua C 模块、release 动态库以及已复制进 `libs/` 的下游依赖，将命中的 zlib、curl、OpenSSL、pcre2、libyaml 等运行库复制到 `libs/`，避免目标机器未安装对应系统包时运行失败。runtime 包还会生成 `resources/runtime-env.sh`、`resources/runtime-env.ps1` 与 `resources/bundled-libs.json`，用于声明动态库搜索路径和记录实际复制库的来源。
+
+demo / 源码环境可使用统一拉取脚本：
+
+```powershell
+.\scripts\fetch_runtime_deps.ps1 -Target all
+.\scripts\fetch_runtime_deps.ps1 -Target lua
+.\scripts\fetch_runtime_deps.ps1 -Target vldb
+```
+
+其中 `vldb` 会把 `vldb-controller(.exe)` 安装到运行根的 `bin/` 目录，匹配 demo 默认目录约定。
+
 ## 核心原则
 
 ### 1. 库不读取宿主配置文件

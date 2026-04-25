@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release tag (e.g. deps-v1)"
+        description: "Release tag (e.g. v0.1.0)"
         required: true
-        default: "deps-v1"
+        default: "v0.1.0"
       linux_x64_runner:
         description: "Linux x64 runner (off to disable)"
         required: true
@@ -152,6 +152,9 @@ jobs:
       # ARCHIVE_NAME is shared by packaging and release upload steps to avoid duplicated string assembly.
       # ARCHIVE_NAME 供打包与发布上传步骤共享，避免重复拼接归档文件名。
       ARCHIVE_NAME: lua-deps-${{ matrix.platform }}.tar.gz
+      # RELEASE_PACKAGE_DIR stores final user-facing runtime, SDK, demo, and source dependency archives.
+      # RELEASE_PACKAGE_DIR 保存最终面向用户的 runtime、SDK、demo 与源码依赖压缩包。
+      RELEASE_PACKAGE_DIR: target/release-packages
     steps:
       - uses: actions/checkout@v4
 
@@ -660,10 +663,74 @@ jobs:
           tar czf "$GITHUB_WORKSPACE/$ARCHIVE_NAME" openssl/ curl/ zlib/ pcre2/ libyaml/
           echo "Package size: $(du -h "$GITHUB_WORKSPACE/$ARCHIVE_NAME" | cut -f1)"
 
+      - name: Prepare Lua runtime dependency inputs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # The Lua package installer expects native dependencies under third_party/deps.
+          # Lua 包安装脚本期望原生依赖位于 third_party/deps。
+          New-Item -ItemType Directory -Force -Path "third_party\deps" | Out-Null
+          Copy-Item -Recurse -Force (Join-Path $env:DEPS_DIR "*") "third_party\deps" -ErrorAction SilentlyContinue
+
+      - name: Prepare Lua runtime dependency inputs (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p third_party/deps
+          cp -a "$DEPS_DIR"/. third_party/deps/
+
+      - name: Build LuaSkills library
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release
+
+      - name: Install Lua packages (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/install_lua_deps.ps1
+
+      - name: Install Lua packages (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/install_lua_deps.sh
+
+      - name: Package release assets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/package_lua_runtime.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR"
+          powershell -ExecutionPolicy Bypass -File scripts/package_ffi_sdk.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR"
+          powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode ffi -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ inputs.version }}"
+          powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode rust -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ inputs.version }}"
+
+      - name: Package release assets (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/package_lua_runtime.sh "${{ matrix.platform }}"
+          bash scripts/package_ffi_sdk.sh "${{ matrix.platform }}"
+          bash scripts/package_demo.sh ffi "${{ matrix.platform }}" "${{ inputs.version }}"
+          bash scripts/package_demo.sh rust "${{ matrix.platform }}" "${{ inputs.version }}"
+
+      - name: Package source dependency bundle (Linux x64)
+        if: matrix.platform == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/package_source_deps.sh "${{ inputs.version }}"
+
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ARCHIVE_NAME }}
+          files: |
+            ${{ env.ARCHIVE_NAME }}
+            ${{ env.RELEASE_PACKAGE_DIR }}/*.tar.gz
           tag_name: ${{ inputs.version }}
           fail_on_unmatched_files: true
         env:
