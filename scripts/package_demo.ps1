@@ -139,8 +139,10 @@ function Remove-NonPlatformDemoScripts {
 
     if (Test-WindowsPackagePlatform -PlatformKey $Platform) {
         Remove-Item -Force -LiteralPath (Join-Path $PackageRoot "run.sh") -ErrorAction SilentlyContinue
+        Remove-Item -Force -LiteralPath (Join-Path $PackageRoot "upgrade_deps.sh") -ErrorAction SilentlyContinue
     } else {
         Remove-Item -Force -LiteralPath (Join-Path $PackageRoot "run.ps1") -ErrorAction SilentlyContinue
+        Remove-Item -Force -LiteralPath (Join-Path $PackageRoot "upgrade_deps.bat") -ErrorAction SilentlyContinue
     }
 }
 
@@ -170,13 +172,6 @@ function Write-PackagedDemoScripts {
 
     if ($Mode -eq "rust") {
         @'
-param(
-    # Dependency target to fetch before running the packaged demo.
-    # 运行发布 demo 前需要拉取的依赖目标。
-    [ValidateSet("none", "all", "lua", "vldb")]
-    [string]$Fetch = "none"
-)
-
 $ErrorActionPreference = "Stop"
 
 # PackageRoot points at the extracted demo package root.
@@ -186,10 +181,6 @@ $PackageRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 # RuntimeRoot is the packaged runtime root consumed by the demo.
 # RuntimeRoot 是 demo 使用的包内运行根目录。
 $RuntimeRoot = Join-Path $PackageRoot "runtime"
-
-if ($Fetch -ne "none") {
-    & (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1") -Target $Fetch -RuntimeRoot $RuntimeRoot
-}
 
 if (Test-Path -LiteralPath (Join-Path $RuntimeRoot "resources\runtime-env.ps1")) {
     . (Join-Path $RuntimeRoot "resources\runtime-env.ps1")
@@ -207,17 +198,9 @@ set -euo pipefail
 # PackageRoot 指向解压后的 demo 包根目录。
 PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Target selects which dependency group to fetch before running.
-# Target 选择运行前需要拉取的依赖分组。
-TARGET="${1:-none}"
-
 # RuntimeRoot is the packaged runtime root consumed by the demo.
 # RuntimeRoot 是 demo 使用的包内运行根目录。
 RUNTIME_ROOT="$PACKAGE_ROOT/runtime"
-
-if [ "$TARGET" != "none" ]; then
-  RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET"
-fi
 
 if [ -f "$RUNTIME_ROOT/resources/runtime-env.sh" ]; then
   # shellcheck source=/dev/null
@@ -226,18 +209,12 @@ fi
 
 LUASKILLS_RUNTIME_ROOT="$RUNTIME_ROOT" cargo run --manifest-path "$PACKAGE_ROOT/Cargo.toml"
 '@ | Set-Content -Path (Join-Path $PackageRoot "run.sh") -Encoding UTF8
+        Write-PackagedDependencyUpgradeScripts -PackageRoot $PackageRoot
         Remove-NonPlatformDemoScripts -PackageRoot $PackageRoot -Platform $Platform
         return
     }
 
     @'
-param(
-    # Dependency target to fetch before running the packaged demo.
-    # 运行发布 demo 前需要拉取的依赖目标。
-    [ValidateSet("none", "all", "lua", "vldb")]
-    [string]$Fetch = "none"
-)
-
 $ErrorActionPreference = "Stop"
 
 # PackageRoot points at the extracted demo package root.
@@ -247,10 +224,6 @@ $PackageRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 # RuntimeRoot is the packaged runtime root consumed by the demo.
 # RuntimeRoot 是 demo 使用的包内运行根目录。
 $RuntimeRoot = Join-Path $PackageRoot "runtime"
-
-if ($Fetch -ne "none") {
-    & (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1") -Target $Fetch -RuntimeRoot $RuntimeRoot
-}
 
 if (Test-Path -LiteralPath (Join-Path $RuntimeRoot "resources\runtime-env.ps1")) {
     . (Join-Path $RuntimeRoot "resources\runtime-env.ps1")
@@ -284,17 +257,9 @@ set -euo pipefail
 # PackageRoot 指向解压后的 demo 包根目录。
 PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Target selects which dependency group to fetch before running.
-# Target 选择运行前需要拉取的依赖分组。
-TARGET="${1:-none}"
-
 # RuntimeRoot is the packaged runtime root consumed by the demo.
 # RuntimeRoot 是 demo 使用的包内运行根目录。
 RUNTIME_ROOT="$PACKAGE_ROOT/runtime"
-
-if [ "$TARGET" != "none" ]; then
-  RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET"
-fi
 
 if [ -f "$RUNTIME_ROOT/resources/runtime-env.sh" ]; then
   # shellcheck source=/dev/null
@@ -311,7 +276,65 @@ case "$(uname -s)" in
 esac
 VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/python/demo.py"
 '@ | Set-Content -Path (Join-Path $PackageRoot "run.sh") -Encoding UTF8
+    Write-PackagedDependencyUpgradeScripts -PackageRoot $PackageRoot
     Remove-NonPlatformDemoScripts -PackageRoot $PackageRoot -Platform $Platform
+}
+
+function Write-PackagedDependencyUpgradeScripts {
+    <#
+    .SYNOPSIS
+    Write standalone dependency upgrade launchers for packaged demos.
+    写入发布 demo 包专用的独立依赖升级入口。
+
+    .PARAMETER PackageRoot
+    Package root that receives upgrade scripts.
+    接收升级脚本的发布包根目录。
+    #>
+    param([string]$PackageRoot)
+
+    $WindowsUpgradeScript = @'
+@echo off
+chcp 65001 >nul
+setlocal
+REM Target selects which dependency group to download.
+REM Target 选择要下载的依赖分组。
+set "TARGET=%~1"
+if "%TARGET%"=="" set "TARGET=all"
+
+REM PackageRoot points at the extracted demo package root.
+REM PackageRoot 指向解压后的 demo 包根目录。
+set "PACKAGE_ROOT=%~dp0"
+set "RUNTIME_ROOT=%PACKAGE_ROOT%runtime"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\fetch_runtime_deps.ps1" -Target "%TARGET%" -RuntimeRoot "%RUNTIME_ROOT%"
+if errorlevel 1 (
+  echo Failed to upgrade dependencies.
+  pause
+  exit /b 1
+)
+echo Dependencies are ready.
+pause
+'@
+    [System.IO.File]::WriteAllText((Join-Path $PackageRoot "upgrade_deps.bat"), $WindowsUpgradeScript, [System.Text.UTF8Encoding]::new($false))
+
+    @'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# PackageRoot points at the extracted demo package root.
+# PackageRoot 指向解压后的 demo 包根目录。
+PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Target selects which dependency group to download.
+# Target 选择要下载的依赖分组。
+TARGET="${1:-all}"
+
+# RuntimeRoot is the packaged runtime root that receives dependencies.
+# RuntimeRoot 是接收依赖的包内运行根目录。
+RUNTIME_ROOT="${RUNTIME_ROOT:-$PACKAGE_ROOT/runtime}"
+
+RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET"
+'@ | Set-Content -Path (Join-Path $PackageRoot "upgrade_deps.sh") -Encoding UTF8
 }
 
 function Write-PackagedDemoReadme {
@@ -345,9 +368,9 @@ function Write-PackagedDemoReadme {
 
     $ShellName = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { "powershell" } else { "bash" }
     $RunCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\run.ps1" } else { "./run.sh" }
-    $FetchAllCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\run.ps1 -Fetch all" } else { "./run.sh all" }
-    $FetchLuaCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\scripts\fetch_runtime_deps.ps1 -Target lua -RuntimeRoot .\runtime" } else { "RUNTIME_ROOT=./runtime ./scripts/fetch_runtime_deps.sh lua" }
-    $FetchVldbCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\scripts\fetch_runtime_deps.ps1 -Target vldb -RuntimeRoot .\runtime" } else { "RUNTIME_ROOT=./runtime ./scripts/fetch_runtime_deps.sh vldb" }
+    $FetchAllCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat" } else { "./upgrade_deps.sh" }
+    $FetchLuaCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat lua" } else { "./upgrade_deps.sh lua" }
+    $FetchVldbCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat vldb" } else { "./upgrade_deps.sh vldb" }
     $ModeDescription = if ($Mode -eq "ffi") { 'FFI demo 通过 `lib/` 下的动态库运行 `python/demo.py`，适合验证 C ABI 宿主接入。' } else { "Rust demo 通过包内 ``Cargo.toml`` 直接依赖 ``vulcan-luaskills`` 的 ``$ReleaseTag`` tag，适合验证非 FFI 接入。" }
     $ReadmeTemplate = @'
 # LuaSkills __MODE__ demo package
@@ -371,7 +394,7 @@ __MODE_DESCRIPTION__
 __RUN_COMMAND__
 ```
 
-如果需要先拉取 Lua runtime 与 vldb-controller：
+`run` 脚本只负责运行 demo，不会自动下载依赖。首次使用或升级依赖时请先执行：
 
 ```__SHELL_NAME__
 __FETCH_ALL_COMMAND__
@@ -384,9 +407,9 @@ __FETCH_LUA_COMMAND__
 __FETCH_VLDB_COMMAND__
 ```
 
-Windows 包只包含 `run.ps1` 与 `scripts/fetch_runtime_deps.ps1`；Linux/macOS 包只包含 `run.sh` 与 `scripts/fetch_runtime_deps.sh`。
+Windows 包包含 `run.ps1`、`upgrade_deps.bat` 与 `scripts/fetch_runtime_deps.ps1`；Linux/macOS 包包含 `run.sh`、`upgrade_deps.sh` 与 `scripts/fetch_runtime_deps.sh`。
 
-Windows packages include only `run.ps1` and `scripts/fetch_runtime_deps.ps1`; Linux/macOS packages include only `run.sh` and `scripts/fetch_runtime_deps.sh`.
+Windows packages include `run.ps1`, `upgrade_deps.bat`, and `scripts/fetch_runtime_deps.ps1`; Linux/macOS packages include `run.sh`, `upgrade_deps.sh`, and `scripts/fetch_runtime_deps.sh`.
 '@
 
     $ReadmeContent = $ReadmeTemplate

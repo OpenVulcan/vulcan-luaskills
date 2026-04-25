@@ -108,6 +108,8 @@ bash scripts/fetch_runtime_deps.sh vldb
 
 其中 `vldb` 会把 `vldb-controller(.exe)` 安装到运行根的 `bin/` 目录，匹配 demo 默认目录约定。
 
+发布 demo 包内的运行入口与依赖升级入口是分离的：`run.ps1` / `run.sh` 只运行 demo，不会自动下载依赖；Windows 包可双击 `upgrade_deps.bat` 默认拉取 `all`，Linux/macOS 包执行 `./upgrade_deps.sh` 默认拉取 `all`，也可以传入 `lua` 或 `vldb` 单独更新对应部分。
+
 ## 核心原则
 
 ### 1. 库不读取宿主配置文件

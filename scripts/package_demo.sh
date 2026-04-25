@@ -55,8 +55,10 @@ prune_packaged_demo_scripts() {
   local package_root="$1"
   if platform_is_windows; then
     rm -f "$package_root/run.sh"
+    rm -f "$package_root/upgrade_deps.sh"
   else
     rm -f "$package_root/run.ps1"
+    rm -f "$package_root/upgrade_deps.bat"
   fi
 }
 
@@ -68,13 +70,6 @@ write_packaged_demo_scripts() {
 
   if [ "$mode" = "rust" ]; then
     cat > "$package_root/run.ps1" <<'PS1'
-param(
-    # Dependency target to fetch before running the packaged demo.
-    # 运行发布 demo 前需要拉取的依赖目标。
-    [ValidateSet("none", "all", "lua", "vldb")]
-    [string]$Fetch = "none"
-)
-
 $ErrorActionPreference = "Stop"
 
 # PackageRoot points at the extracted demo package root.
@@ -84,10 +79,6 @@ $PackageRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 # RuntimeRoot is the packaged runtime root consumed by the demo.
 # RuntimeRoot 是 demo 使用的包内运行根目录。
 $RuntimeRoot = Join-Path $PackageRoot "runtime"
-
-if ($Fetch -ne "none") {
-    & (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1") -Target $Fetch -RuntimeRoot $RuntimeRoot
-}
 
 if (Test-Path -LiteralPath (Join-Path $RuntimeRoot "resources\runtime-env.ps1")) {
     . (Join-Path $RuntimeRoot "resources\runtime-env.ps1")
@@ -104,17 +95,9 @@ set -euo pipefail
 # PackageRoot 指向解压后的 demo 包根目录。
 PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Target selects which dependency group to fetch before running.
-# Target 选择运行前需要拉取的依赖分组。
-TARGET="${1:-none}"
-
 # RuntimeRoot is the packaged runtime root consumed by the demo.
 # RuntimeRoot 是 demo 使用的包内运行根目录。
 RUNTIME_ROOT="$PACKAGE_ROOT/runtime"
-
-if [ "$TARGET" != "none" ]; then
-  RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET"
-fi
 
 if [ -f "$RUNTIME_ROOT/resources/runtime-env.sh" ]; then
   # shellcheck source=/dev/null
@@ -124,18 +107,12 @@ fi
 LUASKILLS_RUNTIME_ROOT="$RUNTIME_ROOT" cargo run --manifest-path "$PACKAGE_ROOT/Cargo.toml"
 SH
     chmod +x "$package_root/run.sh"
+    write_packaged_dependency_upgrade_scripts "$package_root"
     prune_packaged_demo_scripts "$package_root"
     return
   fi
 
   cat > "$package_root/run.ps1" <<'PS1'
-param(
-    # Dependency target to fetch before running the packaged demo.
-    # 运行发布 demo 前需要拉取的依赖目标。
-    [ValidateSet("none", "all", "lua", "vldb")]
-    [string]$Fetch = "none"
-)
-
 $ErrorActionPreference = "Stop"
 
 # PackageRoot points at the extracted demo package root.
@@ -145,10 +122,6 @@ $PackageRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 # RuntimeRoot is the packaged runtime root consumed by the demo.
 # RuntimeRoot 是 demo 使用的包内运行根目录。
 $RuntimeRoot = Join-Path $PackageRoot "runtime"
-
-if ($Fetch -ne "none") {
-    & (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1") -Target $Fetch -RuntimeRoot $RuntimeRoot
-}
 
 if (Test-Path -LiteralPath (Join-Path $RuntimeRoot "resources\runtime-env.ps1")) {
     . (Join-Path $RuntimeRoot "resources\runtime-env.ps1")
@@ -181,17 +154,9 @@ set -euo pipefail
 # PackageRoot 指向解压后的 demo 包根目录。
 PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Target selects which dependency group to fetch before running.
-# Target 选择运行前需要拉取的依赖分组。
-TARGET="${1:-none}"
-
 # RuntimeRoot is the packaged runtime root consumed by the demo.
 # RuntimeRoot 是 demo 使用的包内运行根目录。
 RUNTIME_ROOT="$PACKAGE_ROOT/runtime"
-
-if [ "$TARGET" != "none" ]; then
-  RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET"
-fi
 
 if [ -f "$RUNTIME_ROOT/resources/runtime-env.sh" ]; then
   # shellcheck source=/dev/null
@@ -209,7 +174,58 @@ esac
 VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/python/demo.py"
 SH
   chmod +x "$package_root/run.sh"
+  write_packaged_dependency_upgrade_scripts "$package_root"
   prune_packaged_demo_scripts "$package_root"
+}
+
+write_packaged_dependency_upgrade_scripts() {
+  # Write standalone dependency upgrade launchers for packaged demos.
+  # 写入发布 demo 包专用的独立依赖升级入口。
+  local package_root="$1"
+
+  cat > "$package_root/upgrade_deps.bat" <<'BAT'
+@echo off
+chcp 65001 >nul
+setlocal
+REM Target selects which dependency group to download.
+REM Target 选择要下载的依赖分组。
+set "TARGET=%~1"
+if "%TARGET%"=="" set "TARGET=all"
+
+REM PackageRoot points at the extracted demo package root.
+REM PackageRoot 指向解压后的 demo 包根目录。
+set "PACKAGE_ROOT=%~dp0"
+set "RUNTIME_ROOT=%PACKAGE_ROOT%runtime"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\fetch_runtime_deps.ps1" -Target "%TARGET%" -RuntimeRoot "%RUNTIME_ROOT%"
+if errorlevel 1 (
+  echo Failed to upgrade dependencies.
+  pause
+  exit /b 1
+)
+echo Dependencies are ready.
+pause
+BAT
+
+  cat > "$package_root/upgrade_deps.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# PackageRoot points at the extracted demo package root.
+# PackageRoot 指向解压后的 demo 包根目录。
+PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Target selects which dependency group to download.
+# Target 选择要下载的依赖分组。
+TARGET="${1:-all}"
+
+# RuntimeRoot is the packaged runtime root that receives dependencies.
+# RuntimeRoot 是接收依赖的包内运行根目录。
+RUNTIME_ROOT="${RUNTIME_ROOT:-$PACKAGE_ROOT/runtime}"
+
+RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET"
+SH
+  chmod +x "$package_root/upgrade_deps.sh"
 }
 
 write_packaged_demo_readme() {
@@ -222,15 +238,15 @@ write_packaged_demo_readme() {
   if platform_is_windows; then
     shell_name="powershell"
     run_command='.\run.ps1'
-    fetch_all_command='.\run.ps1 -Fetch all'
-    fetch_lua_command='.\scripts\fetch_runtime_deps.ps1 -Target lua -RuntimeRoot .\runtime'
-    fetch_vldb_command='.\scripts\fetch_runtime_deps.ps1 -Target vldb -RuntimeRoot .\runtime'
+    fetch_all_command='.\upgrade_deps.bat'
+    fetch_lua_command='.\upgrade_deps.bat lua'
+    fetch_vldb_command='.\upgrade_deps.bat vldb'
   else
     shell_name="bash"
     run_command="./run.sh"
-    fetch_all_command="./run.sh all"
-    fetch_lua_command="RUNTIME_ROOT=./runtime ./scripts/fetch_runtime_deps.sh lua"
-    fetch_vldb_command="RUNTIME_ROOT=./runtime ./scripts/fetch_runtime_deps.sh vldb"
+    fetch_all_command="./upgrade_deps.sh"
+    fetch_lua_command="./upgrade_deps.sh lua"
+    fetch_vldb_command="./upgrade_deps.sh vldb"
   fi
 
   if [ "$mode" = "ffi" ]; then
@@ -251,12 +267,12 @@ write_packaged_demo_readme() {
     printf '%s\n\n' "$mode_description"
     printf '## 运行 / Run\n\n'
     printf '```%s\n%s\n```\n\n' "$shell_name" "$run_command"
-    printf '如果需要先拉取 Lua runtime 与 vldb-controller：\n\n'
+    printf '`run` 脚本只负责运行 demo，不会自动下载依赖。首次使用或升级依赖时请先执行：\n\n'
     printf '```%s\n%s\n```\n\n' "$shell_name" "$fetch_all_command"
     printf '也可以按需单独拉取：\n\n'
     printf '```%s\n%s\n%s\n```\n\n' "$shell_name" "$fetch_lua_command" "$fetch_vldb_command"
-    printf 'Windows 包只包含 `run.ps1` 与 `scripts/fetch_runtime_deps.ps1`；Linux/macOS 包只包含 `run.sh` 与 `scripts/fetch_runtime_deps.sh`。\n\n'
-    printf 'Windows packages include only `run.ps1` and `scripts/fetch_runtime_deps.ps1`; Linux/macOS packages include only `run.sh` and `scripts/fetch_runtime_deps.sh`.\n'
+    printf 'Windows 包包含 `run.ps1`、`upgrade_deps.bat` 与 `scripts/fetch_runtime_deps.ps1`；Linux/macOS 包包含 `run.sh`、`upgrade_deps.sh` 与 `scripts/fetch_runtime_deps.sh`。\n\n'
+    printf 'Windows packages include `run.ps1`, `upgrade_deps.bat`, and `scripts/fetch_runtime_deps.ps1`; Linux/macOS packages include `run.sh`, `upgrade_deps.sh`, and `scripts/fetch_runtime_deps.sh`.\n'
   } > "$package_root/README.md"
 }
 
