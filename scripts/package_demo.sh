@@ -212,6 +212,54 @@ SH
   prune_packaged_demo_scripts "$package_root"
 }
 
+write_packaged_demo_readme() {
+  # Write a package-root README that matches the generated demo artifact layout.
+  # 写入匹配发布 demo 包目录结构的包根 README。
+  local mode="$1"
+  local package_root="$2"
+  local shell_name run_command fetch_all_command fetch_lua_command fetch_vldb_command mode_description
+
+  if platform_is_windows; then
+    shell_name="powershell"
+    run_command='.\run.ps1'
+    fetch_all_command='.\run.ps1 -Fetch all'
+    fetch_lua_command='.\scripts\fetch_runtime_deps.ps1 -Target lua -RuntimeRoot .\runtime'
+    fetch_vldb_command='.\scripts\fetch_runtime_deps.ps1 -Target vldb -RuntimeRoot .\runtime'
+  else
+    shell_name="bash"
+    run_command="./run.sh"
+    fetch_all_command="./run.sh all"
+    fetch_lua_command="RUNTIME_ROOT=./runtime ./scripts/fetch_runtime_deps.sh lua"
+    fetch_vldb_command="RUNTIME_ROOT=./runtime ./scripts/fetch_runtime_deps.sh vldb"
+  fi
+
+  if [ "$mode" = "ffi" ]; then
+    mode_description='FFI demo 通过 `lib/` 下的动态库运行 `python/demo.py`，适合验证 C ABI 宿主接入。'
+  else
+    mode_description='Rust demo 通过包内 `Cargo.toml` 直接依赖 `vulcan-luaskills` 的 `'"$RELEASE_TAG"'` tag，适合验证非 FFI 接入。'
+  fi
+
+  {
+    printf '# LuaSkills %s demo package\n\n' "$mode"
+    printf '这是 `luaskills-demo-%s-%s.tar.gz` 解压后的发布包说明，路径与命令均按包根目录设计，不依赖仓库源码布局。\n\n' "$mode" "$PLATFORM"
+    printf 'This README describes the extracted `luaskills-demo-%s-%s.tar.gz` package. Paths and commands are package-root based and do not require the source repository layout.\n\n' "$mode" "$PLATFORM"
+    printf '## 包内容 / Package Contents\n\n'
+    printf -- '- `runtime/`：demo 默认 runtime 根目录，可由拉取脚本安装 `lua-runtime-%s.tar.gz`。\n' "$PLATFORM"
+    printf -- '- `scripts/`：仅包含当前平台可用的依赖拉取脚本。\n'
+    printf -- '- `licenses/`：项目与随包组件授权材料。\n'
+    printf -- '- `demo-manifest.json`：包模式、平台、runtime 根和可拉取目标清单。\n\n'
+    printf '%s\n\n' "$mode_description"
+    printf '## 运行 / Run\n\n'
+    printf '```%s\n%s\n```\n\n' "$shell_name" "$run_command"
+    printf '如果需要先拉取 Lua runtime 与 vldb-controller：\n\n'
+    printf '```%s\n%s\n```\n\n' "$shell_name" "$fetch_all_command"
+    printf '也可以按需单独拉取：\n\n'
+    printf '```%s\n%s\n%s\n```\n\n' "$shell_name" "$fetch_lua_command" "$fetch_vldb_command"
+    printf 'Windows 包只包含 `run.ps1` 与 `scripts/fetch_runtime_deps.ps1`；Linux/macOS 包只包含 `run.sh` 与 `scripts/fetch_runtime_deps.sh`。\n\n'
+    printf 'Windows packages include only `run.ps1` and `scripts/fetch_runtime_deps.ps1`; Linux/macOS packages include only `run.sh` and `scripts/fetch_runtime_deps.sh`.\n'
+  } > "$package_root/README.md"
+}
+
 if [ -z "$PLATFORM" ]; then
   case "$(uname -s)" in
     Linux) os_key="linux" ;;
@@ -273,6 +321,7 @@ PY
 fi
 
 write_packaged_demo_scripts "$MODE" "$PACKAGE_ROOT"
+write_packaged_demo_readme "$MODE" "$PACKAGE_ROOT"
 
 cat > "$PACKAGE_ROOT/demo-manifest.json" <<JSON
 {

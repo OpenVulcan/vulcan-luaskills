@@ -81,6 +81,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 GitHub 端的 Lua 依赖构建不再只面向旧版 `deps-v1` 的 C 依赖包，而是按版本号 tag（例如 `v0.1.0`）拆成多类产物：
 
 - `lua-runtime-{platform}.tar.gz`：运行期 Lua 包、原生运行库、资源清单与授权材料。
+- `lua-deps-{platform}.tar.gz`：构建期原生依赖包，包含 OpenSSL、curl、zlib、pcre2、libyaml 等头文件与库，主要给 CI 或源码构建复用。
 - `luaskills-ffi-sdk-{platform}.tar.gz`：FFI 头文件、动态库/链接库、SDK manifest 与授权材料。
 - `luaskills-demo-ffi-{platform}.tar.gz`：动态库宿主 demo，面向 C / Python / Go / TypeScript 等 FFI 接入方式。
 - `luaskills-demo-rust-{platform}.tar.gz`：Rust 直连 demo，面向直接依赖 crate 的非 FFI 接入方式。
@@ -89,10 +90,20 @@ GitHub 端的 Lua 依赖构建不再只面向旧版 `deps-v1` 的 C 依赖包，
 
 demo / 源码环境可使用统一拉取脚本：
 
+Windows：
+
 ```powershell
 .\scripts\fetch_runtime_deps.ps1 -Target all
 .\scripts\fetch_runtime_deps.ps1 -Target lua
 .\scripts\fetch_runtime_deps.ps1 -Target vldb
+```
+
+Linux/macOS：
+
+```bash
+bash scripts/fetch_runtime_deps.sh all
+bash scripts/fetch_runtime_deps.sh lua
+bash scripts/fetch_runtime_deps.sh vldb
 ```
 
 其中 `vldb` 会把 `vldb-controller(.exe)` 安装到运行根的 `bin/` 目录，匹配 demo 默认目录约定。

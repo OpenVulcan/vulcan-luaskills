@@ -185,7 +185,16 @@ copy_license_candidates() {
   local destination="$2"
   [ -d "$source" ] || return 0
   ensure_dir "$destination"
-  find "$source" -maxdepth 5 -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) -exec cp -f {} "$destination/" \;
+  local destination_real
+  destination_real="$(cd "$destination" && pwd -P)"
+  find "$source" -maxdepth 5 -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) -print | while IFS= read -r license_file; do
+    local license_real
+    license_real="$(cd "$(dirname "$license_file")" && pwd -P)/$(basename "$license_file")"
+    case "$license_real" in
+      "$destination_real"|"$destination_real"/*) continue ;;
+    esac
+    cp -f "$license_file" "$destination/"
+  done
 }
 
 download_official_license() {

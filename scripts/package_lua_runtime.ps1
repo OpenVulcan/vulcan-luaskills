@@ -421,6 +421,10 @@ function Copy-LicenseCandidates {
 
     $ComponentDir = Join-Path $LicenseRoot $ComponentName
     Ensure-Dir $ComponentDir
+    $ResolvedLicenseRoot = (Resolve-Path -LiteralPath $LicenseRoot).Path.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $ResolvedComponentDir = (Resolve-Path -LiteralPath $ComponentDir).Path.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $LicenseRootPrefix = $ResolvedLicenseRoot + [System.IO.Path]::DirectorySeparatorChar
+    $ComponentDirPrefix = $ResolvedComponentDir + [System.IO.Path]::DirectorySeparatorChar
 
     foreach ($SearchRoot in $SearchRoots) {
         if (-not (Test-Path -LiteralPath $SearchRoot)) {
@@ -430,7 +434,14 @@ function Copy-LicenseCandidates {
         Get-ChildItem -Recurse -File -Path $SearchRoot -Depth 5 -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)(\.|$)' } |
             ForEach-Object {
-                Copy-Item -Force -LiteralPath $_.FullName -Destination (Join-Path $ComponentDir $_.Name)
+                $SourceFullPath = [System.IO.Path]::GetFullPath($_.FullName)
+                $DestinationPath = Join-Path $ComponentDir $_.Name
+                $DestinationFullPath = [System.IO.Path]::GetFullPath($DestinationPath)
+                $CopiesIntoItself = $SourceFullPath.Equals($DestinationFullPath, [System.StringComparison]::OrdinalIgnoreCase)
+                $CopiesFromPackageLicenses = $SourceFullPath.StartsWith($ComponentDirPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or $SourceFullPath.StartsWith($LicenseRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+                if (-not $CopiesIntoItself -and -not $CopiesFromPackageLicenses) {
+                    Copy-Item -Force -LiteralPath $_.FullName -Destination $DestinationPath
+                }
             }
     }
 }

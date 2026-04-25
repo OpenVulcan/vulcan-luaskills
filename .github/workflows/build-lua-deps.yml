@@ -739,6 +739,22 @@ jobs:
           powershell -ExecutionPolicy Bypass -File scripts/package_ffi_sdk.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR"
           powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode ffi -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ inputs.version }}"
           powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode rust -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ inputs.version }}"
+          # ExpectedAssets prevents the release step from silently publishing an incomplete platform set.
+          # ExpectedAssets 防止发布步骤静默上传缺少 runtime 等关键文件的平台产物集合。
+          $expectedAssets = @(
+            "lua-deps-${{ matrix.platform }}.tar.gz",
+            "lua-runtime-${{ matrix.platform }}.tar.gz",
+            "luaskills-ffi-sdk-${{ matrix.platform }}.tar.gz",
+            "luaskills-demo-ffi-${{ matrix.platform }}.tar.gz",
+            "luaskills-demo-rust-${{ matrix.platform }}.tar.gz"
+          )
+          $releasePackageDir = Join-Path $env:GITHUB_WORKSPACE $env:RELEASE_PACKAGE_DIR
+          foreach ($asset in $expectedAssets) {
+            $assetPath = Join-Path $releasePackageDir $asset
+            if (-not (Test-Path -LiteralPath $assetPath)) {
+              throw "Missing expected release asset: $assetPath"
+            }
+          }
 
       - name: Package release assets (Unix)
         if: runner.os != 'Windows'
@@ -749,6 +765,19 @@ jobs:
           bash scripts/package_ffi_sdk.sh "${{ matrix.platform }}"
           bash scripts/package_demo.sh ffi "${{ matrix.platform }}" "${{ inputs.version }}"
           bash scripts/package_demo.sh rust "${{ matrix.platform }}" "${{ inputs.version }}"
+          # ExpectedAssets prevents the release step from silently publishing an incomplete platform set.
+          # ExpectedAssets 防止发布步骤静默上传缺少 runtime 等关键文件的平台产物集合。
+          for asset in \
+            "lua-deps-${{ matrix.platform }}.tar.gz" \
+            "lua-runtime-${{ matrix.platform }}.tar.gz" \
+            "luaskills-ffi-sdk-${{ matrix.platform }}.tar.gz" \
+            "luaskills-demo-ffi-${{ matrix.platform }}.tar.gz" \
+            "luaskills-demo-rust-${{ matrix.platform }}.tar.gz"; do
+            test -f "$GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR/$asset" || {
+              echo "Missing expected release asset: $GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR/$asset" >&2
+              exit 1
+            }
+          done
 
       - name: Write release description
         shell: bash

@@ -314,6 +314,93 @@ VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/python/demo.py"
     Remove-NonPlatformDemoScripts -PackageRoot $PackageRoot -Platform $Platform
 }
 
+function Write-PackagedDemoReadme {
+    <#
+    .SYNOPSIS
+    Write a package-root README that matches the generated demo artifact layout.
+    写入匹配发布 demo 包目录结构的包根 README。
+
+    .PARAMETER Mode
+    Demo mode represented by the package.
+    当前发布包对应的 demo 模式。
+
+    .PARAMETER Platform
+    Target package platform used to describe platform-specific commands.
+    用于描述平台专属命令的目标平台。
+
+    .PARAMETER PackageRoot
+    Package root that receives README.md.
+    接收 README.md 的发布包根目录。
+
+    .PARAMETER ReleaseTag
+    Git release tag used by fetch scripts and Rust demo dependency.
+    拉取脚本与 Rust demo 依赖使用的 Git 发布标签。
+    #>
+    param(
+        [string]$Mode,
+        [string]$Platform,
+        [string]$PackageRoot,
+        [string]$ReleaseTag
+    )
+
+    $ShellName = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { "powershell" } else { "bash" }
+    $RunCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\run.ps1" } else { "./run.sh" }
+    $FetchAllCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\run.ps1 -Fetch all" } else { "./run.sh all" }
+    $FetchLuaCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\scripts\fetch_runtime_deps.ps1 -Target lua -RuntimeRoot .\runtime" } else { "RUNTIME_ROOT=./runtime ./scripts/fetch_runtime_deps.sh lua" }
+    $FetchVldbCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\scripts\fetch_runtime_deps.ps1 -Target vldb -RuntimeRoot .\runtime" } else { "RUNTIME_ROOT=./runtime ./scripts/fetch_runtime_deps.sh vldb" }
+    $ModeDescription = if ($Mode -eq "ffi") { 'FFI demo 通过 `lib/` 下的动态库运行 `python/demo.py`，适合验证 C ABI 宿主接入。' } else { "Rust demo 通过包内 ``Cargo.toml`` 直接依赖 ``vulcan-luaskills`` 的 ``$ReleaseTag`` tag，适合验证非 FFI 接入。" }
+    $ReadmeTemplate = @'
+# LuaSkills __MODE__ demo package
+
+这是 `luaskills-demo-__MODE__-__PLATFORM__.tar.gz` 解压后的发布包说明，路径与命令均按包根目录设计，不依赖仓库源码布局。
+
+This README describes the extracted `luaskills-demo-__MODE__-__PLATFORM__.tar.gz` package. Paths and commands are package-root based and do not require the source repository layout.
+
+## 包内容 / Package Contents
+
+- `runtime/`：demo 默认 runtime 根目录，可由拉取脚本安装 `lua-runtime-__PLATFORM__.tar.gz`。
+- `scripts/`：仅包含当前平台可用的依赖拉取脚本。
+- `licenses/`：项目与随包组件授权材料。
+- `demo-manifest.json`：包模式、平台、runtime 根和可拉取目标清单。
+
+__MODE_DESCRIPTION__
+
+## 运行 / Run
+
+```__SHELL_NAME__
+__RUN_COMMAND__
+```
+
+如果需要先拉取 Lua runtime 与 vldb-controller：
+
+```__SHELL_NAME__
+__FETCH_ALL_COMMAND__
+```
+
+也可以按需单独拉取：
+
+```__SHELL_NAME__
+__FETCH_LUA_COMMAND__
+__FETCH_VLDB_COMMAND__
+```
+
+Windows 包只包含 `run.ps1` 与 `scripts/fetch_runtime_deps.ps1`；Linux/macOS 包只包含 `run.sh` 与 `scripts/fetch_runtime_deps.sh`。
+
+Windows packages include only `run.ps1` and `scripts/fetch_runtime_deps.ps1`; Linux/macOS packages include only `run.sh` and `scripts/fetch_runtime_deps.sh`.
+'@
+
+    $ReadmeContent = $ReadmeTemplate
+    $ReadmeContent = $ReadmeContent.Replace("__MODE__", $Mode)
+    $ReadmeContent = $ReadmeContent.Replace("__PLATFORM__", $Platform)
+    $ReadmeContent = $ReadmeContent.Replace("__MODE_DESCRIPTION__", $ModeDescription)
+    $ReadmeContent = $ReadmeContent.Replace("__SHELL_NAME__", $ShellName)
+    $ReadmeContent = $ReadmeContent.Replace("__RUN_COMMAND__", $RunCommand)
+    $ReadmeContent = $ReadmeContent.Replace("__FETCH_ALL_COMMAND__", $FetchAllCommand)
+    $ReadmeContent = $ReadmeContent.Replace("__FETCH_LUA_COMMAND__", $FetchLuaCommand)
+    $ReadmeContent = $ReadmeContent.Replace("__FETCH_VLDB_COMMAND__", $FetchVldbCommand)
+    $ReadmeContent | Set-Content -Path (Join-Path $PackageRoot "README.md") -Encoding UTF8
+}
+
 if (-not $Platform) {
     $Arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
     if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
@@ -368,6 +455,7 @@ if ($Mode -eq "ffi") {
 }
 
 Write-PackagedDemoScripts -Mode $Mode -PackageRoot $PackageRoot -Platform $Platform
+Write-PackagedDemoReadme -Mode $Mode -Platform $Platform -PackageRoot $PackageRoot -ReleaseTag $ReleaseTag
 
 [ordered]@{
     schema_version = 1
