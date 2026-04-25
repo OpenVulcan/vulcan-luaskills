@@ -152,8 +152,8 @@ jobs:
       # ARCHIVE_NAME is shared by packaging and release upload steps to avoid duplicated string assembly.
       # ARCHIVE_NAME 供打包与发布上传步骤共享，避免重复拼接归档文件名。
       ARCHIVE_NAME: lua-deps-${{ matrix.platform }}.tar.gz
-      # RELEASE_PACKAGE_DIR stores final user-facing runtime, SDK, demo, and source dependency archives.
-      # RELEASE_PACKAGE_DIR 保存最终面向用户的 runtime、SDK、demo 与源码依赖压缩包。
+      # RELEASE_PACKAGE_DIR stores final user-facing runtime, SDK, and demo archives.
+      # RELEASE_PACKAGE_DIR 保存最终面向用户的 runtime、SDK 与 demo 压缩包。
       RELEASE_PACKAGE_DIR: target/release-packages
     steps:
       - uses: actions/checkout@v4
@@ -737,13 +737,6 @@ jobs:
           bash scripts/package_ffi_sdk.sh "${{ matrix.platform }}"
           bash scripts/package_demo.sh ffi "${{ matrix.platform }}" "${{ inputs.version }}"
           bash scripts/package_demo.sh rust "${{ matrix.platform }}" "${{ inputs.version }}"
-
-      - name: Package source dependency bundle (Linux x64)
-        if: matrix.platform == 'linux-x64'
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/package_source_deps.sh "${{ inputs.version }}"
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
