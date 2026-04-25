@@ -27,6 +27,22 @@ ensure_dir() {
   mkdir -p "$1"
 }
 
+create_tar_from_dir() {
+  # Archive top-level children without adding a leading ./ entry.
+  # 按一级子项打包，避免归档内出现 ./ 前缀。
+  local source_dir="$1"
+  local archive_path="$2"
+  local members=()
+  while IFS= read -r entry; do
+    members+=("$(basename "$entry")")
+  done < <(find "$source_dir" -mindepth 1 -maxdepth 1)
+  if [ "${#members[@]}" -eq 0 ]; then
+    echo "Cannot create archive from empty directory: $source_dir" >&2
+    return 1
+  fi
+  tar -czf "$archive_path" -C "$source_dir" "${members[@]}"
+}
+
 write_packaged_demo_scripts() {
   # Write run scripts that work from the packaged demo root.
   # 写入可从发布 demo 包根目录直接运行的脚本。
@@ -248,5 +264,5 @@ cat > "$PACKAGE_ROOT/demo-manifest.json" <<JSON
 JSON
 
 ARCHIVE_NAME="luaskills-demo-${MODE}-${PLATFORM}.tar.gz"
-tar -czf "$OUTPUT_DIR/$ARCHIVE_NAME" -C "$PACKAGE_ROOT" .
+create_tar_from_dir "$PACKAGE_ROOT" "$OUTPUT_DIR/$ARCHIVE_NAME"
 echo "Demo package created: $OUTPUT_DIR/$ARCHIVE_NAME"

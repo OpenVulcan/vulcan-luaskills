@@ -19,6 +19,22 @@ ensure_dir() {
   mkdir -p "$1"
 }
 
+create_tar_from_dir() {
+  # Archive top-level children without adding a leading ./ entry.
+  # 按一级子项打包，避免归档内出现 ./ 前缀。
+  local source_dir="$1"
+  local archive_path="$2"
+  local members=()
+  while IFS= read -r entry; do
+    members+=("$(basename "$entry")")
+  done < <(find "$source_dir" -mindepth 1 -maxdepth 1)
+  if [ "${#members[@]}" -eq 0 ]; then
+    echo "Cannot create archive from empty directory: $source_dir" >&2
+    return 1
+  fi
+  tar -czf "$archive_path" -C "$source_dir" "${members[@]}"
+}
+
 if [ -z "$PLATFORM" ]; then
   case "$(uname -s)" in
     Linux) os_key="linux" ;;
@@ -56,5 +72,5 @@ cat > "$PACKAGE_ROOT/ffi-sdk-manifest.json" <<JSON
 JSON
 
 ARCHIVE_NAME="luaskills-ffi-sdk-${PLATFORM}.tar.gz"
-tar -czf "$OUTPUT_DIR/$ARCHIVE_NAME" -C "$PACKAGE_ROOT" .
+create_tar_from_dir "$PACKAGE_ROOT" "$OUTPUT_DIR/$ARCHIVE_NAME"
 echo "FFI SDK package created: $OUTPUT_DIR/$ARCHIVE_NAME"

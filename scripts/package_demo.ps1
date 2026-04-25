@@ -75,6 +75,30 @@ function Ensure-Dir {
     }
 }
 
+function New-TarFromDirectory {
+    <#
+    .SYNOPSIS
+    Archive top-level children without adding a leading ./ entry.
+    按一级子项打包，避免归档内出现 ./ 前缀。
+    #>
+    param(
+        [string]$SourceDir,
+        [string]$ArchivePath
+    )
+
+    $Members = @(Get-ChildItem -Force -LiteralPath $SourceDir | ForEach-Object { $_.Name })
+    if (-not $Members -or $Members.Count -eq 0) {
+        throw "Cannot create archive from empty directory: $SourceDir"
+    }
+
+    Push-Location $SourceDir
+    try {
+        tar -czf $ArchivePath @Members
+    } finally {
+        Pop-Location
+    }
+}
+
 function Write-PackagedDemoScripts {
     <#
     .SYNOPSIS
@@ -302,11 +326,6 @@ Write-PackagedDemoScripts -Mode $Mode -PackageRoot $PackageRoot
 
 $ArchiveName = "luaskills-demo-$Mode-$Platform.tar.gz"
 $ResolvedOutput = (Resolve-Path -LiteralPath $OutputDir).Path
-Push-Location $PackageRoot
-try {
-    tar -czf (Join-Path $ResolvedOutput $ArchiveName) .
-} finally {
-    Pop-Location
-}
+New-TarFromDirectory -SourceDir $PackageRoot -ArchivePath (Join-Path $ResolvedOutput $ArchiveName)
 
 Write-Host "Demo package created: $(Join-Path $OutputDir $ArchiveName)"

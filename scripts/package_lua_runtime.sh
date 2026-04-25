@@ -27,6 +27,22 @@ ensure_dir() {
   mkdir -p "$1"
 }
 
+create_tar_from_dir() {
+  # Archive top-level children without adding a leading ./ entry.
+  # 按一级子项打包，避免归档内出现 ./ 前缀。
+  local source_dir="$1"
+  local archive_path="$2"
+  local members=()
+  while IFS= read -r entry; do
+    members+=("$(basename "$entry")")
+  done < <(find "$source_dir" -mindepth 1 -maxdepth 1)
+  if [ "${#members[@]}" -eq 0 ]; then
+    echo "Cannot create archive from empty directory: $source_dir" >&2
+    return 1
+  fi
+  tar -czf "$archive_path" -C "$source_dir" "${members[@]}"
+}
+
 record_bundled_library() {
   # Record one bundled native library source for manifests and license references.
   # 记录一个已打包原生库的来源，用于清单与授权引用。
@@ -316,5 +332,5 @@ cat > "$RUNTIME_ROOT/licenses/manifest.json" <<JSON
 JSON
 
 ARCHIVE_NAME="lua-runtime-${PLATFORM}.tar.gz"
-tar -czf "$OUTPUT_DIR/$ARCHIVE_NAME" -C "$RUNTIME_ROOT" .
+create_tar_from_dir "$RUNTIME_ROOT" "$OUTPUT_DIR/$ARCHIVE_NAME"
 echo "Lua runtime package created: $OUTPUT_DIR/$ARCHIVE_NAME"
