@@ -28,16 +28,16 @@ $ErrorActionPreference = "Stop"
 function Resolve-ProjectRoot {
     <#
     .SYNOPSIS
-    Resolve the repository root from script metadata or the caller location.
-    从脚本元数据或调用方位置解析仓库根目录。
+    Resolve the repository or packaged demo root from script metadata or the caller location.
+    从脚本元数据或调用方位置解析仓库根目录或已发布 demo 包根目录。
 
     .PARAMETER ScriptDirectory
     Directory that contains the current script when PowerShell exposes it.
     PowerShell 可用时当前脚本所在的目录。
 
     .OUTPUTS
-    Repository root path that contains Cargo.toml and scripts.
-    包含 Cargo.toml 与 scripts 目录的仓库根路径。
+    Root path that contains either Cargo.toml plus scripts, or packaged demo scripts.
+    包含 Cargo.toml 与 scripts 的仓库根路径，或包含发布 demo 脚本的包根路径。
     #>
     param([string]$ScriptDirectory)
 
@@ -51,6 +51,12 @@ function Resolve-ProjectRoot {
         $Current = $Candidate
         while ($Current) {
             if ((Test-Path -LiteralPath (Join-Path $Current "Cargo.toml")) -and (Test-Path -LiteralPath (Join-Path $Current "scripts"))) {
+                return $Current
+            }
+            $PackagedFetchScript = Join-Path $Current "scripts\fetch_runtime_deps.ps1"
+            $PackagedManifest = Join-Path $Current "demo-manifest.json"
+            $PackagedRuntime = Join-Path $Current "runtime"
+            if ((Test-Path -LiteralPath $PackagedFetchScript) -and ((Test-Path -LiteralPath $PackagedManifest) -or (Test-Path -LiteralPath $PackagedRuntime))) {
                 return $Current
             }
             $Parent = Split-Path -Parent $Current
@@ -215,6 +221,27 @@ function Expand-ArchiveSmart {
     }
 }
 
+function Test-ExistingRuntimeContent {
+    <#
+    .SYNOPSIS
+    Check whether a packaged demo already contains runnable runtime content.
+    检查已发布 demo 包是否已经包含可运行的 runtime 内容。
+
+    .PARAMETER RuntimeRootPath
+    Runtime root to inspect.
+    需要检查的运行根目录。
+
+    .OUTPUTS
+    Boolean value indicating whether local runtime content already exists.
+    表示本地 runtime 内容是否已经存在的布尔值。
+    #>
+    param([string]$RuntimeRootPath)
+
+    $SkillsDir = Join-Path $RuntimeRootPath "skills"
+    $LuaPackagesDir = Join-Path $RuntimeRootPath "lua_packages"
+    return (Test-Path -LiteralPath $SkillsDir) -or (Test-Path -LiteralPath $LuaPackagesDir)
+}
+
 function Install-LuaRuntime {
     <#
     .SYNOPSIS
@@ -239,7 +266,15 @@ function Install-LuaRuntime {
     Ensure-Dir $TempDir
 
     try {
-        $Url = Get-ReleaseAssetUrl -Repo $LuaRuntimeRepo -Tag $LuaRuntimeVersion -AssetName $AssetName
+        try {
+            $Url = Get-ReleaseAssetUrl -Repo $LuaRuntimeRepo -Tag $LuaRuntimeVersion -AssetName $AssetName
+        } catch {
+            if (Test-ExistingRuntimeContent -RuntimeRootPath $RuntimeRootPath) {
+                Write-Warning "Lua runtime asset '$AssetName' was not found in $LuaRuntimeRepo@$LuaRuntimeVersion. Existing packaged runtime content will be used."
+                return
+            }
+            throw
+        }
         Invoke-WebRequest -Uri $Url -OutFile $ArchivePath -UseBasicParsing
         Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
 

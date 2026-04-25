@@ -98,7 +98,15 @@ install_lua_runtime() {
   local archive="$temp_dir/$asset_name"
   local extract_dir="$temp_dir/extract"
   ensure_dir "$extract_dir"
-  curl -fSL "$(release_asset_url "$LUA_RUNTIME_REPO" "$LUA_RUNTIME_VERSION" "$asset_name")" -o "$archive"
+  local asset_url
+  if ! asset_url="$(release_asset_url "$LUA_RUNTIME_REPO" "$LUA_RUNTIME_VERSION" "$asset_name")"; then
+    if [ -d "$RUNTIME_ROOT/skills" ] || [ -d "$RUNTIME_ROOT/lua_packages" ]; then
+      echo "WARNING: Lua runtime asset '$asset_name' was not found in $LUA_RUNTIME_REPO@$LUA_RUNTIME_VERSION. Existing packaged runtime content will be used." >&2
+      return 0
+    fi
+    return 1
+  fi
+  curl -fSL "$asset_url" -o "$archive"
   tar -xzf "$archive" -C "$extract_dir"
   ensure_dir "$RUNTIME_ROOT"
   for dir_name in lua_packages libs resources; do
