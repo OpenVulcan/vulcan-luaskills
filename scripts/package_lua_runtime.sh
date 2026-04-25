@@ -188,6 +188,88 @@ copy_license_candidates() {
   find "$source" -maxdepth 5 -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) -exec cp -f {} "$destination/" \;
 }
 
+download_official_license() {
+  # Download one official license file for a fixed native dependency.
+  # 为固定原生依赖下载一个官方授权文件。
+  local component="$1"
+  local file_name="$2"
+  local url="$3"
+  local destination="$RUNTIME_ROOT/licenses/native/$component"
+  ensure_dir "$destination"
+  curl -fSL --retry 3 "$url" -o "$destination/$file_name"
+  printf '%s\n' "$url" > "$destination/$file_name.url.txt"
+}
+
+download_official_native_licenses() {
+  # Always include official licenses for the fixed native dependency set.
+  # 始终为固定原生依赖集合带入官方授权文件。
+  download_official_license "openssl" "LICENSE.official.txt" "https://raw.githubusercontent.com/openssl/openssl/openssl-3.4.1/LICENSE.txt"
+  download_official_license "curl" "COPYING.official.txt" "https://raw.githubusercontent.com/curl/curl/curl-8_13_0/COPYING"
+  download_official_license "zlib" "LICENSE.official.txt" "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE"
+  download_official_license "pcre2" "LICENCE.official.md" "https://raw.githubusercontent.com/PCRE2Project/pcre2/pcre2-10.45/LICENCE.md"
+  download_official_license "libyaml" "License.official" "https://raw.githubusercontent.com/yaml/libyaml/0.2.5/License"
+}
+
+rockspec_field() {
+  # Extract one common string field from a LuaRocks rockspec.
+  # 从 LuaRocks rockspec 中提取常见字符串字段。
+  local rockspec="$1"
+  local field="$2"
+  awk -v field="$field" '
+    $0 ~ field "[[:space:]]*=" {
+      if (match($0, /["'\''][^"'\'']+["'\'']/)) {
+        value = substr($0, RSTART + 1, RLENGTH - 2)
+        print value
+        exit
+      }
+    }
+  ' "$rockspec"
+}
+
+copy_luarocks_license_metadata() {
+  # Preserve license metadata for every installed LuaRocks package.
+  # 为每个已安装 LuaRocks 包保留授权元数据。
+  local rocks_root="$THIRD_PARTY_DIR/lua_packages/lib/luarocks/rocks-5.1"
+  [ -d "$rocks_root" ] || return 0
+  local manifest="$RUNTIME_ROOT/licenses/luarocks/manifest.tsv"
+  ensure_dir "$RUNTIME_ROOT/licenses/luarocks"
+  : > "$manifest"
+  for rock_dir in "$rocks_root"/*; do
+    [ -d "$rock_dir" ] || continue
+    local rock_name
+    rock_name="$(basename "$rock_dir")"
+    for version_dir in "$rock_dir"/*; do
+      [ -d "$version_dir" ] || continue
+      local version rockspec destination license source_url homepage
+      version="$(basename "$version_dir")"
+      rockspec="$(find "$version_dir" -maxdepth 1 -type f -name '*.rockspec' | head -1)"
+      destination="$RUNTIME_ROOT/licenses/luarocks/$rock_name"
+      ensure_dir "$destination"
+      copy_license_candidates "$version_dir" "$destination"
+      if [ -f "$rockspec" ]; then
+        cp -f "$rockspec" "$destination/$(basename "$rockspec")"
+        license="$(rockspec_field "$rockspec" "license")"
+        source_url="$(rockspec_field "$rockspec" "url")"
+        homepage="$(rockspec_field "$rockspec" "homepage")"
+      else
+        license=""
+        source_url=""
+        homepage=""
+      fi
+      [ -n "$license" ] || license="See rockspec or upstream package"
+      cat > "$destination/LICENSE.metadata.txt" <<EOF
+Package: $rock_name
+Version: $version
+License: $license
+Source: $source_url
+Homepage: $homepage
+Rockspec: $(basename "${rockspec:-}")
+EOF
+      printf '%s\t%s\t%s\t%s\t%s\n' "$rock_name" "$version" "$license" "$source_url" "$homepage" >> "$manifest"
+    done
+  done
+}
+
 write_license_reference_if_missing() {
   # Provide a license reference when a copied system library has no nearby license file.
   # 当复制的系统库没有随源目录提供授权文件时，写入授权引用。
@@ -288,6 +370,9 @@ for component in openssl curl zlib pcre2 libyaml; do
   done
 done
 
+download_official_native_licenses
+copy_luarocks_license_metadata
+
 if [ -f "$BUNDLED_LIBS_TSV" ]; then
   while IFS=$'\t' read -r lib_name component source_path; do
     [ -n "$component" ] && [ "$component" != "unknown" ] || continue
@@ -339,7 +424,8 @@ cat > "$RUNTIME_ROOT/licenses/manifest.json" <<JSON
     { "name": "curl", "type": "native-lib", "license": "curl", "license_files": ["licenses/native/curl"] },
     { "name": "zlib", "type": "native-lib", "license": "Zlib", "license_files": ["licenses/native/zlib"] },
     { "name": "pcre2", "type": "native-lib", "license": "BSD-3-Clause", "license_files": ["licenses/native/pcre2"] },
-    { "name": "libyaml", "type": "native-lib", "license": "MIT", "license_files": ["licenses/native/libyaml"] }
+    { "name": "libyaml", "type": "native-lib", "license": "MIT", "license_files": ["licenses/native/libyaml"] },
+    { "name": "luarocks-packages", "type": "lua-rocks", "license": "per-rockspec", "license_files": ["licenses/luarocks"] }
   ]
 }
 JSON

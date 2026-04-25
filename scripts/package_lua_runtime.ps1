@@ -435,6 +435,123 @@ function Copy-LicenseCandidates {
     }
 }
 
+function Save-OfficialLicense {
+    <#
+    .SYNOPSIS
+    Download one official license file for a fixed native dependency.
+    为固定原生依赖下载一个官方授权文件。
+    #>
+    param(
+        [string]$ComponentName,
+        [string]$FileName,
+        [string]$Url,
+        [string]$LicenseRoot
+    )
+
+    $ComponentDir = Join-Path $LicenseRoot ("native\" + $ComponentName)
+    Ensure-Dir $ComponentDir
+    $Destination = Join-Path $ComponentDir $FileName
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+    Set-Content -Path (Join-Path $ComponentDir "$FileName.url.txt") -Value $Url -Encoding UTF8
+}
+
+function Save-OfficialNativeLicenses {
+    <#
+    .SYNOPSIS
+    Always include official licenses for the fixed native dependency set.
+    始终为固定原生依赖集合带入官方授权文件。
+    #>
+    param([string]$LicenseRoot)
+
+    Save-OfficialLicense -ComponentName "openssl" -FileName "LICENSE.official.txt" -Url "https://raw.githubusercontent.com/openssl/openssl/openssl-3.4.1/LICENSE.txt" -LicenseRoot $LicenseRoot
+    Save-OfficialLicense -ComponentName "curl" -FileName "COPYING.official.txt" -Url "https://raw.githubusercontent.com/curl/curl/curl-8_13_0/COPYING" -LicenseRoot $LicenseRoot
+    Save-OfficialLicense -ComponentName "zlib" -FileName "LICENSE.official.txt" -Url "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE" -LicenseRoot $LicenseRoot
+    Save-OfficialLicense -ComponentName "pcre2" -FileName "LICENCE.official.md" -Url "https://raw.githubusercontent.com/PCRE2Project/pcre2/pcre2-10.45/LICENCE.md" -LicenseRoot $LicenseRoot
+    Save-OfficialLicense -ComponentName "libyaml" -FileName "License.official" -Url "https://raw.githubusercontent.com/yaml/libyaml/0.2.5/License" -LicenseRoot $LicenseRoot
+}
+
+function Get-RockspecField {
+    <#
+    .SYNOPSIS
+    Extract one common string field from a LuaRocks rockspec.
+    从 LuaRocks rockspec 中提取常见字符串字段。
+    #>
+    param(
+        [string]$RockspecPath,
+        [string]$FieldName
+    )
+
+    if (-not (Test-Path -LiteralPath $RockspecPath)) {
+        return ""
+    }
+
+    $Text = Get-Content -Raw -Path $RockspecPath
+    $Pattern = "\b$([regex]::Escape($FieldName))\s*=\s*['""]([^'""]+)['""]"
+    $Match = [regex]::Match($Text, $Pattern)
+    if ($Match.Success) {
+        return $Match.Groups[1].Value
+    }
+    return ""
+}
+
+function Copy-LuaRocksLicenseMetadata {
+    <#
+    .SYNOPSIS
+    Preserve license metadata for every installed LuaRocks package.
+    为每个已安装 LuaRocks 包保留授权元数据。
+    #>
+    param(
+        [string]$LuaPackagesDir,
+        [string]$LicenseRoot
+    )
+
+    $RocksRoot = Join-Path $LuaPackagesDir "lib\luarocks\rocks-5.1"
+    if (-not (Test-Path -LiteralPath $RocksRoot)) {
+        return
+    }
+
+    $LuaRocksLicenseRoot = Join-Path $LicenseRoot "luarocks"
+    Ensure-Dir $LuaRocksLicenseRoot
+    $ManifestRows = [System.Collections.Generic.List[string]]::new()
+
+    Get-ChildItem -Directory -LiteralPath $RocksRoot -ErrorAction SilentlyContinue | ForEach-Object {
+        $RockName = $_.Name
+        Get-ChildItem -Directory -LiteralPath $_.FullName -ErrorAction SilentlyContinue | ForEach-Object {
+            $Version = $_.Name
+            $VersionDir = $_.FullName
+            $Destination = Join-Path $LuaRocksLicenseRoot $RockName
+            Ensure-Dir $Destination
+            Copy-LicenseCandidates -ComponentName ("luarocks\" + $RockName) -SearchRoots @($VersionDir) -LicenseRoot $LicenseRoot
+            $Rockspec = Get-ChildItem -File -LiteralPath $VersionDir -Filter "*.rockspec" -ErrorAction SilentlyContinue | Select-Object -First 1
+            $License = ""
+            $SourceUrl = ""
+            $Homepage = ""
+            $RockspecName = ""
+            if ($Rockspec) {
+                Copy-Item -Force -LiteralPath $Rockspec.FullName -Destination (Join-Path $Destination $Rockspec.Name)
+                $License = Get-RockspecField -RockspecPath $Rockspec.FullName -FieldName "license"
+                $SourceUrl = Get-RockspecField -RockspecPath $Rockspec.FullName -FieldName "url"
+                $Homepage = Get-RockspecField -RockspecPath $Rockspec.FullName -FieldName "homepage"
+                $RockspecName = $Rockspec.Name
+            }
+            if (-not $License) {
+                $License = "See rockspec or upstream package"
+            }
+            @"
+Package: $RockName
+Version: $Version
+License: $License
+Source: $SourceUrl
+Homepage: $Homepage
+Rockspec: $RockspecName
+"@ | Set-Content -Path (Join-Path $Destination "LICENSE.metadata.txt") -Encoding UTF8
+            $ManifestRows.Add("$RockName`t$Version`t$License`t$SourceUrl`t$Homepage") | Out-Null
+        }
+    }
+
+    $ManifestRows | Set-Content -Path (Join-Path $LuaRocksLicenseRoot "manifest.tsv") -Encoding UTF8
+}
+
 function Write-LicenseReferenceIfMissing {
     <#
     .SYNOPSIS
@@ -623,6 +740,9 @@ foreach ($Component in $NativeLicenseRoots) {
     Copy-LicenseCandidates -ComponentName ("native\" + $Component.name) -SearchRoots $Roots -LicenseRoot (Join-Path $RuntimeRoot "licenses")
 }
 
+Save-OfficialNativeLicenses -LicenseRoot (Join-Path $RuntimeRoot "licenses")
+Copy-LuaRocksLicenseMetadata -LuaPackagesDir (Join-Path $ThirdPartyPath "lua_packages") -LicenseRoot (Join-Path $RuntimeRoot "licenses")
+
 foreach ($Library in ($script:BundledLibraries | Sort-Object name, component, source_path -Unique)) {
     Write-LicenseReferenceIfMissing -ComponentName $Library.component -SourcePath $Library.source_path -LicenseRoot (Join-Path $RuntimeRoot "licenses")
 }
@@ -650,7 +770,8 @@ $LicenseManifest = [ordered]@{
         @{ name = "curl"; type = "native-lib"; license = "curl"; license_files = @("licenses/native/curl") },
         @{ name = "zlib"; type = "native-lib"; license = "Zlib"; license_files = @("licenses/native/zlib") },
         @{ name = "pcre2"; type = "native-lib"; license = "BSD-3-Clause"; license_files = @("licenses/native/pcre2") },
-        @{ name = "libyaml"; type = "native-lib"; license = "MIT"; license_files = @("licenses/native/libyaml") }
+        @{ name = "libyaml"; type = "native-lib"; license = "MIT"; license_files = @("licenses/native/libyaml") },
+        @{ name = "luarocks-packages"; type = "lua-rocks"; license = "per-rockspec"; license_files = @("licenses/luarocks") }
     )
 }
 
