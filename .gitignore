@@ -31,3 +31,8 @@ examples/ffi/c/*.exe
 examples/ffi/c/*.obj
 examples/ffi/**/__pycache__/
 examples/ffi/**/*.pyc
+
+# Ignore local task planning records.
+# 忽略本地任务计划与完成记录。
+docs/plan/
+docs/completed/
