@@ -50,7 +50,7 @@ concurrency:
 env:
   # DEPS_LAYOUT_VERSION is the manual invalidation knob for local runner state.
   # DEPS_LAYOUT_VERSION 用于控制本地 runner 持久化依赖状态的失效版本。
-  DEPS_LAYOUT_VERSION: "20260425-03"
+  DEPS_LAYOUT_VERSION: "20260425-04"
   # Dependency versions are centralized here so cache keys and build commands stay aligned.
   # 依赖版本统一集中在这里维护，确保缓存键与构建命令始终保持一致。
   OPENSSL_VERSION: "3.4.1"
@@ -145,7 +145,7 @@ jobs:
     env:
       # DEPS_STATE_KEY identifies one reusable dependency layout independent of release tag names.
       # DEPS_STATE_KEY 用于标识一套可复用的依赖布局，并且与发布标签名称解耦。
-      DEPS_STATE_KEY: lua-deps-20260425-03-openssl-3.4.1-curl-8.13.0-zlib-1.3.1-pcre2-10.45-libyaml-0.2.5
+      DEPS_STATE_KEY: lua-deps-20260425-04-openssl-3.4.1-curl-8.13.0-zlib-1.3.1-pcre2-10.45-libyaml-0.2.5
       # DEPS_DIR points at the workspace-local dependency directory consumed by packaging steps.
       # DEPS_DIR 指向工作区内的依赖目录，后续打包步骤会直接使用这里的内容。
       DEPS_DIR: ${{ matrix.os == 'Windows' && format('{0}\deps', github.workspace) || format('{0}/deps', github.workspace) }}
@@ -384,10 +384,22 @@ jobs:
           $buildDir = "build"
           New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
           Push-Location $buildDir
-          cmake .. -GNinja "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_INSTALL_PREFIX=$env:DEPS_DIR\curl" "-DBUILD_SHARED_LIBS=OFF" "-DBUILD_STATIC_LIBS=ON" "-DBUILD_CURL_EXE=OFF" "-DBUILD_TESTING=OFF" "-DBUILD_LIBCURL_DOCS=OFF" "-DCURL_USE_OPENSSL=ON" "-DCURL_ZLIB=ON" "-DCURL_USE_LIBPSL=OFF" "-DOPENSSL_ROOT_DIR=$env:DEPS_DIR\openssl" "-DZLIB_ROOT=$env:DEPS_DIR\zlib"
+          cmake .. -GNinja "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_INSTALL_PREFIX=$env:DEPS_DIR\curl" "-DBUILD_SHARED_LIBS=ON" "-DBUILD_STATIC_LIBS=OFF" "-DBUILD_CURL_EXE=OFF" "-DBUILD_TESTING=OFF" "-DBUILD_LIBCURL_DOCS=OFF" "-DCURL_USE_OPENSSL=ON" "-DCURL_ZLIB=ON" "-DCURL_USE_LIBPSL=OFF" "-DOPENSSL_ROOT_DIR=$env:DEPS_DIR\openssl" "-DZLIB_ROOT=$env:DEPS_DIR\zlib"
           ninja install
           Pop-Location
           Pop-Location
+          # CurlImportLib is the import library consumed by the Windows Lua-cURL rockspec.
+          # CurlImportLib 是 Windows Lua-cURL rockspec 链接时使用的导入库。
+          $curlImportLib = Join-Path $env:DEPS_DIR "curl\lib\libcurl_imp.lib"
+          # CurlRuntimeDll is the runtime library that must be copied into release packages.
+          # CurlRuntimeDll 是需要复制进发布包的运行期库。
+          $curlRuntimeDll = Join-Path $env:DEPS_DIR "curl\bin\libcurl.dll"
+          if (-not (Test-Path $curlImportLib)) {
+            throw "curl shared import library was not produced: $curlImportLib"
+          }
+          if (-not (Test-Path $curlRuntimeDll)) {
+            throw "curl runtime DLL was not produced: $curlRuntimeDll"
+          }
 
       - name: Persist curl to local state (Windows)
         if: runner.os == 'Windows' && steps.windows-refresh.outputs.curl_needs_refresh == 'true'
