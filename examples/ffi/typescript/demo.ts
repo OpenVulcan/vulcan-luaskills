@@ -13,9 +13,9 @@ Resolve the dynamic library path from one explicit environment variable.
 从一个显式环境变量解析动态库路径。
  */
 function resolveLibraryPath(): string {
-  const libraryPath = process.env.VULCAN_LUASKILLS_LIB;
+  const libraryPath = process.env.LUASKILLS_LIB;
   if (!libraryPath) {
-    throw new Error("VULCAN_LUASKILLS_LIB is not set");
+    throw new Error("LUASKILLS_LIB is not set");
   }
   return libraryPath;
 }
@@ -211,16 +211,16 @@ function main(): void {
     content_lines: "size_t",
   });
 
-  const freeBuffer = library.func("void vulcan_luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
-  const version = library.func("int vulcan_luaskills_ffi_version(FfiOwnedBuffer *version_out, FfiOwnedBuffer *error_out)");
-  const engineNew = library.func("int vulcan_luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
-  const loadFromRoots = library.func("int vulcan_luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, FfiOwnedBuffer *error_out)");
-  const listEntries = library.func("int vulcan_luaskills_ffi_list_entries(uint64_t engine_id, void **entries_out, FfiOwnedBuffer *error_out)");
-  const callSkill = library.func("int vulcan_luaskills_ffi_call_skill(uint64_t engine_id, const char *tool_name, FfiBorrowedBuffer args_json, const FfiLuaInvocationContext *invocation_context, void **result_out, FfiOwnedBuffer *error_out)");
-  const runLua = library.func("int vulcan_luaskills_ffi_run_lua(uint64_t engine_id, const char *code, FfiBorrowedBuffer args_json, const FfiLuaInvocationContext *invocation_context, FfiOwnedBuffer *result_json_out, FfiOwnedBuffer *error_out)");
-  const freeEntryList = library.func("void vulcan_luaskills_ffi_entry_list_free(void *value)");
-  const freeInvocationResult = library.func("void vulcan_luaskills_ffi_invocation_result_free(void *value)");
-  const engineFree = library.func("int vulcan_luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
+  const freeBuffer = library.func("void luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
+  const version = library.func("int luaskills_ffi_version(FfiOwnedBuffer *version_out, FfiOwnedBuffer *error_out)");
+  const engineNew = library.func("int luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
+  const loadFromRoots = library.func("int luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, FfiOwnedBuffer *error_out)");
+  const listEntries = library.func("int luaskills_ffi_list_entries(uint64_t engine_id, void **entries_out, FfiOwnedBuffer *error_out)");
+  const callSkill = library.func("int luaskills_ffi_call_skill(uint64_t engine_id, const char *tool_name, FfiBorrowedBuffer args_json, const FfiLuaInvocationContext *invocation_context, void **result_out, FfiOwnedBuffer *error_out)");
+  const runLua = library.func("int luaskills_ffi_run_lua(uint64_t engine_id, const char *code, FfiBorrowedBuffer args_json, const FfiLuaInvocationContext *invocation_context, FfiOwnedBuffer *result_json_out, FfiOwnedBuffer *error_out)");
+  const freeEntryList = library.func("void luaskills_ffi_entry_list_free(void *value)");
+  const freeInvocationResult = library.func("void luaskills_ffi_invocation_result_free(void *value)");
+  const engineFree = library.func("int luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
 
   const versionOut = [{ ptr: null, len: 0 }];
   const versionError = [{ ptr: null, len: 0 }];

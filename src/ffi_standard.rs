@@ -1755,27 +1755,27 @@ unsafe fn free_string_array_parts(items: *mut FfiOwnedBuffer, len: usize) {
     }
     let values = unsafe { Vec::from_raw_parts(items, len, len) };
     for value in values {
-        unsafe { vulcan_luaskills_ffi_buffer_free(value) };
+        unsafe { luaskills_ffi_buffer_free(value) };
     }
 }
 
 /// Free one owned entry parameter descriptor.
 /// 释放单个拥有所有权的入口参数描述结构。
 unsafe fn free_entry_parameter_descriptor(value: FfiRuntimeEntryParameterDescriptor) {
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.name) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.param_type) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.description) };
+    unsafe { luaskills_ffi_buffer_free(value.name) };
+    unsafe { luaskills_ffi_buffer_free(value.param_type) };
+    unsafe { luaskills_ffi_buffer_free(value.description) };
 }
 
 /// Free one owned entry descriptor.
 /// 释放单个拥有所有权的入口描述结构。
 unsafe fn free_entry_descriptor(value: FfiRuntimeEntryDescriptor) {
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.canonical_name) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_id) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.local_name) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.root_name) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_dir) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.description) };
+    unsafe { luaskills_ffi_buffer_free(value.canonical_name) };
+    unsafe { luaskills_ffi_buffer_free(value.skill_id) };
+    unsafe { luaskills_ffi_buffer_free(value.local_name) };
+    unsafe { luaskills_ffi_buffer_free(value.root_name) };
+    unsafe { luaskills_ffi_buffer_free(value.skill_dir) };
+    unsafe { luaskills_ffi_buffer_free(value.description) };
     if !value.parameters.is_null() && value.parameters_len > 0 {
         let parameters = unsafe {
             Vec::from_raw_parts(value.parameters, value.parameters_len, value.parameters_len)
@@ -1789,8 +1789,8 @@ unsafe fn free_entry_descriptor(value: FfiRuntimeEntryDescriptor) {
 /// Free one owned help node descriptor.
 /// 释放单个拥有所有权的帮助节点描述结构。
 unsafe fn free_help_node_descriptor(value: FfiRuntimeHelpNodeDescriptor) {
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.flow_name) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.description) };
+    unsafe { luaskills_ffi_buffer_free(value.flow_name) };
+    unsafe { luaskills_ffi_buffer_free(value.description) };
     unsafe { free_string_array_parts(value.related_entries, value.related_entries_len) };
 }
 
@@ -1811,7 +1811,7 @@ fn ffi_error_status(error_out: *mut FfiOwnedBuffer, message: impl Into<String>) 
 /// Clone one host string into one LuaSkills-owned heap string so callbacks can return safely across FFI.
 /// 将宿主字符串克隆到 LuaSkills 管理的堆字符串，便于回调安全跨 FFI 返回。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_string_clone(value: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn luaskills_ffi_string_clone(value: *const c_char) -> *mut c_char {
     if value.is_null() {
         return alloc_c_string("");
     }
@@ -1824,7 +1824,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_string_clone(value: *const c_char)
 /// Clone one host buffer into one LuaSkills-owned buffer container for callback returns.
 /// 将宿主缓冲克隆到 LuaSkills 管理的缓冲容器，便于 callback 返回。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_buffer_clone(
+pub unsafe extern "C" fn luaskills_ffi_buffer_clone(
     value: *const u8,
     len: usize,
     buffer_out: *mut FfiOwnedBuffer,
@@ -1852,7 +1852,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_buffer_clone(
 /// Clone one host byte buffer into one LuaSkills-owned heap buffer for standard callback returns.
 /// 将宿主字节缓冲克隆到 LuaSkills 管理的堆缓冲，用于标准回调返回。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_bytes_clone(value: *const u8, len: usize) -> *mut u8 {
+pub unsafe extern "C" fn luaskills_ffi_bytes_clone(value: *const u8, len: usize) -> *mut u8 {
     if value.is_null() || len == 0 {
         return ptr::null_mut();
     }
@@ -1863,24 +1863,24 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_bytes_clone(value: *const u8, len:
     pointer
 }
 
-/// Free one LuaSkills-owned heap byte buffer created by `vulcan_luaskills_ffi_bytes_clone`.
-/// 释放由 `vulcan_luaskills_ffi_bytes_clone` 创建的 LuaSkills 自主管理堆字节缓冲。
+/// Free one LuaSkills-owned heap byte buffer created by `luaskills_ffi_bytes_clone`.
+/// 释放由 `luaskills_ffi_bytes_clone` 创建的 LuaSkills 自主管理堆字节缓冲。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_bytes_free(value: *mut u8, len: usize) {
+pub unsafe extern "C" fn luaskills_ffi_bytes_free(value: *mut u8, len: usize) {
     unsafe { free_ffi_bytes(value, len) };
 }
 
-/// Free one LuaSkills-owned buffer container created by `vulcan_luaskills_ffi_buffer_clone`.
-/// 释放由 `vulcan_luaskills_ffi_buffer_clone` 创建的 LuaSkills 自主管理缓冲容器。
+/// Free one LuaSkills-owned buffer container created by `luaskills_ffi_buffer_clone`.
+/// 释放由 `luaskills_ffi_buffer_clone` 创建的 LuaSkills 自主管理缓冲容器。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_buffer_free(value: FfiOwnedBuffer) {
+pub unsafe extern "C" fn luaskills_ffi_buffer_free(value: FfiOwnedBuffer) {
     unsafe { free_ffi_bytes(value.ptr, value.len) };
 }
 
 /// Register or clear one SQLite standard provider callback for host-managed database integration.
 /// 为宿主管理数据库集成注册或清理一个 SQLite 标准 provider 回调。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_callback(
+pub unsafe extern "C" fn luaskills_ffi_set_sqlite_provider_callback(
     callback: Option<FfiSqliteProviderCallback>,
     user_data: *mut c_void,
     error_out: *mut FfiOwnedBuffer,
@@ -1899,7 +1899,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_callback(
 /// Register or clear one LanceDB standard provider callback for host-managed database integration.
 /// 为宿主管理数据库集成注册或清理一个 LanceDB 标准 provider 回调。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_callback(
+pub unsafe extern "C" fn luaskills_ffi_set_lancedb_provider_callback(
     callback: Option<FfiLanceDbProviderCallback>,
     user_data: *mut c_void,
     error_out: *mut FfiOwnedBuffer,
@@ -1918,7 +1918,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_callback(
 /// Register or clear one SQLite JSON provider callback for cross-language host integration.
 /// 为跨语言宿主集成注册或清理一个 SQLite JSON provider 回调。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
+pub unsafe extern "C" fn luaskills_ffi_set_sqlite_provider_json_callback(
     callback: Option<FfiJsonProviderCallback>,
     user_data: *mut c_void,
     error_out: *mut FfiOwnedBuffer,
@@ -1937,7 +1937,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_set_sqlite_provider_json_callback(
 /// Register or clear one LanceDB JSON provider callback for cross-language host integration.
 /// 为跨语言宿主集成注册或清理一个 LanceDB JSON provider 回调。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_json_callback(
+pub unsafe extern "C" fn luaskills_ffi_set_lancedb_provider_json_callback(
     callback: Option<FfiJsonProviderCallback>,
     user_data: *mut c_void,
     error_out: *mut FfiOwnedBuffer,
@@ -1956,7 +1956,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_set_lancedb_provider_json_callback
 /// Free one string array result allocated by the standard FFI layer.
 /// 释放由标准 FFI 层分配的单个字符串数组结果。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_string_array_free(value: *mut FfiStringArray) {
+pub unsafe extern "C" fn luaskills_ffi_string_array_free(value: *mut FfiStringArray) {
     if value.is_null() {
         return;
     }
@@ -1967,9 +1967,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_string_array_free(value: *mut FfiS
 /// Free one entry descriptor list allocated by the standard FFI layer.
 /// 释放由标准 FFI 层分配的单个入口描述列表。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_entry_list_free(
-    value: *mut FfiRuntimeEntryDescriptorList,
-) {
+pub unsafe extern "C" fn luaskills_ffi_entry_list_free(value: *mut FfiRuntimeEntryDescriptorList) {
     if value.is_null() {
         return;
     }
@@ -1985,7 +1983,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_entry_list_free(
 /// Free one help descriptor list allocated by the standard FFI layer.
 /// 释放由标准 FFI 层分配的单个帮助描述列表。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_help_list_free(
+pub unsafe extern "C" fn luaskills_ffi_help_list_free(
     value: *mut FfiRuntimeSkillHelpDescriptorList,
 ) {
     if value.is_null() {
@@ -1995,11 +1993,11 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_help_list_free(
     if !value.items.is_null() && value.len > 0 {
         let items = unsafe { Vec::from_raw_parts(value.items, value.len, value.len) };
         for item in items {
-            unsafe { vulcan_luaskills_ffi_buffer_free(item.skill_id) };
-            unsafe { vulcan_luaskills_ffi_buffer_free(item.skill_name) };
-            unsafe { vulcan_luaskills_ffi_buffer_free(item.skill_version) };
-            unsafe { vulcan_luaskills_ffi_buffer_free(item.root_name) };
-            unsafe { vulcan_luaskills_ffi_buffer_free(item.skill_dir) };
+            unsafe { luaskills_ffi_buffer_free(item.skill_id) };
+            unsafe { luaskills_ffi_buffer_free(item.skill_name) };
+            unsafe { luaskills_ffi_buffer_free(item.skill_version) };
+            unsafe { luaskills_ffi_buffer_free(item.root_name) };
+            unsafe { luaskills_ffi_buffer_free(item.skill_dir) };
             unsafe { free_help_node_descriptor(item.main) };
             if !item.flows.is_null() && item.flows_len > 0 {
                 let flows =
@@ -2015,72 +2013,70 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_help_list_free(
 /// Free one help detail allocated by the standard FFI layer.
 /// 释放由标准 FFI 层分配的单个帮助详情。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_help_detail_free(value: *mut FfiRuntimeHelpDetail) {
+pub unsafe extern "C" fn luaskills_ffi_help_detail_free(value: *mut FfiRuntimeHelpDetail) {
     if value.is_null() {
         return;
     }
     let value = unsafe { *Box::from_raw(value) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_id) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_name) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_version) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.root_name) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_dir) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.flow_name) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.description) };
+    unsafe { luaskills_ffi_buffer_free(value.skill_id) };
+    unsafe { luaskills_ffi_buffer_free(value.skill_name) };
+    unsafe { luaskills_ffi_buffer_free(value.skill_version) };
+    unsafe { luaskills_ffi_buffer_free(value.root_name) };
+    unsafe { luaskills_ffi_buffer_free(value.skill_dir) };
+    unsafe { luaskills_ffi_buffer_free(value.flow_name) };
+    unsafe { luaskills_ffi_buffer_free(value.description) };
     unsafe { free_string_array_parts(value.related_entries, value.related_entries_len) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.content_type) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.content) };
+    unsafe { luaskills_ffi_buffer_free(value.content_type) };
+    unsafe { luaskills_ffi_buffer_free(value.content) };
 }
 
 /// Free one invocation result allocated by the standard FFI layer.
 /// 释放由标准 FFI 层分配的单个调用结果。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_invocation_result_free(
+pub unsafe extern "C" fn luaskills_ffi_invocation_result_free(
     value: *mut FfiRuntimeInvocationResult,
 ) {
     if value.is_null() {
         return;
     }
     let value = unsafe { *Box::from_raw(value) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.content) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.template_hint) };
+    unsafe { luaskills_ffi_buffer_free(value.content) };
+    unsafe { luaskills_ffi_buffer_free(value.template_hint) };
 }
 
 /// Free one install or update result allocated by the standard FFI layer.
 /// 释放由标准 FFI 层分配的单个安装或更新结果。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_apply_result_free(
-    value: *mut FfiSkillApplyResult,
-) {
+pub unsafe extern "C" fn luaskills_ffi_skill_apply_result_free(value: *mut FfiSkillApplyResult) {
     if value.is_null() {
         return;
     }
     let value = unsafe { *Box::from_raw(value) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_id) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.status) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.message) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.version) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.source_locator) };
+    unsafe { luaskills_ffi_buffer_free(value.skill_id) };
+    unsafe { luaskills_ffi_buffer_free(value.status) };
+    unsafe { luaskills_ffi_buffer_free(value.message) };
+    unsafe { luaskills_ffi_buffer_free(value.version) };
+    unsafe { luaskills_ffi_buffer_free(value.source_locator) };
 }
 
 /// Free one uninstall result allocated by the standard FFI layer.
 /// 释放由标准 FFI 层分配的单个卸载结果。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_uninstall_result_free(
+pub unsafe extern "C" fn luaskills_ffi_skill_uninstall_result_free(
     value: *mut FfiSkillUninstallResult,
 ) {
     if value.is_null() {
         return;
     }
     let value = unsafe { *Box::from_raw(value) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.skill_id) };
-    unsafe { vulcan_luaskills_ffi_buffer_free(value.message) };
+    unsafe { luaskills_ffi_buffer_free(value.skill_id) };
+    unsafe { luaskills_ffi_buffer_free(value.message) };
 }
 
 /// Return the stable FFI version string through the standard C ABI surface.
 /// 通过标准 C ABI 接口返回稳定的 FFI 版本字符串。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_version(
+pub unsafe extern "C" fn luaskills_ffi_version(
     version_out: *mut FfiOwnedBuffer,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
@@ -2096,7 +2092,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_version(
 /// Return the exported FFI entrypoint names through the standard C ABI surface.
 /// 通过标准 C ABI 接口返回已导出 FFI 入口点名称。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_describe(
+pub unsafe extern "C" fn luaskills_ffi_describe(
     functions_out: *mut *mut FfiStringArray,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
@@ -2113,7 +2109,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_describe(
 /// Create one runtime engine through the standard C ABI surface.
 /// 通过标准 C ABI 接口创建单个运行时引擎。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_new(
+pub unsafe extern "C" fn luaskills_ffi_engine_new(
     options: *const FfiLuaEngineOptions,
     engine_id_out: *mut u64,
     error_out: *mut FfiOwnedBuffer,
@@ -2149,7 +2145,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_new(
 /// Free one runtime engine through the standard C ABI surface.
 /// 通过标准 C ABI 接口释放单个运行时引擎。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_free(
+pub unsafe extern "C" fn luaskills_ffi_engine_free(
     engine_id: u64,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
@@ -2169,7 +2165,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_engine_free(
 /// Load skills from one legacy directory pair through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一组旧目录风格根参数加载技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_dirs(
+pub unsafe extern "C" fn luaskills_ffi_load_from_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
@@ -2197,7 +2193,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_dirs(
 /// Load skills from one ordered root chain through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一条有序根链加载技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_roots(
+pub unsafe extern "C" fn luaskills_ffi_load_from_roots(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2221,7 +2217,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_load_from_roots(
 /// Reload skills from one legacy directory pair through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一组旧目录风格根参数重载技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_dirs(
+pub unsafe extern "C" fn luaskills_ffi_reload_from_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
@@ -2249,7 +2245,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_dirs(
 /// Reload skills from one ordered root chain through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一条有序根链重载技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
+pub unsafe extern "C" fn luaskills_ffi_reload_from_roots(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2273,7 +2269,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_reload_from_roots(
 /// List runtime entries through the standard C ABI surface.
 /// 通过标准 C ABI 接口列出运行时入口。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_list_entries(
+pub unsafe extern "C" fn luaskills_ffi_list_entries(
     engine_id: u64,
     entries_out: *mut *mut FfiRuntimeEntryDescriptorList,
     error_out: *mut FfiOwnedBuffer,
@@ -2302,7 +2298,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_list_entries(
 /// List runtime help trees through the standard C ABI surface.
 /// 通过标准 C ABI 接口列出运行时帮助树。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_list_skill_help(
+pub unsafe extern "C" fn luaskills_ffi_list_skill_help(
     engine_id: u64,
     help_out: *mut *mut FfiRuntimeSkillHelpDescriptorList,
     error_out: *mut FfiOwnedBuffer,
@@ -2331,7 +2327,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_list_skill_help(
 /// Render one help detail through the standard C ABI surface.
 /// 通过标准 C ABI 接口渲染单个帮助详情。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
+pub unsafe extern "C" fn luaskills_ffi_render_skill_help_detail(
     engine_id: u64,
     skill_id: *const c_char,
     flow_name: *const c_char,
@@ -2372,7 +2368,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_render_skill_help_detail(
 /// Resolve prompt argument completions through the standard C ABI surface.
 /// 通过标准 C ABI 接口解析提示词参数补全项。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions(
+pub unsafe extern "C" fn luaskills_ffi_prompt_argument_completions(
     engine_id: u64,
     prompt_name: *const c_char,
     argument_name: *const c_char,
@@ -2410,7 +2406,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_prompt_argument_completions(
 /// Check whether one tool belongs to a Lua skill through the standard C ABI surface.
 /// 通过标准 C ABI 接口检查单个工具是否属于 Lua 技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_is_skill(
+pub unsafe extern "C" fn luaskills_ffi_is_skill(
     engine_id: u64,
     tool_name: *const c_char,
     value_out: *mut u8,
@@ -2437,7 +2433,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_is_skill(
 /// Resolve the owning skill id of one tool through the standard C ABI surface.
 /// 通过标准 C ABI 接口解析单个工具所属的技能标识符。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
+pub unsafe extern "C" fn luaskills_ffi_skill_name_for_tool(
     engine_id: u64,
     tool_name: *const c_char,
     skill_id_out: *mut FfiOwnedBuffer,
@@ -2466,7 +2462,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_name_for_tool(
 /// List flattened skill config records through the standard C ABI surface.
 /// 通过标准 C ABI 接口列出扁平化技能配置记录。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_list(
+pub unsafe extern "C" fn luaskills_ffi_skill_config_list(
     engine_id: u64,
     skill_id: *const c_char,
     result_json_out: *mut FfiOwnedBuffer,
@@ -2501,7 +2497,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_list(
 /// Read one optional skill config value through the standard C ABI surface.
 /// 通过标准 C ABI 接口读取单个可选技能配置值。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_get(
+pub unsafe extern "C" fn luaskills_ffi_skill_config_get(
     engine_id: u64,
     skill_id: *const c_char,
     key: *const c_char,
@@ -2543,7 +2539,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_get(
 /// Insert or replace one skill config value through the standard C ABI surface.
 /// 通过标准 C ABI 接口插入或替换单个技能配置值。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_set(
+pub unsafe extern "C" fn luaskills_ffi_skill_config_set(
     engine_id: u64,
     skill_id: *const c_char,
     key: *const c_char,
@@ -2574,7 +2570,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_set(
 /// Delete one skill config key through the standard C ABI surface.
 /// 通过标准 C ABI 接口删除单个技能配置键。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_delete(
+pub unsafe extern "C" fn luaskills_ffi_skill_config_delete(
     engine_id: u64,
     skill_id: *const c_char,
     key: *const c_char,
@@ -2608,7 +2604,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_skill_config_delete(
 /// Call one loaded skill entry through the standard C ABI surface.
 /// 通过标准 C ABI 接口调用单个已加载技能入口。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill(
+pub unsafe extern "C" fn luaskills_ffi_call_skill(
     engine_id: u64,
     tool_name: *const c_char,
     args_json: FfiBorrowedBuffer,
@@ -2647,7 +2643,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_call_skill(
 /// Execute arbitrary Lua code through the standard C ABI surface.
 /// 通过标准 C ABI 接口执行任意 Lua 代码。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua(
+pub unsafe extern "C" fn luaskills_ffi_run_lua(
     engine_id: u64,
     code: *const c_char,
     args_json: FfiBorrowedBuffer,
@@ -2692,7 +2688,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_run_lua(
 /// Disable one skill through legacy directory-style roots via the standard C ABI surface.
 /// 通过标准 C ABI 接口按旧目录风格根参数停用单个技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs(
+pub unsafe extern "C" fn luaskills_ffi_disable_skill_in_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
@@ -2735,7 +2731,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill_in_dirs(
 /// Disable one skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链停用单个技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill(
+pub unsafe extern "C" fn luaskills_ffi_disable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2769,7 +2765,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_disable_skill(
 /// Disable one skill on the system plane through legacy directory-style roots.
 /// 通过标准 C ABI 接口按旧目录风格根参数在 system 平面停用单个技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs(
+pub unsafe extern "C" fn luaskills_ffi_system_disable_skill_in_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
@@ -2812,7 +2808,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill_in_dirs(
 /// Disable one skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面停用单个技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill(
+pub unsafe extern "C" fn luaskills_ffi_system_disable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2846,7 +2842,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_disable_skill(
 /// Enable one skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链启用单个技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_enable_skill(
+pub unsafe extern "C" fn luaskills_ffi_enable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2875,7 +2871,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_enable_skill(
 /// Enable one skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面启用单个技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_system_enable_skill(
+pub unsafe extern "C" fn luaskills_ffi_system_enable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2904,7 +2900,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_enable_skill(
 /// Uninstall one skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链卸载单个技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_uninstall_skill(
+pub unsafe extern "C" fn luaskills_ffi_uninstall_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2943,7 +2939,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_uninstall_skill(
 /// Uninstall one skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面卸载单个技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill(
+pub unsafe extern "C" fn luaskills_ffi_system_uninstall_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -2982,7 +2978,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_uninstall_skill(
 /// Install one managed skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链安装单个受管技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_install_skill(
+pub unsafe extern "C" fn luaskills_ffi_install_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -3022,7 +3018,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_install_skill(
 /// Install one managed skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面安装单个受管技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_system_install_skill(
+pub unsafe extern "C" fn luaskills_ffi_system_install_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -3062,7 +3058,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_system_install_skill(
 /// Update one managed skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链更新单个受管技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_update_skill(
+pub unsafe extern "C" fn luaskills_ffi_update_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -3102,7 +3098,7 @@ pub unsafe extern "C" fn vulcan_luaskills_ffi_update_skill(
 /// Update one managed skill on the system plane through one ordered root chain.
 /// 通过标准 C ABI 接口按一条有序根链在 system 平面更新单个受管技能。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vulcan_luaskills_ffi_system_update_skill(
+pub unsafe extern "C" fn luaskills_ffi_system_update_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
@@ -3194,19 +3190,14 @@ mod tests {
             len: 0,
         };
         let status = unsafe {
-            vulcan_luaskills_ffi_buffer_clone(
-                input.as_ptr(),
-                input.len(),
-                &mut buffer_out,
-                &mut error_out,
-            )
+            luaskills_ffi_buffer_clone(input.as_ptr(), input.len(), &mut buffer_out, &mut error_out)
         };
         assert_eq!(status, FFI_STATUS_OK);
         assert!(error_out.ptr.is_null());
         assert_eq!(error_out.len, 0);
         let copied = unsafe { std::slice::from_raw_parts(buffer_out.ptr, buffer_out.len) };
         assert_eq!(copied, input);
-        unsafe { vulcan_luaskills_ffi_buffer_free(buffer_out) };
+        unsafe { luaskills_ffi_buffer_free(buffer_out) };
     }
 
     /// Verify JSON provider callback bridge accepts borrowed buffers and owned-buffer responses.
@@ -3291,7 +3282,7 @@ mod tests {
         );
         assert_eq!(first_parameter.required, 0);
 
-        unsafe { vulcan_luaskills_ffi_entry_list_free(list_ptr) };
+        unsafe { luaskills_ffi_entry_list_free(list_ptr) };
     }
 
     /// Verify one help detail and one help list allocate nested owned buffers for text and related-entry arrays.
@@ -3323,7 +3314,7 @@ mod tests {
         assert_eq!(read_owned_buffer_text(&related_entries[0]), "demo-entry");
         assert_eq!(read_owned_buffer_text(&related_entries[1]), "demo-entry-2");
 
-        unsafe { vulcan_luaskills_ffi_help_detail_free(detail_ptr) };
+        unsafe { luaskills_ffi_help_detail_free(detail_ptr) };
 
         let help_descriptor = RuntimeSkillHelpDescriptorModel {
             skill_id: "demo-skill".to_string(),
@@ -3373,7 +3364,7 @@ mod tests {
         let first_flow = unsafe { &*first_help.flows };
         assert_eq!(read_owned_buffer_text(&first_flow.flow_name), "secondary");
 
-        unsafe { vulcan_luaskills_ffi_help_list_free(list_ptr) };
+        unsafe { luaskills_ffi_help_list_free(list_ptr) };
     }
 
     /// Verify the standard FFI load/list pipeline returns one entry for one minimal temporary skill root.
@@ -3381,7 +3372,7 @@ mod tests {
     #[test]
     fn standard_ffi_load_and_list_entries_round_trip() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_standard_ffi_entry_test_{}",
+            "luaskills_standard_ffi_entry_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -3477,9 +3468,8 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let engine_status = unsafe {
-            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
-        };
+        let engine_status =
+            unsafe { luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out) };
         assert_eq!(engine_status, FFI_STATUS_OK);
         assert!(error_out.ptr.is_null());
 
@@ -3492,7 +3482,7 @@ mod tests {
             len: 0,
         };
         let load_status = unsafe {
-            vulcan_luaskills_ffi_load_from_roots(
+            luaskills_ffi_load_from_roots(
                 engine_id,
                 ffi_skill_roots.as_ptr(),
                 ffi_skill_roots.len(),
@@ -3507,9 +3497,8 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let list_status = unsafe {
-            vulcan_luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error)
-        };
+        let list_status =
+            unsafe { luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error) };
         assert_eq!(list_status, FFI_STATUS_OK);
         assert!(list_error.ptr.is_null());
         assert!(!entries_out.is_null());
@@ -3538,13 +3527,13 @@ mod tests {
         );
         assert_eq!(parameter_ref.required, 0);
 
-        unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+        unsafe { luaskills_ffi_entry_list_free(entries_out) };
 
         let mut free_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        let free_status = unsafe { luaskills_ffi_engine_free(engine_id, &mut free_error) };
         assert_eq!(free_status, FFI_STATUS_OK);
         assert!(free_error.ptr.is_null());
 
@@ -3556,7 +3545,7 @@ mod tests {
     #[test]
     fn standard_ffi_call_skill_accepts_borrowed_json_buffers() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_standard_ffi_callskill_test_{}",
+            "luaskills_standard_ffi_callskill_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -3653,9 +3642,8 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let engine_status = unsafe {
-            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
-        };
+        let engine_status =
+            unsafe { luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out) };
         assert_eq!(engine_status, FFI_STATUS_OK);
         assert!(error_out.ptr.is_null());
 
@@ -3668,7 +3656,7 @@ mod tests {
             len: 0,
         };
         let load_status = unsafe {
-            vulcan_luaskills_ffi_load_from_roots(
+            luaskills_ffi_load_from_roots(
                 engine_id,
                 ffi_skill_roots.as_ptr(),
                 ffi_skill_roots.len(),
@@ -3695,7 +3683,7 @@ mod tests {
             len: 0,
         };
         let call_status = unsafe {
-            vulcan_luaskills_ffi_call_skill(
+            luaskills_ffi_call_skill(
                 engine_id,
                 tool_name.as_ptr(),
                 args_buffer,
@@ -3714,13 +3702,13 @@ mod tests {
             "standard-ffi-test:ffi"
         );
         assert_eq!(result_ref.content_lines, 1);
-        unsafe { vulcan_luaskills_ffi_invocation_result_free(result_out) };
+        unsafe { luaskills_ffi_invocation_result_free(result_out) };
 
         let mut free_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        let free_status = unsafe { luaskills_ffi_engine_free(engine_id, &mut free_error) };
         assert_eq!(free_status, FFI_STATUS_OK);
         assert!(free_error.ptr.is_null());
 
@@ -3732,7 +3720,7 @@ mod tests {
     #[test]
     fn standard_ffi_run_lua_accepts_borrowed_json_buffers() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_standard_ffi_runlua_test_{}",
+            "luaskills_standard_ffi_runlua_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -3812,9 +3800,8 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let engine_status = unsafe {
-            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
-        };
+        let engine_status =
+            unsafe { luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out) };
         assert_eq!(engine_status, FFI_STATUS_OK);
         assert!(error_out.ptr.is_null());
 
@@ -3841,7 +3828,7 @@ mod tests {
             len: 0,
         };
         let run_status = unsafe {
-            vulcan_luaskills_ffi_run_lua(
+            luaskills_ffi_run_lua(
                 engine_id,
                 code.as_ptr(),
                 args_buffer,
@@ -3860,13 +3847,13 @@ mod tests {
         assert_eq!(result_json["transport"], "ffi-test");
         assert_eq!(result_json["budget"], 7);
         assert_eq!(result_json["mode"], "demo-mode");
-        unsafe { vulcan_luaskills_ffi_buffer_free(result_json_out) };
+        unsafe { luaskills_ffi_buffer_free(result_json_out) };
 
         let mut free_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        let free_status = unsafe { luaskills_ffi_engine_free(engine_id, &mut free_error) };
         assert_eq!(free_status, FFI_STATUS_OK);
         assert!(free_error.ptr.is_null());
 
@@ -3878,7 +3865,7 @@ mod tests {
     #[test]
     fn standard_ffi_skill_config_round_trip() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_standard_ffi_skill_config_test_{}",
+            "luaskills_standard_ffi_skill_config_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -3969,9 +3956,8 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let engine_status = unsafe {
-            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
-        };
+        let engine_status =
+            unsafe { luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out) };
         assert_eq!(engine_status, FFI_STATUS_OK);
         assert!(error_out.ptr.is_null());
 
@@ -3980,7 +3966,7 @@ mod tests {
             len: 0,
         };
         let set_status = unsafe {
-            vulcan_luaskills_ffi_skill_config_set(
+            luaskills_ffi_skill_config_set(
                 engine_id,
                 skill_id.as_ptr(),
                 key.as_ptr(),
@@ -4001,7 +3987,7 @@ mod tests {
             len: 0,
         };
         let get_status = unsafe {
-            vulcan_luaskills_ffi_skill_config_get(
+            luaskills_ffi_skill_config_get(
                 engine_id,
                 skill_id.as_ptr(),
                 key.as_ptr(),
@@ -4014,7 +4000,7 @@ mod tests {
         assert!(get_error.ptr.is_null());
         assert_eq!(found_out, 1);
         assert_eq!(read_owned_buffer_text(&value_out), "sk-standard-ffi");
-        unsafe { vulcan_luaskills_ffi_buffer_free(value_out) };
+        unsafe { luaskills_ffi_buffer_free(value_out) };
 
         let empty_value = CString::new("").expect("empty value cstring");
         let mut empty_set_error = FfiOwnedBuffer {
@@ -4022,7 +4008,7 @@ mod tests {
             len: 0,
         };
         let empty_set_status = unsafe {
-            vulcan_luaskills_ffi_skill_config_set(
+            luaskills_ffi_skill_config_set(
                 engine_id,
                 skill_id.as_ptr(),
                 key.as_ptr(),
@@ -4043,7 +4029,7 @@ mod tests {
             len: 0,
         };
         let empty_get_status = unsafe {
-            vulcan_luaskills_ffi_skill_config_get(
+            luaskills_ffi_skill_config_get(
                 engine_id,
                 skill_id.as_ptr(),
                 key.as_ptr(),
@@ -4056,7 +4042,7 @@ mod tests {
         assert!(empty_get_error.ptr.is_null());
         assert_eq!(empty_found_out, 1);
         assert_eq!(read_owned_buffer_text(&empty_value_out), "");
-        unsafe { vulcan_luaskills_ffi_buffer_free(empty_value_out) };
+        unsafe { luaskills_ffi_buffer_free(empty_value_out) };
 
         let mut list_out = FfiOwnedBuffer {
             ptr: ptr::null_mut(),
@@ -4067,7 +4053,7 @@ mod tests {
             len: 0,
         };
         let list_status = unsafe {
-            vulcan_luaskills_ffi_skill_config_list(
+            luaskills_ffi_skill_config_list(
                 engine_id,
                 skill_id.as_ptr(),
                 &mut list_out,
@@ -4082,7 +4068,7 @@ mod tests {
         assert_eq!(list_json[0]["skill_id"], "demo-skill");
         assert_eq!(list_json[0]["key"], "api_token");
         assert_eq!(list_json[0]["value"], "");
-        unsafe { vulcan_luaskills_ffi_buffer_free(list_out) };
+        unsafe { luaskills_ffi_buffer_free(list_out) };
 
         let mut deleted_out = 0_u8;
         let mut delete_error = FfiOwnedBuffer {
@@ -4090,7 +4076,7 @@ mod tests {
             len: 0,
         };
         let delete_status = unsafe {
-            vulcan_luaskills_ffi_skill_config_delete(
+            luaskills_ffi_skill_config_delete(
                 engine_id,
                 skill_id.as_ptr(),
                 key.as_ptr(),
@@ -4106,7 +4092,7 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        let free_status = unsafe { luaskills_ffi_engine_free(engine_id, &mut free_error) };
         assert_eq!(free_status, FFI_STATUS_OK);
         assert!(free_error.ptr.is_null());
 
@@ -4118,7 +4104,7 @@ mod tests {
     #[test]
     fn standard_ffi_disable_and_enable_skill_round_trip() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_standard_ffi_lifecycle_test_{}",
+            "luaskills_standard_ffi_lifecycle_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -4217,9 +4203,8 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let engine_status = unsafe {
-            vulcan_luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out)
-        };
+        let engine_status =
+            unsafe { luaskills_ffi_engine_new(&engine_options, &mut engine_id, &mut error_out) };
         assert_eq!(engine_status, FFI_STATUS_OK);
         assert!(error_out.ptr.is_null());
 
@@ -4233,7 +4218,7 @@ mod tests {
             len: 0,
         };
         let load_status = unsafe {
-            vulcan_luaskills_ffi_load_from_roots(
+            luaskills_ffi_load_from_roots(
                 engine_id,
                 ffi_skill_roots.as_ptr(),
                 ffi_skill_roots.len(),
@@ -4248,15 +4233,14 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let list_status = unsafe {
-            vulcan_luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error)
-        };
+        let list_status =
+            unsafe { luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error) };
         assert_eq!(list_status, FFI_STATUS_OK);
         assert!(list_error.ptr.is_null());
         assert!(!entries_out.is_null());
         let entries_ref = unsafe { &*entries_out };
         assert_eq!(entries_ref.len, 1);
-        unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+        unsafe { luaskills_ffi_entry_list_free(entries_out) };
 
         let (_before_disable_args_storage, before_disable_args_buffer) =
             make_borrowed_buffer(r#"{"note":"before-disable"}"#);
@@ -4266,7 +4250,7 @@ mod tests {
             len: 0,
         };
         let call_status = unsafe {
-            vulcan_luaskills_ffi_call_skill(
+            luaskills_ffi_call_skill(
                 engine_id,
                 tool_name.as_ptr(),
                 before_disable_args_buffer,
@@ -4282,14 +4266,14 @@ mod tests {
             read_owned_buffer_text(&result_ref.content),
             "lifecycle:before-disable"
         );
-        unsafe { vulcan_luaskills_ffi_invocation_result_free(result_out) };
+        unsafe { luaskills_ffi_invocation_result_free(result_out) };
 
         let mut disable_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),
             len: 0,
         };
         let disable_status = unsafe {
-            vulcan_luaskills_ffi_disable_skill(
+            luaskills_ffi_disable_skill(
                 engine_id,
                 ffi_skill_roots.as_ptr(),
                 ffi_skill_roots.len(),
@@ -4306,15 +4290,14 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let disabled_list_status = unsafe {
-            vulcan_luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error)
-        };
+        let disabled_list_status =
+            unsafe { luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error) };
         assert_eq!(disabled_list_status, FFI_STATUS_OK);
         assert!(list_error.ptr.is_null());
         assert!(!entries_out.is_null());
         let disabled_entries_ref = unsafe { &*entries_out };
         assert_eq!(disabled_entries_ref.len, 0);
-        unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+        unsafe { luaskills_ffi_entry_list_free(entries_out) };
 
         result_out = ptr::null_mut();
         call_error = FfiOwnedBuffer {
@@ -4324,7 +4307,7 @@ mod tests {
         let (_disabled_args_storage, disabled_args_buffer) =
             make_borrowed_buffer(r#"{"note":"before-disable"}"#);
         let disabled_call_status = unsafe {
-            vulcan_luaskills_ffi_call_skill(
+            luaskills_ffi_call_skill(
                 engine_id,
                 tool_name.as_ptr(),
                 disabled_args_buffer,
@@ -4336,14 +4319,14 @@ mod tests {
         assert_ne!(disabled_call_status, FFI_STATUS_OK);
         assert!(result_out.is_null());
         assert!(!call_error.ptr.is_null());
-        unsafe { vulcan_luaskills_ffi_buffer_free(call_error) };
+        unsafe { luaskills_ffi_buffer_free(call_error) };
 
         let mut enable_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),
             len: 0,
         };
         let enable_status = unsafe {
-            vulcan_luaskills_ffi_enable_skill(
+            luaskills_ffi_enable_skill(
                 engine_id,
                 ffi_skill_roots.as_ptr(),
                 ffi_skill_roots.len(),
@@ -4359,15 +4342,14 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let enabled_list_status = unsafe {
-            vulcan_luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error)
-        };
+        let enabled_list_status =
+            unsafe { luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error) };
         assert_eq!(enabled_list_status, FFI_STATUS_OK);
         assert!(list_error.ptr.is_null());
         assert!(!entries_out.is_null());
         let enabled_entries_ref = unsafe { &*entries_out };
         assert_eq!(enabled_entries_ref.len, 1);
-        unsafe { vulcan_luaskills_ffi_entry_list_free(entries_out) };
+        unsafe { luaskills_ffi_entry_list_free(entries_out) };
 
         let (_enabled_args_storage, enabled_args_buffer) =
             make_borrowed_buffer(r#"{"note":"after-enable"}"#);
@@ -4377,7 +4359,7 @@ mod tests {
             len: 0,
         };
         let enabled_call_status = unsafe {
-            vulcan_luaskills_ffi_call_skill(
+            luaskills_ffi_call_skill(
                 engine_id,
                 tool_name.as_ptr(),
                 enabled_args_buffer,
@@ -4393,13 +4375,13 @@ mod tests {
             read_owned_buffer_text(&enabled_result_ref.content),
             "lifecycle:after-enable"
         );
-        unsafe { vulcan_luaskills_ffi_invocation_result_free(result_out) };
+        unsafe { luaskills_ffi_invocation_result_free(result_out) };
 
         let mut free_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let free_status = unsafe { vulcan_luaskills_ffi_engine_free(engine_id, &mut free_error) };
+        let free_status = unsafe { luaskills_ffi_engine_free(engine_id, &mut free_error) };
         assert_eq!(free_status, FFI_STATUS_OK);
         assert!(free_error.ptr.is_null());
 

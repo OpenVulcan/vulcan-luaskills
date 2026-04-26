@@ -1,4 +1,4 @@
-# vulcan-luaskills FFI 收敛改造草案
+# luaskills FFI 收敛改造草案
 
 ## 1. 文档定位
 

@@ -1,12 +1,12 @@
 [package]
-name = "vulcan-luaskills"
-version = "0.1.0"
+name = "luaskills"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "LuaSkills core runtime library for loading, invoking, and managing Lua skill packages."
 repository = "https://github.com/LuaSkills/luaskills"
 homepage = "https://github.com/LuaSkills/luaskills"
-documentation = "https://docs.rs/vulcan-luaskills"
+documentation = "https://docs.rs/luaskills"
 readme = "README.md"
 keywords = ["lua", "skills", "runtime", "ffi", "luajit"]
 categories = ["api-bindings", "development-tools::ffi"]

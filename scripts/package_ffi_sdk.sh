@@ -66,7 +66,7 @@ cat > "$PACKAGE_ROOT/ffi-sdk-manifest.json" <<JSON
   "schema_version": 1,
   "package_name": "luaskills-ffi-sdk-${PLATFORM}",
   "platform": "${PLATFORM}",
-  "headers": ["include/vulcan_luaskills_ffi.h", "include/vulcan_luaskills_json_ffi.h"],
+  "headers": ["include/luaskills_ffi.h", "include/luaskills_json_ffi.h"],
   "library_dir": "lib"
 }
 JSON

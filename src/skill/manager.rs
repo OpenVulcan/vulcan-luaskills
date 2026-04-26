@@ -1551,10 +1551,8 @@ mod tests {
     /// 验证暂存目录守卫会在析构时清理临时根目录。
     #[test]
     fn temp_dir_guard_removes_staging_root_on_drop() {
-        let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_temp_guard_test_{}",
-            std::process::id()
-        ));
+        let temp_root =
+            std::env::temp_dir().join(format!("luaskills_temp_guard_test_{}", std::process::id()));
         if temp_root.exists() {
             let _ = std::fs::remove_dir_all(&temp_root);
         }
@@ -1572,7 +1570,7 @@ mod tests {
     #[test]
     fn skill_manager_persists_disabled_state() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_skill_manager_test_{}",
+            "luaskills_skill_manager_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -1617,10 +1615,8 @@ mod tests {
     /// 验证受保护技能会在 skills 平面被阻止，但在 system 平面仍然允许。
     #[test]
     fn protected_skills_are_blocked_only_in_skills_plane() {
-        let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_protection_test_{}",
-            std::process::id()
-        ));
+        let temp_root =
+            std::env::temp_dir().join(format!("luaskills_protection_test_{}", std::process::id()));
         let skill_root = temp_root.join("skills");
         let manager = SkillManager::new(SkillManagerConfig {
             protection: SkillProtectionConfig {
@@ -1660,7 +1656,7 @@ mod tests {
     #[test]
     fn install_update_entrypoints_return_strict_structured_results() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_install_update_test_{}",
+            "luaskills_install_update_test_{}",
             std::process::id()
         ));
         let skill_root = temp_root.join("skills");
@@ -1725,7 +1721,7 @@ mod tests {
     #[test]
     fn uninstall_returns_safe_default_database_flags() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_uninstall_result_test_{}",
+            "luaskills_uninstall_result_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -1760,7 +1756,7 @@ mod tests {
     #[test]
     fn collect_effective_skill_instances_supports_override_add_and_shadow() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_collect_effective_instances_test_{}",
+            "luaskills_collect_effective_instances_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -1806,7 +1802,7 @@ mod tests {
     #[test]
     fn resolve_effective_skill_instance_prefers_override_directory() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_resolve_effective_instance_test_{}",
+            "luaskills_resolve_effective_instance_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {

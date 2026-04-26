@@ -1,18 +1,18 @@
-#ifndef VULCAN_LUASKILLS_FFI_H
-#define VULCAN_LUASKILLS_FFI_H
+#ifndef LUASKILLS_FFI_H
+#define LUASKILLS_FFI_H
 
 #include <stddef.h>
 #include <stdint.h>
 
 /*
-Stable standard C ABI exported by vulcan-luaskills.
-vulcan-luaskills 导出的稳定标准 C ABI 接口面。
+Stable standard C ABI exported by luaskills.
+luaskills 导出的稳定标准 C ABI 接口面。
 */
 
 /*
  Beta integration contract for v0.1.x:
 - This header is the low-level standard ABI for controlled host integrations.
-- Public high-level JSON FFI declarations are provided by vulcan_luaskills_json_ffi.h.
+- Public high-level JSON FFI declarations are provided by luaskills_json_ffi.h.
 - Returned memory must be released only with the matching luaskills free function.
 - Host callbacks must be registered before engine creation when callback-based modes are used.
 - Callbacks must not unwind across the C ABI boundary.
@@ -20,7 +20,7 @@ vulcan-luaskills 导出的稳定标准 C ABI 接口面。
 - Skills are treated as trusted code by default; this ABI does not promise sandbox isolation.
 v0.1.x beta 集成契约：
 - 当前头文件是面向受控宿主集成的低层标准 ABI。
-- 公共高层 JSON FFI 声明位于 vulcan_luaskills_json_ffi.h。
+- 公共高层 JSON FFI 声明位于 luaskills_json_ffi.h。
 - 所有返回内存都只能使用匹配的 luaskills 释放函数处理。
 - 使用 callback 模式时，宿主必须先注册 callback，再创建 engine。
 - callback 不允许把异常跨越 C ABI 边界传播。
@@ -379,7 +379,7 @@ typedef int32_t (*FfiLanceDbProviderCallback)(
 Clone one host-owned byte buffer into one luaskills-owned owned-buffer container.
 将宿主拥有的字节缓冲克隆为 luaskills 自主管理的拥有型缓冲容器。
 */
-int32_t vulcan_luaskills_ffi_buffer_clone(
+int32_t luaskills_ffi_buffer_clone(
     const uint8_t *value,
     size_t len,
     FfiOwnedBuffer *buffer_out,
@@ -389,22 +389,22 @@ int32_t vulcan_luaskills_ffi_buffer_clone(
 Clone one host-owned byte buffer into one luaskills-owned heap buffer for callback returns.
 将宿主拥有的字节缓冲克隆为 luaskills 自主管理的堆缓冲，供 callback 返回使用。
 */
-uint8_t *vulcan_luaskills_ffi_bytes_clone(const uint8_t *value, size_t len);
+uint8_t *luaskills_ffi_bytes_clone(const uint8_t *value, size_t len);
 /*
-Free one luaskills-owned buffer container created by vulcan_luaskills_ffi_buffer_clone.
-释放由 vulcan_luaskills_ffi_buffer_clone 创建的 luaskills 自主管理缓冲容器。
+Free one luaskills-owned buffer container created by luaskills_ffi_buffer_clone.
+释放由 luaskills_ffi_buffer_clone 创建的 luaskills 自主管理缓冲容器。
 */
-void vulcan_luaskills_ffi_buffer_free(FfiOwnedBuffer value);
+void luaskills_ffi_buffer_free(FfiOwnedBuffer value);
 /*
-Free one luaskills-owned heap byte buffer created by vulcan_luaskills_ffi_bytes_clone.
-释放由 vulcan_luaskills_ffi_bytes_clone 创建的 luaskills 自主管理堆字节缓冲。
+Free one luaskills-owned heap byte buffer created by luaskills_ffi_bytes_clone.
+释放由 luaskills_ffi_bytes_clone 创建的 luaskills 自主管理堆字节缓冲。
 */
-void vulcan_luaskills_ffi_bytes_free(uint8_t *value, size_t len);
+void luaskills_ffi_bytes_free(uint8_t *value, size_t len);
 /*
 Register or clear the SQLite host callback before engine creation.
 在创建 engine 前注册或清理 SQLite 宿主 callback。
 */
-int32_t vulcan_luaskills_ffi_set_sqlite_provider_callback(
+int32_t luaskills_ffi_set_sqlite_provider_callback(
     FfiSqliteProviderCallback callback,
     void *user_data,
     FfiOwnedBuffer *error_out
@@ -413,7 +413,7 @@ int32_t vulcan_luaskills_ffi_set_sqlite_provider_callback(
 Register or clear the LanceDB host callback before engine creation.
 在创建 engine 前注册或清理 LanceDB 宿主 callback。
 */
-int32_t vulcan_luaskills_ffi_set_lancedb_provider_callback(
+int32_t luaskills_ffi_set_lancedb_provider_callback(
     FfiLanceDbProviderCallback callback,
     void *user_data,
     FfiOwnedBuffer *error_out
@@ -422,61 +422,61 @@ int32_t vulcan_luaskills_ffi_set_lancedb_provider_callback(
 Free one heap-allocated string-array result returned by the standard FFI layer.
 释放一段由标准 FFI 层返回并在堆上分配的字符串数组结果。
 */
-void vulcan_luaskills_ffi_string_array_free(FfiStringArray *value);
+void luaskills_ffi_string_array_free(FfiStringArray *value);
 
 /*
 Free one heap-allocated entry descriptor list returned by the standard FFI layer.
 释放一段由标准 FFI 层返回并在堆上分配的入口描述列表。
 */
-void vulcan_luaskills_ffi_entry_list_free(FfiRuntimeEntryDescriptorList *value);
+void luaskills_ffi_entry_list_free(FfiRuntimeEntryDescriptorList *value);
 
 /*
 Free one heap-allocated help descriptor list returned by the standard FFI layer.
 释放一段由标准 FFI 层返回并在堆上分配的帮助描述列表。
 */
-void vulcan_luaskills_ffi_help_list_free(FfiRuntimeSkillHelpDescriptorList *value);
+void luaskills_ffi_help_list_free(FfiRuntimeSkillHelpDescriptorList *value);
 
 /*
 Free one heap-allocated help detail returned by the standard FFI layer.
 释放一段由标准 FFI 层返回并在堆上分配的帮助详情。
 */
-void vulcan_luaskills_ffi_help_detail_free(FfiRuntimeHelpDetail *value);
+void luaskills_ffi_help_detail_free(FfiRuntimeHelpDetail *value);
 
 /*
 Free one heap-allocated invocation result returned by the standard FFI layer.
 释放一段由标准 FFI 层返回并在堆上分配的调用结果。
 */
-void vulcan_luaskills_ffi_invocation_result_free(FfiRuntimeInvocationResult *value);
+void luaskills_ffi_invocation_result_free(FfiRuntimeInvocationResult *value);
 
 /*
 Free one heap-allocated skill apply result returned by the standard FFI layer.
 释放一段由标准 FFI 层返回并在堆上分配的技能安装或更新结果。
 */
-void vulcan_luaskills_ffi_skill_apply_result_free(FfiSkillApplyResult *value);
+void luaskills_ffi_skill_apply_result_free(FfiSkillApplyResult *value);
 
 /*
 Free one heap-allocated skill uninstall result returned by the standard FFI layer.
 释放一段由标准 FFI 层返回并在堆上分配的技能卸载结果。
 */
-void vulcan_luaskills_ffi_skill_uninstall_result_free(FfiSkillUninstallResult *value);
+void luaskills_ffi_skill_uninstall_result_free(FfiSkillUninstallResult *value);
 
 /*
 Return one stable FFI version string through the standard C ABI surface.
 通过标准 C ABI 接口返回稳定的 FFI 版本字符串。
 */
-int32_t vulcan_luaskills_ffi_version(FfiOwnedBuffer *version_out, FfiOwnedBuffer *error_out);
+int32_t luaskills_ffi_version(FfiOwnedBuffer *version_out, FfiOwnedBuffer *error_out);
 
 /*
 Return exported FFI entrypoint names through the standard C ABI surface.
 通过标准 C ABI 接口返回已导出 FFI 入口点名称。
 */
-int32_t vulcan_luaskills_ffi_describe(FfiStringArray **functions_out, FfiOwnedBuffer *error_out);
+int32_t luaskills_ffi_describe(FfiStringArray **functions_out, FfiOwnedBuffer *error_out);
 
 /*
 Create one LuaSkills engine through the standard C ABI surface.
 通过标准 C ABI 接口创建一个 LuaSkills 引擎。
 */
-int32_t vulcan_luaskills_ffi_engine_new(
+int32_t luaskills_ffi_engine_new(
     const FfiLuaEngineOptions *options,
     uint64_t *engine_id_out,
     FfiOwnedBuffer *error_out
@@ -486,13 +486,13 @@ int32_t vulcan_luaskills_ffi_engine_new(
 Free one LuaSkills engine through the standard C ABI surface.
 通过标准 C ABI 接口释放一个 LuaSkills 引擎。
 */
-int32_t vulcan_luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out);
+int32_t luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out);
 
 /*
 Load skills from legacy directory-style roots through the standard C ABI surface.
 通过标准 C ABI 接口按旧目录风格根参数加载技能。
 */
-int32_t vulcan_luaskills_ffi_load_from_dirs(
+int32_t luaskills_ffi_load_from_dirs(
     uint64_t engine_id,
     const char *base_dir,
     const char *override_dir,
@@ -503,7 +503,7 @@ int32_t vulcan_luaskills_ffi_load_from_dirs(
 Load skills from one ordered root chain through the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链加载技能。
 */
-int32_t vulcan_luaskills_ffi_load_from_roots(
+int32_t luaskills_ffi_load_from_roots(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -514,7 +514,7 @@ int32_t vulcan_luaskills_ffi_load_from_roots(
 Reload skills from legacy directory-style roots through the standard C ABI surface.
 通过标准 C ABI 接口按旧目录风格根参数重载技能。
 */
-int32_t vulcan_luaskills_ffi_reload_from_dirs(
+int32_t luaskills_ffi_reload_from_dirs(
     uint64_t engine_id,
     const char *base_dir,
     const char *override_dir,
@@ -525,7 +525,7 @@ int32_t vulcan_luaskills_ffi_reload_from_dirs(
 Reload skills from one ordered root chain through the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链重载技能。
 */
-int32_t vulcan_luaskills_ffi_reload_from_roots(
+int32_t luaskills_ffi_reload_from_roots(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -536,7 +536,7 @@ int32_t vulcan_luaskills_ffi_reload_from_roots(
 List runtime entries through the standard C ABI surface.
 通过标准 C ABI 接口列出运行时入口。
 */
-int32_t vulcan_luaskills_ffi_list_entries(
+int32_t luaskills_ffi_list_entries(
     uint64_t engine_id,
     FfiRuntimeEntryDescriptorList **entries_out,
     FfiOwnedBuffer *error_out
@@ -546,7 +546,7 @@ int32_t vulcan_luaskills_ffi_list_entries(
 List runtime help trees through the standard C ABI surface.
 通过标准 C ABI 接口列出运行时帮助树。
 */
-int32_t vulcan_luaskills_ffi_list_skill_help(
+int32_t luaskills_ffi_list_skill_help(
     uint64_t engine_id,
     FfiRuntimeSkillHelpDescriptorList **help_out,
     FfiOwnedBuffer *error_out
@@ -556,7 +556,7 @@ int32_t vulcan_luaskills_ffi_list_skill_help(
 Render one help detail through the standard C ABI surface.
 通过标准 C ABI 接口渲染单个帮助详情。
 */
-int32_t vulcan_luaskills_ffi_render_skill_help_detail(
+int32_t luaskills_ffi_render_skill_help_detail(
     uint64_t engine_id,
     const char *skill_id,
     const char *flow_name,
@@ -569,7 +569,7 @@ int32_t vulcan_luaskills_ffi_render_skill_help_detail(
 Resolve prompt argument completions through the standard C ABI surface.
 通过标准 C ABI 接口解析提示词参数补全项。
 */
-int32_t vulcan_luaskills_ffi_prompt_argument_completions(
+int32_t luaskills_ffi_prompt_argument_completions(
     uint64_t engine_id,
     const char *prompt_name,
     const char *argument_name,
@@ -581,7 +581,7 @@ int32_t vulcan_luaskills_ffi_prompt_argument_completions(
 Check whether one tool belongs to a Lua skill through the standard C ABI surface.
 通过标准 C ABI 接口检查单个工具是否属于 Lua 技能。
 */
-int32_t vulcan_luaskills_ffi_is_skill(
+int32_t luaskills_ffi_is_skill(
     uint64_t engine_id,
     const char *tool_name,
     uint8_t *value_out,
@@ -592,7 +592,7 @@ int32_t vulcan_luaskills_ffi_is_skill(
 Resolve the owning skill id of one tool through the standard C ABI surface.
 通过标准 C ABI 接口解析单个工具所属的技能标识符。
 */
-int32_t vulcan_luaskills_ffi_skill_name_for_tool(
+int32_t luaskills_ffi_skill_name_for_tool(
     uint64_t engine_id,
     const char *tool_name,
     FfiOwnedBuffer *skill_id_out,
@@ -603,7 +603,7 @@ int32_t vulcan_luaskills_ffi_skill_name_for_tool(
 List flattened skill config records through the standard C ABI surface.
 通过标准 C ABI 接口列出扁平化技能配置记录。
 */
-int32_t vulcan_luaskills_ffi_skill_config_list(
+int32_t luaskills_ffi_skill_config_list(
     uint64_t engine_id,
     const char *skill_id,
     FfiOwnedBuffer *result_json_out,
@@ -614,7 +614,7 @@ int32_t vulcan_luaskills_ffi_skill_config_list(
 Read one optional skill config value through the standard C ABI surface.
 通过标准 C ABI 接口读取单个可选技能配置值。
 */
-int32_t vulcan_luaskills_ffi_skill_config_get(
+int32_t luaskills_ffi_skill_config_get(
     uint64_t engine_id,
     const char *skill_id,
     const char *key,
@@ -627,7 +627,7 @@ int32_t vulcan_luaskills_ffi_skill_config_get(
 Insert or replace one skill config value through the standard C ABI surface.
 通过标准 C ABI 接口插入或替换单个技能配置值。
 */
-int32_t vulcan_luaskills_ffi_skill_config_set(
+int32_t luaskills_ffi_skill_config_set(
     uint64_t engine_id,
     const char *skill_id,
     const char *key,
@@ -639,7 +639,7 @@ int32_t vulcan_luaskills_ffi_skill_config_set(
 Delete one skill config key through the standard C ABI surface.
 通过标准 C ABI 接口删除单个技能配置键。
 */
-int32_t vulcan_luaskills_ffi_skill_config_delete(
+int32_t luaskills_ffi_skill_config_delete(
     uint64_t engine_id,
     const char *skill_id,
     const char *key,
@@ -651,7 +651,7 @@ int32_t vulcan_luaskills_ffi_skill_config_delete(
 Call one loaded skill entry through the standard C ABI surface.
 通过标准 C ABI 接口调用单个已加载技能入口。
 */
-int32_t vulcan_luaskills_ffi_call_skill(
+int32_t luaskills_ffi_call_skill(
     uint64_t engine_id,
     const char *tool_name,
     FfiBorrowedBuffer args_json,
@@ -664,7 +664,7 @@ int32_t vulcan_luaskills_ffi_call_skill(
 Execute arbitrary Lua code through the standard C ABI surface.
 通过标准 C ABI 接口执行任意 Lua 代码。
 */
-int32_t vulcan_luaskills_ffi_run_lua(
+int32_t luaskills_ffi_run_lua(
     uint64_t engine_id,
     const char *code,
     FfiBorrowedBuffer args_json,
@@ -677,7 +677,7 @@ int32_t vulcan_luaskills_ffi_run_lua(
 Disable one skill through legacy directory-style roots via the standard C ABI surface.
 通过标准 C ABI 接口按旧目录风格根参数停用单个技能。
 */
-int32_t vulcan_luaskills_ffi_disable_skill_in_dirs(
+int32_t luaskills_ffi_disable_skill_in_dirs(
     uint64_t engine_id,
     const char *base_dir,
     const char *override_dir,
@@ -690,7 +690,7 @@ int32_t vulcan_luaskills_ffi_disable_skill_in_dirs(
 Disable one skill through one ordered root chain via the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链停用单个技能。
 */
-int32_t vulcan_luaskills_ffi_disable_skill(
+int32_t luaskills_ffi_disable_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -703,7 +703,7 @@ int32_t vulcan_luaskills_ffi_disable_skill(
 Disable one skill on the system plane through legacy directory-style roots.
 通过标准 C ABI 接口按旧目录风格根参数在 system 平面停用单个技能。
 */
-int32_t vulcan_luaskills_ffi_system_disable_skill_in_dirs(
+int32_t luaskills_ffi_system_disable_skill_in_dirs(
     uint64_t engine_id,
     const char *base_dir,
     const char *override_dir,
@@ -716,7 +716,7 @@ int32_t vulcan_luaskills_ffi_system_disable_skill_in_dirs(
 Disable one skill on the system plane through one ordered root chain.
 通过标准 C ABI 接口按一条有序根链在 system 平面停用单个技能。
 */
-int32_t vulcan_luaskills_ffi_system_disable_skill(
+int32_t luaskills_ffi_system_disable_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -729,7 +729,7 @@ int32_t vulcan_luaskills_ffi_system_disable_skill(
 Enable one skill through one ordered root chain via the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链启用单个技能。
 */
-int32_t vulcan_luaskills_ffi_enable_skill(
+int32_t luaskills_ffi_enable_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -741,7 +741,7 @@ int32_t vulcan_luaskills_ffi_enable_skill(
 Enable one skill on the system plane through one ordered root chain.
 通过标准 C ABI 接口按一条有序根链在 system 平面启用单个技能。
 */
-int32_t vulcan_luaskills_ffi_system_enable_skill(
+int32_t luaskills_ffi_system_enable_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -753,7 +753,7 @@ int32_t vulcan_luaskills_ffi_system_enable_skill(
 Uninstall one skill through one ordered root chain via the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链卸载单个技能。
 */
-int32_t vulcan_luaskills_ffi_uninstall_skill(
+int32_t luaskills_ffi_uninstall_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -767,7 +767,7 @@ int32_t vulcan_luaskills_ffi_uninstall_skill(
 Uninstall one skill on the system plane through one ordered root chain.
 通过标准 C ABI 接口按一条有序根链在 system 平面卸载单个技能。
 */
-int32_t vulcan_luaskills_ffi_system_uninstall_skill(
+int32_t luaskills_ffi_system_uninstall_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -781,7 +781,7 @@ int32_t vulcan_luaskills_ffi_system_uninstall_skill(
 Install one managed skill through one ordered root chain via the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链安装单个受管技能。
 */
-int32_t vulcan_luaskills_ffi_install_skill(
+int32_t luaskills_ffi_install_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -794,7 +794,7 @@ int32_t vulcan_luaskills_ffi_install_skill(
 Install one managed skill on the system plane through one ordered root chain.
 通过标准 C ABI 接口按一条有序根链在 system 平面安装单个受管技能。
 */
-int32_t vulcan_luaskills_ffi_system_install_skill(
+int32_t luaskills_ffi_system_install_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -807,7 +807,7 @@ int32_t vulcan_luaskills_ffi_system_install_skill(
 Update one managed skill through one ordered root chain via the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链更新单个受管技能。
 */
-int32_t vulcan_luaskills_ffi_update_skill(
+int32_t luaskills_ffi_update_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
@@ -820,7 +820,7 @@ int32_t vulcan_luaskills_ffi_update_skill(
 Update one managed skill on the system plane through one ordered root chain.
 通过标准 C ABI 接口按一条有序根链在 system 平面更新单个受管技能。
 */
-int32_t vulcan_luaskills_ffi_system_update_skill(
+int32_t luaskills_ffi_system_update_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,

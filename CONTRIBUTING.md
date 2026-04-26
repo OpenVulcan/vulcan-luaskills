@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Thank you for contributing to vulcan-luaskills. To keep every contribution traceable and properly licensed, this repository uses the DCO (Developer Certificate of Origin) as a lightweight contribution confirmation mechanism.
+Thank you for contributing to luaskills. To keep every contribution traceable and properly licensed, this repository uses the DCO (Developer Certificate of Origin) as a lightweight contribution confirmation mechanism.
 
 ## DCO Requirement
 
@@ -57,7 +57,7 @@ See the standard DCO text here: [Developer Certificate of Origin](https://develo
 
 # 贡献指南
 
-感谢你愿意为 vulcan-luaskills 贡献代码。为了确保每一份贡献都有清晰的授权来源，本仓库采用 DCO（Developer Certificate of Origin，开发者原产地证明）作为轻量贡献确认机制。
+感谢你愿意为 luaskills 贡献代码。为了确保每一份贡献都有清晰的授权来源，本仓库采用 DCO（Developer Certificate of Origin，开发者原产地证明）作为轻量贡献确认机制。
 
 ## DCO 要求
 

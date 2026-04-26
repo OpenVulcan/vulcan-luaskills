@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 DEMO_SKILL_ID = "luaskills-demo-skill"
-DEMO_SKILL_REPO = "OpenVulcan/luaskills-demo-skill"
+DEMO_SKILL_REPO = "LuaSkills/luaskills-demo-skill"
 DEMO_TOOL_NAME = "luaskills-demo-skill-demo-status"
 
 
@@ -160,13 +160,13 @@ def reset_demo_skill_state(root: Path) -> None:
 
 def load_library() -> ctypes.CDLL:
     """
-    Load the vulcan-luaskills dynamic library from one explicit environment variable.
-    从一个显式环境变量加载 vulcan-luaskills 动态库。
+    Load the luaskills dynamic library from one explicit environment variable.
+    从一个显式环境变量加载 luaskills 动态库。
     """
 
-    library_path = os.environ.get("VULCAN_LUASKILLS_LIB")
+    library_path = os.environ.get("LUASKILLS_LIB")
     if not library_path:
-        raise RuntimeError("VULCAN_LUASKILLS_LIB is not set")
+        raise RuntimeError("LUASKILLS_LIB is not set")
     return ctypes.CDLL(str(Path(library_path)))
 
 
@@ -179,7 +179,7 @@ def read_owned_buffer_text(buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> str:
     if not buffer.ptr:
         return ""
     text = ctypes.string_at(buffer.ptr, buffer.len).decode("utf-8")
-    library.vulcan_luaskills_ffi_buffer_free(buffer)
+    library.luaskills_ffi_buffer_free(buffer)
     return text
 
 
@@ -208,7 +208,7 @@ def decode_json_response(raw_buffer: FfiOwnedBuffer, library: ctypes.CDLL) -> di
         if raw_buffer.len
         else ""
     )
-    library.vulcan_luaskills_ffi_buffer_free(raw_buffer)
+    library.luaskills_ffi_buffer_free(raw_buffer)
     payload = json.loads(text)
     if payload.get("ok") is not True:
         raise RuntimeError(payload.get("error") or "Unknown JSON FFI error")
@@ -300,18 +300,18 @@ def main() -> None:
     reset_demo_skill_state(root)
 
     library = load_library()
-    library.vulcan_luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
-    library.vulcan_luaskills_ffi_buffer_free.restype = None
-    library.vulcan_luaskills_ffi_version.argtypes = [
+    library.luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
+    library.luaskills_ffi_buffer_free.restype = None
+    library.luaskills_ffi_version.argtypes = [
         ctypes.POINTER(FfiOwnedBuffer),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_engine_new.argtypes = [
+    library.luaskills_ffi_engine_new.argtypes = [
         ctypes.POINTER(FfiLuaEngineOptions),
         ctypes.POINTER(ctypes.c_uint64),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_engine_free.argtypes = [
+    library.luaskills_ffi_engine_free.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiOwnedBuffer),
     ]
@@ -319,7 +319,7 @@ def main() -> None:
     version_buffer = FfiOwnedBuffer()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_version(
+        library.luaskills_ffi_version(
             ctypes.byref(version_buffer), ctypes.byref(error_buffer)
         ),
         error_buffer,
@@ -331,7 +331,7 @@ def main() -> None:
     options = build_engine_options(root)
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_engine_new(
+        library.luaskills_ffi_engine_new(
             ctypes.byref(options), ctypes.byref(engine_id), ctypes.byref(error_buffer)
         ),
         error_buffer,
@@ -348,11 +348,11 @@ def main() -> None:
                 }
             ],
         }
-        call_json_ffi(library, "vulcan_luaskills_ffi_load_from_roots_json", roots_payload)
+        call_json_ffi(library, "luaskills_ffi_load_from_roots_json", roots_payload)
 
         install_result = call_json_ffi(
             library,
-            "vulcan_luaskills_ffi_install_skill_json",
+            "luaskills_ffi_install_skill_json",
             {
                 "engine_id": engine_id.value,
                 "skill_roots": roots_payload["skill_roots"],
@@ -366,7 +366,7 @@ def main() -> None:
 
         invocation_result = call_json_ffi(
             library,
-            "vulcan_luaskills_ffi_call_skill_json",
+            "luaskills_ffi_call_skill_json",
             {
                 "engine_id": engine_id.value,
                 "tool_name": DEMO_TOOL_NAME,
@@ -384,7 +384,7 @@ def main() -> None:
     finally:
         error_buffer = FfiOwnedBuffer()
         must_ok(
-            library.vulcan_luaskills_ffi_engine_free(
+            library.luaskills_ffi_engine_free(
                 engine_id, ctypes.byref(error_buffer)
             ),
             error_buffer,

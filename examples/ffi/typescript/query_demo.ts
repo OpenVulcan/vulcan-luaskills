@@ -13,9 +13,9 @@ Resolve the dynamic library path from one explicit environment variable.
 从一个显式环境变量解析动态库路径。
  */
 function resolveLibraryPath(): string {
-  const libraryPath = process.env.VULCAN_LUASKILLS_LIB;
+  const libraryPath = process.env.LUASKILLS_LIB;
   if (!libraryPath) {
-    throw new Error("VULCAN_LUASKILLS_LIB is not set");
+    throw new Error("LUASKILLS_LIB is not set");
   }
   return libraryPath;
 }
@@ -176,14 +176,14 @@ function main(): void {
     len: "size_t",
   });
 
-  const freeBuffer = library.func("void vulcan_luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
-  const engineNew = library.func("int vulcan_luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
-  const loadFromRoots = library.func("int vulcan_luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, FfiOwnedBuffer *error_out)");
-  const isSkill = library.func("int vulcan_luaskills_ffi_is_skill(uint64_t engine_id, const char *tool_name, uint8_t *value_out, FfiOwnedBuffer *error_out)");
-  const skillNameForTool = library.func("int vulcan_luaskills_ffi_skill_name_for_tool(uint64_t engine_id, const char *tool_name, FfiOwnedBuffer *skill_id_out, FfiOwnedBuffer *error_out)");
-  const promptArgumentCompletions = library.func("int vulcan_luaskills_ffi_prompt_argument_completions(uint64_t engine_id, const char *prompt_name, const char *argument_name, void **values_out, FfiOwnedBuffer *error_out)");
-  const freeStringArray = library.func("void vulcan_luaskills_ffi_string_array_free(void *value)");
-  const engineFree = library.func("int vulcan_luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
+  const freeBuffer = library.func("void luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
+  const engineNew = library.func("int luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
+  const loadFromRoots = library.func("int luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, FfiOwnedBuffer *error_out)");
+  const isSkill = library.func("int luaskills_ffi_is_skill(uint64_t engine_id, const char *tool_name, uint8_t *value_out, FfiOwnedBuffer *error_out)");
+  const skillNameForTool = library.func("int luaskills_ffi_skill_name_for_tool(uint64_t engine_id, const char *tool_name, FfiOwnedBuffer *skill_id_out, FfiOwnedBuffer *error_out)");
+  const promptArgumentCompletions = library.func("int luaskills_ffi_prompt_argument_completions(uint64_t engine_id, const char *prompt_name, const char *argument_name, void **values_out, FfiOwnedBuffer *error_out)");
+  const freeStringArray = library.func("void luaskills_ffi_string_array_free(void *value)");
+  const engineFree = library.func("int luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
 
   const options = {
     pool: { min_size: 1, max_size: 1, idle_ttl_secs: 30 },

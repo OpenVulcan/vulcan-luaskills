@@ -3,7 +3,7 @@ package main
 /*
 #cgo CFLAGS: -I../../../include
 #include <stdlib.h>
-#include "vulcan_luaskills_ffi.h"
+#include "luaskills_ffi.h"
 */
 import "C"
 
@@ -25,7 +25,7 @@ func mustOK(status C.int32_t, errorOut C.FfiOwnedBuffer) {
 	if errorOut.ptr != nil && errorOut.len > 0 {
 		message = readOwnedBufferText(errorOut)
 	}
-	C.vulcan_luaskills_ffi_buffer_free(errorOut)
+	C.luaskills_ffi_buffer_free(errorOut)
 	if message == "" {
 		message = "Unknown FFI error"
 	}
@@ -90,9 +90,9 @@ func ensureStandardFixtureLayout(root string) {
 func main() {
 	var version C.FfiOwnedBuffer
 	var errorOut C.FfiOwnedBuffer
-	mustOK(C.vulcan_luaskills_ffi_version(&version, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_version(&version, &errorOut), errorOut)
 	fmt.Println("Version:", readOwnedBufferText(version))
-	C.vulcan_luaskills_ffi_buffer_free(version)
+	C.luaskills_ffi_buffer_free(version)
 
 	root := standardFixtureRuntimeRoot()
 	ensureStandardFixtureLayout(root)
@@ -153,7 +153,7 @@ func main() {
 
 	var engineID C.uint64_t
 	errorOut = C.FfiOwnedBuffer{}
-	mustOK(C.vulcan_luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
 	fmt.Println("Engine created:", uint64(engineID))
 
 	rootName := C.CString("ROOT")
@@ -168,7 +168,7 @@ func main() {
 	}
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_load_from_roots(
+		C.luaskills_ffi_load_from_roots(
 			engineID,
 			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
 			C.size_t(len(skillRoots)),
@@ -180,9 +180,9 @@ func main() {
 
 	var entryList *C.FfiRuntimeEntryDescriptorList
 	errorOut = C.FfiOwnedBuffer{}
-	mustOK(C.vulcan_luaskills_ffi_list_entries(engineID, &entryList, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_list_entries(engineID, &entryList, &errorOut), errorOut)
 	if entryList != nil {
-		defer C.vulcan_luaskills_ffi_entry_list_free(entryList)
+		defer C.luaskills_ffi_entry_list_free(entryList)
 		entrySlice := unsafe.Slice(entryList.items, int(entryList.len))
 		fmt.Println("Entry count:", len(entrySlice))
 		if len(entrySlice) > 0 {
@@ -222,7 +222,7 @@ func main() {
 	var invocationResult *C.FfiRuntimeInvocationResult
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_call_skill(
+		C.luaskills_ffi_call_skill(
 			engineID,
 			toolName,
 			argsBuffer,
@@ -233,7 +233,7 @@ func main() {
 		errorOut,
 	)
 	if invocationResult != nil {
-		defer C.vulcan_luaskills_ffi_invocation_result_free(invocationResult)
+		defer C.luaskills_ffi_invocation_result_free(invocationResult)
 		fmt.Println("Call content:", readOwnedBufferText(invocationResult.content))
 		fmt.Println("Call content bytes:", uint64(invocationResult.content_bytes))
 		fmt.Println("Call content lines:", uint64(invocationResult.content_lines))
@@ -247,7 +247,7 @@ func main() {
 	var resultJSONOut C.FfiOwnedBuffer
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_run_lua(
+		C.luaskills_ffi_run_lua(
 			engineID,
 			runLuaCode,
 			runLuaArgsBuffer,
@@ -258,9 +258,9 @@ func main() {
 		errorOut,
 	)
 	fmt.Println("Run Lua result JSON:", readOwnedBufferText(resultJSONOut))
-	C.vulcan_luaskills_ffi_buffer_free(resultJSONOut)
+	C.luaskills_ffi_buffer_free(resultJSONOut)
 
 	errorOut = C.FfiOwnedBuffer{}
-	mustOK(C.vulcan_luaskills_ffi_engine_free(engineID, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_engine_free(engineID, &errorOut), errorOut)
 	fmt.Println("Engine freed")
 }

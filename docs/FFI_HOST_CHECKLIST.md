@@ -1,11 +1,11 @@
-# vulcan-luaskills FFI 宿主接入检查清单
+# luaskills FFI 宿主接入检查清单
 
 ## 1. 这份清单的用途
 
 这份清单不是完整设计说明，也不是 API 逐项参考。  
 它的目标只有一个：
 
-- 让宿主在第一次接入 `vulcan-luaskills` FFI 时，能按最短路径完成自检
+- 让宿主在第一次接入 `luaskills` FFI 时，能按最短路径完成自检
 
 如果您需要完整背景说明，请继续阅读：
 
@@ -92,7 +92,7 @@
 
 - 标准 C ABI 接口失败信息：
   - 通过 `FfiOwnedBuffer error_out` 返回
-  - 读取后必须 `vulcan_luaskills_ffi_buffer_free`
+  - 读取后必须 `luaskills_ffi_buffer_free`
 - 标准 C ABI 接口的单值文本输出：
   - 例如 `version_out` / `skill_id_out` / `result_json_out`
   - 也应按 `FfiOwnedBuffer` 读取与释放
@@ -100,9 +100,9 @@
   - 不能手动释放内部字段
   - 必须调用结构体专用 free 函数
 - 字符串数组：
-  - 必须调用 `vulcan_luaskills_ffi_string_array_free`
+  - 必须调用 `luaskills_ffi_string_array_free`
 - 裸字符串辅助函数：
-  - `vulcan_luaskills_ffi_string_free` 只能释放 **luaskills 自己分配** 的字符串
+  - `luaskills_ffi_string_free` 只能释放 **luaskills 自己分配** 的字符串
 
 一句话规则：
 
@@ -117,7 +117,7 @@
 - `FfiBorrowedBuffer.ptr` 在调用期间必须有效
 - `len > 0` 时，`ptr` 不能为 null
 - 不能把宿主自己的内存伪装成 `FfiOwnedBuffer`
-- 不能把宿主自己的字符串交给 `vulcan_luaskills_ffi_string_free`
+- 不能把宿主自己的字符串交给 `luaskills_ffi_string_free`
 
 ## 8. 回调与线程规则
 

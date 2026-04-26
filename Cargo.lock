@@ -831,6 +831,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "luaskills"
+version = "0.2.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "libloading",
+ "mlua",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tar",
+ "tokio",
+ "vldb-controller-client",
+ "windows-sys 0.61.2",
+ "zip",
+]
+
+[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1996,27 +2017,6 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
-]
-
-[[package]]
-name = "vulcan-luaskills"
-version = "0.1.0"
-dependencies = [
- "base64",
- "flate2",
- "libloading",
- "mlua",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tar",
- "tokio",
- "vldb-controller-client",
- "windows-sys 0.61.2",
- "zip",
 ]
 
 [[package]]

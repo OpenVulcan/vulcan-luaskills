@@ -1,8 +1,8 @@
-﻿param(
+param(
     [string]$Mode = "ffi",
     [string]$Platform = "",
     [string]$OutputDir = "target\release-packages",
-    [string]$ReleaseTag = "v0.1.0"
+    [string]$ReleaseTag = "v0.2.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -245,7 +245,7 @@ if ($IsWindows -or $env:OS -eq "Windows_NT") {
 } else {
     $env:LD_LIBRARY_PATH = "$LibDir" + $(if ($env:LD_LIBRARY_PATH) { ":$env:LD_LIBRARY_PATH" } else { "" })
 }
-$env:VULCAN_LUASKILLS_LIB = $Library.FullName
+$env:LUASKILLS_LIB = $Library.FullName
 python (Join-Path $PackageRoot "examples\ffi\python\demo.py")
 '@ | Set-Content -Path (Join-Path $PackageRoot "run.ps1") -Encoding UTF8
 
@@ -274,7 +274,7 @@ case "$(uname -s)" in
   Darwin) export DYLD_LIBRARY_PATH="$PACKAGE_ROOT/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
   Linux) export LD_LIBRARY_PATH="$PACKAGE_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
 esac
-VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/examples/ffi/python/demo.py"
+LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/examples/ffi/python/demo.py"
 '@ | Set-Content -Path (Join-Path $PackageRoot "run.sh") -Encoding UTF8
     Write-PackagedDependencyUpgradeScripts -PackageRoot $PackageRoot
     Remove-NonPlatformDemoScripts -PackageRoot $PackageRoot -Platform $Platform
@@ -410,7 +410,7 @@ function Write-PackagedDemoReadme {
     $FetchAllCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat" } else { "./upgrade_deps.sh" }
     $FetchLuaCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat lua" } else { "./upgrade_deps.sh lua" }
     $FetchVldbCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat vldb" } else { "./upgrade_deps.sh vldb" }
-    $ModeDescription = if ($Mode -eq "ffi") { 'FFI demo 默认通过 `lib/` 下的动态库运行 `examples/ffi/python/demo.py`，同时包含 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例。' } else { "Rust demo 通过包内 ``Cargo.toml`` 直接依赖 ``vulcan-luaskills`` 的 ``$ReleaseTag`` tag，适合验证非 FFI 接入。" }
+    $ModeDescription = if ($Mode -eq "ffi") { 'FFI demo 默认通过 `lib/` 下的动态库运行 `examples/ffi/python/demo.py`，同时包含 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例。' } else { "Rust demo 通过包内 ``Cargo.toml`` 直接依赖 ``luaskills`` 的 ``$ReleaseTag`` tag，适合验证非 FFI 接入。" }
     $ExamplesSection = if ($Mode -eq "ffi") { "- ``examples/ffi/``：完整 FFI 示例源码，包含 C、Go、Python、TypeScript 与共享 runtime 夹具。" } else { "" }
     $ReadmeTemplate = @'
 # LuaSkills __MODE__ demo package
@@ -513,7 +513,7 @@ if ($Mode -eq "ffi") {
 } else {
     $CargoTomlPath = Join-Path $PackageRoot "Cargo.toml"
     if (Test-Path -LiteralPath $CargoTomlPath) {
-        (Get-Content -Raw -Path $CargoTomlPath).Replace('vulcan-luaskills = { path = "../.." }', "vulcan-luaskills = { git = `"https://github.com/OpenVulcan/vulcan-luaskills.git`", tag = `"$ReleaseTag`" }") |
+        (Get-Content -Raw -Path $CargoTomlPath).Replace('luaskills = { path = "../.." }', "luaskills = { git = `"https://github.com/LuaSkills/luaskills.git`", tag = `"$ReleaseTag`" }") |
             Set-Content -Path $CargoTomlPath -Encoding UTF8
     }
 }

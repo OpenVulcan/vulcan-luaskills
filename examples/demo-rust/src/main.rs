@@ -1,6 +1,6 @@
 use serde_json::json;
 use std::{env, path::PathBuf};
-use vulcan_luaskills::{
+use luaskills::{
     LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeHostOptions, LuaVmPoolConfig,
     RuntimeSkillRoot,
 };

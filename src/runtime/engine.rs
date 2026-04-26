@@ -6324,7 +6324,7 @@ mod tests {
     /// 为单个隔离技能配置测试用例构造一条临时运行时根目录路径。
     fn make_temp_runtime_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "vulcan_luaskills_{}_{}_{}",
+            "luaskills_{}_{}_{}",
             label,
             std::process::id(),
             label.len()
@@ -6896,7 +6896,7 @@ mod tests {
     #[test]
     fn load_from_roots_rejects_explicit_skill_id_field() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_reject_skill_id_test_{}",
+            "luaskills_reject_skill_id_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -6940,7 +6940,7 @@ mod tests {
     #[test]
     fn load_from_roots_skips_host_ignored_skill_before_resource_setup() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_ignored_skill_test_{}",
+            "luaskills_ignored_skill_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {
@@ -7227,7 +7227,7 @@ mod tests {
     #[test]
     fn vulcan_call_restores_outer_context_after_nested_failure() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_nested_call_restore_test_{}",
+            "luaskills_nested_call_restore_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {

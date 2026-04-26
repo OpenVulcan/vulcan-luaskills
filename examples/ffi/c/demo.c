@@ -10,7 +10,7 @@
 #include <sys/types.h>
 #endif
 
-#include "vulcan_luaskills_ffi.h"
+#include "luaskills_ffi.h"
 
 /*
 Print one fatal message and terminate the process.
@@ -33,7 +33,7 @@ static void exit_with_owned_error(const char *fallback_message, FfiOwnedBuffer e
             (int)error_buffer.len,
             (const char *)error_buffer.ptr
         );
-        vulcan_luaskills_ffi_buffer_free(error_buffer);
+        luaskills_ffi_buffer_free(error_buffer);
         exit(EXIT_FAILURE);
     }
     exit_with_message(fallback_message);
@@ -76,7 +76,7 @@ Return the shared runtime root used by the repository FFI demos.
 返回仓库 FFI 演示共用的运行时根目录。
 */
 static const char *resolve_demo_runtime_root(void) {
-    const char *runtime_root = getenv("VULCAN_LUASKILLS_DEMO_ROOT");
+    const char *runtime_root = getenv("LUASKILLS_DEMO_ROOT");
     if (runtime_root != NULL && runtime_root[0] != '\0') {
         return runtime_root;
     }
@@ -128,7 +128,7 @@ static void print_owned_text(const char *label, FfiOwnedBuffer text_buffer) {
         return;
     }
     printf("%s%.*s\n", label, (int)text_buffer.len, (const char *)text_buffer.ptr);
-    vulcan_luaskills_ffi_buffer_free(text_buffer);
+    luaskills_ffi_buffer_free(text_buffer);
 }
 
 /*
@@ -255,7 +255,7 @@ static void run_standard_ffi_demo(void) {
     build_runtime_subpath(skills_root_dir, sizeof(skills_root_dir), runtime_root, "skills");
     build_runtime_subpath(download_cache_root, sizeof(download_cache_root), runtime_root, "temp/downloads");
 
-    if (vulcan_luaskills_ffi_version(&version_buffer, &error_buffer) != 0) {
+    if (luaskills_ffi_version(&version_buffer, &error_buffer) != 0) {
         exit_with_owned_error("failed to query FFI version", error_buffer);
     }
     print_owned_text("Version: ", version_buffer);
@@ -309,7 +309,7 @@ static void run_standard_ffi_demo(void) {
     };
 
     error_buffer = (FfiOwnedBuffer){0};
-    if (vulcan_luaskills_ffi_engine_new(&engine_options, &engine_id, &error_buffer) != 0) {
+    if (luaskills_ffi_engine_new(&engine_options, &engine_id, &error_buffer) != 0) {
         exit_with_owned_error("failed to create engine", error_buffer);
     }
     printf("Engine created: %llu\n", (unsigned long long)engine_id);
@@ -322,7 +322,7 @@ static void run_standard_ffi_demo(void) {
     skill_roots[0].skills_dir = skills_root_dir;
     error_buffer = (FfiOwnedBuffer){0};
     if (
-        vulcan_luaskills_ffi_load_from_roots(
+        luaskills_ffi_load_from_roots(
             engine_id,
             skill_roots,
             1,
@@ -338,14 +338,14 @@ static void run_standard_ffi_demo(void) {
     请求一个结构化入口列表并输出首个入口预览。
     */
     error_buffer = (FfiOwnedBuffer){0};
-    if (vulcan_luaskills_ffi_list_entries(engine_id, &entry_list, &error_buffer) != 0) {
+    if (luaskills_ffi_list_entries(engine_id, &entry_list, &error_buffer) != 0) {
         exit_with_owned_error("failed to list runtime entries", error_buffer);
     }
     if (entry_list == NULL) {
         exit_with_message("entry list pointer is null");
     }
     print_entry_preview(entry_list);
-    vulcan_luaskills_ffi_entry_list_free(entry_list);
+    luaskills_ffi_entry_list_free(entry_list);
 
     /*
     Call one real fixture skill entry through borrowed JSON buffers and one structured invocation result.
@@ -359,7 +359,7 @@ static void run_standard_ffi_demo(void) {
             .tool_config_json = borrowed_buffer_from_text(tool_config_json_text)
         };
         if (
-            vulcan_luaskills_ffi_call_skill(
+            luaskills_ffi_call_skill(
                 engine_id,
                 "demo-standard-ffi-skill-ping",
                 borrowed_buffer_from_text(args_json_text),
@@ -375,7 +375,7 @@ static void run_standard_ffi_demo(void) {
         exit_with_message("invocation result pointer is null");
     }
     print_invocation_preview(invocation_result);
-    vulcan_luaskills_ffi_invocation_result_free(invocation_result);
+    luaskills_ffi_invocation_result_free(invocation_result);
 
     /*
     Run one Lua snippet through borrowed JSON buffers and print the JSON result payload.
@@ -389,7 +389,7 @@ static void run_standard_ffi_demo(void) {
             .tool_config_json = borrowed_buffer_from_text(tool_config_json_text)
         };
         if (
-            vulcan_luaskills_ffi_run_lua(
+            luaskills_ffi_run_lua(
                 engine_id,
                 run_lua_code,
                 borrowed_buffer_from_text(run_lua_args_json_text),
@@ -404,7 +404,7 @@ static void run_standard_ffi_demo(void) {
     print_owned_text("Run Lua result JSON: ", run_lua_result_json);
 
     error_buffer = (FfiOwnedBuffer){0};
-    if (vulcan_luaskills_ffi_engine_free(engine_id, &error_buffer) != 0) {
+    if (luaskills_ffi_engine_free(engine_id, &error_buffer) != 0) {
         exit_with_owned_error("failed to free engine", error_buffer);
     }
     printf("Engine freed\n");

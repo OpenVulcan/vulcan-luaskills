@@ -3,7 +3,7 @@ package main
 /*
 #cgo CFLAGS: -I../../../../include
 #include <stdlib.h>
-#include "vulcan_luaskills_ffi.h"
+#include "luaskills_ffi.h"
 */
 import "C"
 
@@ -25,7 +25,7 @@ func mustOK(status C.int32_t, errorOut C.FfiOwnedBuffer) {
 	if errorOut.ptr != nil && errorOut.len > 0 {
 		message = readOwnedBufferText(errorOut)
 	}
-	C.vulcan_luaskills_ffi_buffer_free(errorOut)
+	C.luaskills_ffi_buffer_free(errorOut)
 	if message == "" {
 		message = "Unknown FFI error"
 	}
@@ -92,12 +92,12 @@ func ensureStandardFixtureLayout(root string) {
 func printEntryCount(engineID C.uint64_t) int {
 	var entryList *C.FfiRuntimeEntryDescriptorList
 	var errorOut C.FfiOwnedBuffer
-	mustOK(C.vulcan_luaskills_ffi_list_entries(engineID, &entryList, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_list_entries(engineID, &entryList, &errorOut), errorOut)
 	if entryList == nil {
 		fmt.Println("Current entry count: 0")
 		return 0
 	}
-	defer C.vulcan_luaskills_ffi_entry_list_free(entryList)
+	defer C.luaskills_ffi_entry_list_free(entryList)
 	entryCount := int(entryList.len)
 	fmt.Println("Current entry count:", entryCount)
 	return entryCount
@@ -114,7 +114,7 @@ func callFixtureSkill(engineID C.uint64_t, note string) string {
 	var invocationResult *C.FfiRuntimeInvocationResult
 	var errorOut C.FfiOwnedBuffer
 	mustOK(
-		C.vulcan_luaskills_ffi_call_skill(
+		C.luaskills_ffi_call_skill(
 			engineID,
 			toolName,
 			argsBuffer,
@@ -127,7 +127,7 @@ func callFixtureSkill(engineID C.uint64_t, note string) string {
 	if invocationResult == nil {
 		panic("invocation result pointer is nil")
 	}
-	defer C.vulcan_luaskills_ffi_invocation_result_free(invocationResult)
+	defer C.luaskills_ffi_invocation_result_free(invocationResult)
 	return readOwnedBufferText(invocationResult.content)
 }
 
@@ -194,7 +194,7 @@ func main() {
 
 	var engineID C.uint64_t
 	var errorOut C.FfiOwnedBuffer
-	mustOK(C.vulcan_luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
 	fmt.Println("Engine created:", uint64(engineID))
 
 	rootName := C.CString("ROOT")
@@ -209,7 +209,7 @@ func main() {
 	}
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_load_from_roots(
+		C.luaskills_ffi_load_from_roots(
 			engineID,
 			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
 			C.size_t(len(skillRoots)),
@@ -228,7 +228,7 @@ func main() {
 	defer C.free(unsafe.Pointer(disableReason))
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_disable_skill(
+		C.luaskills_ffi_disable_skill(
 			engineID,
 			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
 			C.size_t(len(skillRoots)),
@@ -247,7 +247,7 @@ func main() {
 	defer C.free(unsafe.Pointer(toolName))
 	var disabledInvocationResult *C.FfiRuntimeInvocationResult
 	errorOut = C.FfiOwnedBuffer{}
-	disabledStatus := C.vulcan_luaskills_ffi_call_skill(
+	disabledStatus := C.luaskills_ffi_call_skill(
 		engineID,
 		toolName,
 		disabledArgsBuffer,
@@ -259,11 +259,11 @@ func main() {
 		panic("call_skill unexpectedly succeeded while the skill was disabled")
 	}
 	fmt.Println("Call after disable failed as expected:", readOwnedBufferText(errorOut))
-	C.vulcan_luaskills_ffi_buffer_free(errorOut)
+	C.luaskills_ffi_buffer_free(errorOut)
 
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_enable_skill(
+		C.luaskills_ffi_enable_skill(
 			engineID,
 			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
 			C.size_t(len(skillRoots)),
@@ -277,6 +277,6 @@ func main() {
 	fmt.Println("Call after enable:", callFixtureSkill(engineID, "after-enable"))
 
 	errorOut = C.FfiOwnedBuffer{}
-	mustOK(C.vulcan_luaskills_ffi_engine_free(engineID, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_engine_free(engineID, &errorOut), errorOut)
 	fmt.Println("Engine freed")
 }

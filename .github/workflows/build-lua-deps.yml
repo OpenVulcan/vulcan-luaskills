@@ -165,7 +165,7 @@ jobs:
         run: |
           # LocalRoot stores self-hosted runner state outside the workspace so repeated manual runs can reuse it.
           # LocalRoot 把自托管 runner 的状态保存在工作区之外，便于多次手动触发时直接复用。
-          $localRoot = Join-Path $env:USERPROFILE ".cache\vulcan-luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
+          $localRoot = Join-Path $env:USERPROFILE ".cache\luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
           $marker = Join-Path $localRoot ".complete"
           $restored = "false"
           $complete = "false"
@@ -192,7 +192,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          local_root="$HOME/.cache/vulcan-luaskills/lua-deps/${{ matrix.platform }}/${{ matrix.runner }}/$DEPS_STATE_KEY"
+          local_root="$HOME/.cache/luaskills/lua-deps/${{ matrix.platform }}/${{ matrix.runner }}/$DEPS_STATE_KEY"
           marker="$local_root/.complete"
           restored="false"
           complete="false"
@@ -294,7 +294,7 @@ jobs:
 
           # PerlRoot stores the portable Perl runtime in a runner-persistent location instead of the workspace.
           # PerlRoot 将便携版 Perl 安装在 runner 可持久化的位置，而不是临时工作区。
-          $perlRoot = Join-Path $env:USERPROFILE ".cache\vulcan-luaskills\tools\perl\$env:PERL_VERSION"
+          $perlRoot = Join-Path $env:USERPROFILE ".cache\luaskills\tools\perl\$env:PERL_VERSION"
           $perlBin = Join-Path $perlRoot "perl\bin"
           $perlExe = Join-Path $perlBin "perl.exe"
 
@@ -345,7 +345,7 @@ jobs:
         run: |
           # Persist each dependency immediately so later failures do not discard earlier work.
           # 每个依赖一旦构建成功就立即持久化，避免后续失败导致前序成果丢失。
-          $localRoot = Join-Path $env:USERPROFILE ".cache\vulcan-luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
+          $localRoot = Join-Path $env:USERPROFILE ".cache\luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
           New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
           Copy-Item -Recurse -Force "$env:DEPS_DIR\openssl" "$localRoot\"
 
@@ -369,7 +369,7 @@ jobs:
         if: runner.os == 'Windows' && steps.windows-refresh.outputs.zlib_needs_refresh == 'true'
         shell: pwsh
         run: |
-          $localRoot = Join-Path $env:USERPROFILE ".cache\vulcan-luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
+          $localRoot = Join-Path $env:USERPROFILE ".cache\luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
           New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
           Copy-Item -Recurse -Force "$env:DEPS_DIR\zlib" "$localRoot\"
 
@@ -405,7 +405,7 @@ jobs:
         if: runner.os == 'Windows' && steps.windows-refresh.outputs.curl_needs_refresh == 'true'
         shell: pwsh
         run: |
-          $localRoot = Join-Path $env:USERPROFILE ".cache\vulcan-luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
+          $localRoot = Join-Path $env:USERPROFILE ".cache\luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
           New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
           Copy-Item -Recurse -Force "$env:DEPS_DIR\curl" "$localRoot\"
 
@@ -429,7 +429,7 @@ jobs:
         if: runner.os == 'Windows' && steps.windows-refresh.outputs.pcre2_needs_refresh == 'true'
         shell: pwsh
         run: |
-          $localRoot = Join-Path $env:USERPROFILE ".cache\vulcan-luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
+          $localRoot = Join-Path $env:USERPROFILE ".cache\luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
           New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
           Copy-Item -Recurse -Force "$env:DEPS_DIR\pcre2" "$localRoot\"
 
@@ -469,7 +469,7 @@ jobs:
         if: runner.os == 'Windows' && steps.windows-refresh.outputs.libyaml_needs_refresh == 'true'
         shell: pwsh
         run: |
-          $localRoot = Join-Path $env:USERPROFILE ".cache\vulcan-luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
+          $localRoot = Join-Path $env:USERPROFILE ".cache\luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
           New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
           Copy-Item -Recurse -Force "$env:DEPS_DIR\libyaml" "$localRoot\"
 
@@ -637,7 +637,7 @@ jobs:
         if: runner.os == 'Windows' && steps.local-deps-windows.outputs.complete != 'true'
         shell: pwsh
         run: |
-          $localRoot = Join-Path $env:USERPROFILE ".cache\vulcan-luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
+          $localRoot = Join-Path $env:USERPROFILE ".cache\luaskills\lua-deps\${{ matrix.platform }}\${{ matrix.runner }}\$env:DEPS_STATE_KEY"
           New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
           Copy-Item -Recurse -Force (Join-Path $env:DEPS_DIR "*") $localRoot
           New-Item -ItemType File -Force -Path (Join-Path $localRoot ".complete") | Out-Null
@@ -647,7 +647,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          local_root="$HOME/.cache/vulcan-luaskills/lua-deps/${{ matrix.platform }}/${{ matrix.runner }}/$DEPS_STATE_KEY"
+          local_root="$HOME/.cache/luaskills/lua-deps/${{ matrix.platform }}/${{ matrix.runner }}/$DEPS_STATE_KEY"
           mkdir -p "$local_root"
           cp -a "$DEPS_DIR"/. "$local_root"/
           touch "$local_root/.complete"

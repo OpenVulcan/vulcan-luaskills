@@ -1,4 +1,4 @@
-﻿# install_lua_deps.ps1 — Install Lua C modules via luarocks into third_party/lua_packages/
+# install_lua_deps.ps1 — Install Lua C modules via luarocks into third_party/lua_packages/
 # Developer/build use only. End users do not need luarocks.
 # Reuses LuaJIT source from luajit-src cargo crate — no network download needed.
 # Reads package list AND C dependencies from scripts/lua_packages.txt.
@@ -71,7 +71,7 @@ $LuarocksDir = Join-Path $ThirdParty "luarocks"
 $DepsDir    = Join-Path $ThirdParty "deps"
 
 # GitHub repo for pre-built deps (format: owner/repo)
-$GitHubRepo = "OpenVulcan/vulcan-luaskills"
+$GitHubRepo = "LuaSkills/luaskills"
 
 # ============================================================
 # Helpers: directory / download / extract
@@ -683,7 +683,7 @@ function Run-With-LocalPath {
 # Pre-built C deps from GitHub Releases
 # ============================================================
 
-$ReleaseTag = "v0.1.0"  # matches the workflow release tag
+$ReleaseTag = "v0.2.0"  # matches the workflow release tag
 
 function Download-Prebuilt-Deps {
     $Platform = Get-PrebuiltDepsPlatform

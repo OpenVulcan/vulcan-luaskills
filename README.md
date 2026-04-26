@@ -1,6 +1,6 @@
-# vulcan-luaskills
+# luaskills
 
-`vulcan-luaskills` 是 Vulcan 生态中的 **LuaSkills 核运行时库**。  
+`luaskills` 是 Vulcan 生态中的 **LuaSkills 核运行时库**。
 它负责 skill 加载、help 树解析、Lua VM 执行、`vulcan.*` / `vulcan.runtime.*` 注入，以及 SQLite / LanceDB 等标准能力接线。
 
 它**不是**：
@@ -13,7 +13,7 @@
 
 一句话说：
 
-**`vulcan-luaskills` 负责运行 skill，宿主负责决定怎么把这些能力公开给用户。**
+**`luaskills` 负责运行 skill，宿主负责决定怎么把这些能力公开给用户。**
 
 如果您当前主要是**写 Lua skill**，建议先看：
 
@@ -151,7 +151,7 @@ target/license-certificate/
 
 ### 2. 宿主负责产品层行为
 
-下列内容不属于 `vulcan-luaskills`：
+下列内容不属于 `luaskills`：
 
 - MCP 协议对象
 - 分页/截断最终渲染
@@ -422,7 +422,7 @@ system 层只返回结构化 help 信息；
 
 ```toml
 [dependencies]
-vulcan-luaskills = { path = "../vulcan-luaskills" }
+luaskills = { path = "../luaskills" }
 ```
 
 ### FFI 宿主
@@ -455,11 +455,11 @@ FFI 设计规则如下：
   - 成功：`{"ok":true,"result":...}`
   - 失败：`{"ok":false,"error":"..."}`
 - 返回的拥有型文本/字节缓冲必须通过：
-  - `vulcan_luaskills_ffi_buffer_free`
+  - `luaskills_ffi_buffer_free`
   释放
 - 结构化结果对象必须通过各自专用的 free 函数释放
 - 只有公共 JSON FFI / helper 层仍明确返回裸字符串指针的辅助接口，才使用：
-  - `vulcan_luaskills_ffi_string_free`
+  - `luaskills_ffi_string_free`
 
 标准 C ABI 当前采用：
 
@@ -511,18 +511,18 @@ FFI 设计规则如下：
 - `公共 `_json` FFI`
   - 指高层、JSON 包络、面向动态语言和快速集成的 FFI 接口层
 - `标准 C ABI 头文件`
-  - 指 [include/vulcan_luaskills_ffi.h](include/vulcan_luaskills_ffi.h)
+  - 指 [include/luaskills_ffi.h](include/luaskills_ffi.h)
 - `公共 `_json` FFI 头文件`
-  - 指 [include/vulcan_luaskills_json_ffi.h](include/vulcan_luaskills_json_ffi.h)
+  - 指 [include/luaskills_json_ffi.h](include/luaskills_json_ffi.h)
 
 如果后续文档里为了简化阅读而出现“标准 ABI”“标准接口”“JSON 接口”等缩写说法，都默认回指上面这两套固定术语。
 
 头文件位置：
 
 - 标准 C ABI：
-  - [include/vulcan_luaskills_ffi.h](include/vulcan_luaskills_ffi.h)
+  - [include/luaskills_ffi.h](include/luaskills_ffi.h)
 - 公共 `_json` FFI：
-  - [include/vulcan_luaskills_json_ffi.h](include/vulcan_luaskills_json_ffi.h)
+  - [include/luaskills_json_ffi.h](include/luaskills_json_ffi.h)
 
 当前已导出的核心 FFI 能力包括：
 
@@ -566,7 +566,7 @@ FFI 设计规则如下：
 - `c/demo.c`
   - 通过标准头文件与链接产物直接演示标准 C ABI 下的 `version / engine_new / load_from_roots / list_entries / call_skill / run_lua / engine_free`
 - Python / Go / TypeScript / standard_runtime / demo_runtime / host_provider_demo
-  - 通过环境变量 `VULCAN_LUASKILLS_LIB` 指向动态库文件
+  - 通过环境变量 `LUASKILLS_LIB` 指向动态库文件
 - `python/lifecycle_demo.py`
   - 额外演示标准 ABI 下的 `disable_skill / enable_skill` 生命周期切换
 - `python/query_demo.py`

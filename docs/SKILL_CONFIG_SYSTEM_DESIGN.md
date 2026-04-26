@@ -2,7 +2,7 @@
 
 ## 1. 背景
 
-当前 `vulcan-luaskills` 已有：
+当前 `luaskills` 已有：
 
 - 宿主请求级 `vulcan.context.tool_config`
 - 宿主强制忽略 `ignored_skill_ids`

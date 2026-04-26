@@ -183,13 +183,13 @@ class FfiRuntimeEntryDescriptorList(ctypes.Structure):
 
 def load_library() -> ctypes.CDLL:
     """
-    Load the vulcan-luaskills dynamic library from one explicit environment variable.
-    从一个显式环境变量加载 vulcan-luaskills 动态库。
+    Load the luaskills dynamic library from one explicit environment variable.
+    从一个显式环境变量加载 luaskills 动态库。
     """
 
-    library_path = os.environ.get("VULCAN_LUASKILLS_LIB")
+    library_path = os.environ.get("LUASKILLS_LIB")
     if not library_path:
-        raise RuntimeError("VULCAN_LUASKILLS_LIB is not set")
+        raise RuntimeError("LUASKILLS_LIB is not set")
     return ctypes.CDLL(str(Path(library_path)))
 
 
@@ -231,7 +231,7 @@ def read_owned_buffer_text_and_free(buffer: FfiOwnedBuffer, library: ctypes.CDLL
     if not buffer.ptr:
         return ""
     text = ctypes.string_at(buffer.ptr, buffer.len).decode("utf-8")
-    library.vulcan_luaskills_ffi_buffer_free(buffer)
+    library.luaskills_ffi_buffer_free(buffer)
     return text
 
 
@@ -281,29 +281,29 @@ def main() -> None:
     """
 
     library = load_library()
-    library.vulcan_luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
-    library.vulcan_luaskills_ffi_buffer_free.restype = None
-    library.vulcan_luaskills_ffi_version.argtypes = [
+    library.luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
+    library.luaskills_ffi_buffer_free.restype = None
+    library.luaskills_ffi_version.argtypes = [
         ctypes.POINTER(FfiOwnedBuffer),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_engine_new.argtypes = [
+    library.luaskills_ffi_engine_new.argtypes = [
         ctypes.POINTER(FfiLuaEngineOptions),
         ctypes.POINTER(ctypes.c_uint64),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_load_from_roots.argtypes = [
+    library.luaskills_ffi_load_from_roots.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiRuntimeSkillRoot),
         ctypes.c_size_t,
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_list_entries.argtypes = [
+    library.luaskills_ffi_list_entries.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(ctypes.POINTER(FfiRuntimeEntryDescriptorList)),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_call_skill.argtypes = [
+    library.luaskills_ffi_call_skill.argtypes = [
         ctypes.c_uint64,
         ctypes.c_char_p,
         FfiBorrowedBuffer,
@@ -311,7 +311,7 @@ def main() -> None:
         ctypes.POINTER(ctypes.POINTER(FfiRuntimeInvocationResult)),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_run_lua.argtypes = [
+    library.luaskills_ffi_run_lua.argtypes = [
         ctypes.c_uint64,
         ctypes.c_char_p,
         FfiBorrowedBuffer,
@@ -319,15 +319,15 @@ def main() -> None:
         ctypes.POINTER(FfiOwnedBuffer),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_entry_list_free.argtypes = [
+    library.luaskills_ffi_entry_list_free.argtypes = [
         ctypes.POINTER(FfiRuntimeEntryDescriptorList),
     ]
-    library.vulcan_luaskills_ffi_entry_list_free.restype = None
-    library.vulcan_luaskills_ffi_invocation_result_free.argtypes = [
+    library.luaskills_ffi_entry_list_free.restype = None
+    library.luaskills_ffi_invocation_result_free.argtypes = [
         ctypes.POINTER(FfiRuntimeInvocationResult),
     ]
-    library.vulcan_luaskills_ffi_invocation_result_free.restype = None
-    library.vulcan_luaskills_ffi_engine_free.argtypes = [
+    library.luaskills_ffi_invocation_result_free.restype = None
+    library.luaskills_ffi_engine_free.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiOwnedBuffer),
     ]
@@ -335,7 +335,7 @@ def main() -> None:
     version_buffer = FfiOwnedBuffer()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_version(
+        library.luaskills_ffi_version(
             ctypes.byref(version_buffer), ctypes.byref(error_buffer)
         ),
         error_buffer,
@@ -388,7 +388,7 @@ def main() -> None:
     engine_id = ctypes.c_uint64()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_engine_new(
+        library.luaskills_ffi_engine_new(
             ctypes.byref(options), ctypes.byref(engine_id), ctypes.byref(error_buffer)
         ),
         error_buffer,
@@ -404,7 +404,7 @@ def main() -> None:
     )
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_load_from_roots(
+        library.luaskills_ffi_load_from_roots(
             engine_id.value, skill_roots, len(skill_roots), ctypes.byref(error_buffer)
         ),
         error_buffer,
@@ -415,7 +415,7 @@ def main() -> None:
     entries_ptr = ctypes.POINTER(FfiRuntimeEntryDescriptorList)()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_list_entries(
+        library.luaskills_ffi_list_entries(
             engine_id.value, ctypes.byref(entries_ptr), ctypes.byref(error_buffer)
         ),
         error_buffer,
@@ -442,7 +442,7 @@ def main() -> None:
             print("No entries were returned by the current fixture root.")
     finally:
         if entries_ptr:
-            library.vulcan_luaskills_ffi_entry_list_free(entries_ptr)
+            library.luaskills_ffi_entry_list_free(entries_ptr)
 
     args_storage, args_buffer = make_borrowed_buffer('{"note":"python"}')
     request_storage, request_buffer = make_borrowed_buffer('{"transport_name":"python-demo"}')
@@ -463,7 +463,7 @@ def main() -> None:
     invocation_result_ptr = ctypes.POINTER(FfiRuntimeInvocationResult)()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_call_skill(
+        library.luaskills_ffi_call_skill(
             engine_id.value,
             b"demo-standard-ffi-skill-ping",
             args_buffer,
@@ -482,14 +482,14 @@ def main() -> None:
         print("Call template hint:", read_owned_buffer_text(invocation_result.template_hint))
     finally:
         if invocation_result_ptr:
-            library.vulcan_luaskills_ffi_invocation_result_free(invocation_result_ptr)
+            library.luaskills_ffi_invocation_result_free(invocation_result_ptr)
 
     run_lua_args_storage, run_lua_args_buffer = make_borrowed_buffer('{"note":"python-lua"}')
     run_lua_payloads = (run_lua_args_storage,)
     result_json_buffer = FfiOwnedBuffer()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_run_lua(
+        library.luaskills_ffi_run_lua(
             engine_id.value,
             b'return { note = args.note, transport = vulcan.context.request.transport_name, budget = vulcan.context.client_budget.budget, mode = vulcan.context.tool_config.mode }',
             run_lua_args_buffer,
@@ -504,7 +504,7 @@ def main() -> None:
 
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_engine_free(engine_id, ctypes.byref(error_buffer)),
+        library.luaskills_ffi_engine_free(engine_id, ctypes.byref(error_buffer)),
         error_buffer,
         library,
     )

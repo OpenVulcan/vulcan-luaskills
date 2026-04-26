@@ -19,7 +19,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-target/release-packages}"
 
 # ReleaseTag stores the Git tag used by packaged Rust demos.
 # ReleaseTag 保存发布 Rust demo 使用的 Git 标签。
-RELEASE_TAG="${3:-${RELEASE_TAG:-v0.1.0}}"
+RELEASE_TAG="${3:-${RELEASE_TAG:-v0.2.0}}"
 
 ensure_dir() {
   # Create one directory when it does not exist.
@@ -143,7 +143,7 @@ if ($IsWindows -or $env:OS -eq "Windows_NT") {
 } else {
     $env:LD_LIBRARY_PATH = "$LibDir" + $(if ($env:LD_LIBRARY_PATH) { ":$env:LD_LIBRARY_PATH" } else { "" })
 }
-$env:VULCAN_LUASKILLS_LIB = $Library.FullName
+$env:LUASKILLS_LIB = $Library.FullName
 python (Join-Path $PackageRoot "examples\ffi\python\demo.py")
 PS1
   cat > "$package_root/run.sh" <<'SH'
@@ -171,7 +171,7 @@ case "$(uname -s)" in
   Darwin) export DYLD_LIBRARY_PATH="$PACKAGE_ROOT/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
   Linux) export LD_LIBRARY_PATH="$PACKAGE_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
 esac
-VULCAN_LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/examples/ffi/python/demo.py"
+LUASKILLS_LIB="$LIBRARY" python3 "$PACKAGE_ROOT/examples/ffi/python/demo.py"
 SH
   chmod +x "$package_root/run.sh"
   write_packaged_dependency_upgrade_scripts "$package_root"
@@ -277,7 +277,7 @@ write_packaged_demo_readme() {
     mode_description='FFI demo 默认通过 `lib/` 下的动态库运行 `examples/ffi/python/demo.py`，同时包含 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例。'
     examples_section='- `examples/ffi/`：完整 FFI 示例源码，包含 C、Go、Python、TypeScript 与共享 runtime 夹具。'
   else
-    mode_description='Rust demo 通过包内 `Cargo.toml` 直接依赖 `vulcan-luaskills` 的 `'"$RELEASE_TAG"'` tag，适合验证非 FFI 接入。'
+    mode_description='Rust demo 通过包内 `Cargo.toml` 直接依赖 `luaskills` 的 `'"$RELEASE_TAG"'` tag，适合验证非 FFI 接入。'
     examples_section=''
   fi
 
@@ -357,8 +357,8 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 text = text.replace(
-    'vulcan-luaskills = { path = "../.." }',
-    f'vulcan-luaskills = {{ git = "https://github.com/OpenVulcan/vulcan-luaskills.git", tag = "{sys.argv[2]}" }}',
+    'luaskills = { path = "../.." }',
+    f'luaskills = {{ git = "https://github.com/LuaSkills/luaskills.git", tag = "{sys.argv[2]}" }}',
 )
 path.write_text(text, encoding="utf-8")
 PY

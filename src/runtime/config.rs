@@ -513,7 +513,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time before unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("vulcan_luaskills_skill_config_{}_{}", label, nonce))
+        std::env::temp_dir().join(format!("luaskills_skill_config_{}_{}", label, nonce))
     }
 
     /// Verify the store resolves the default config file under `<runtime_root>/config/skill_config.json`.

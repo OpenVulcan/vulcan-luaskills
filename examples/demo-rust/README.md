@@ -1,6 +1,6 @@
 # LuaSkills Rust Demo
 
-该目录是非 FFI 模式 demo：宿主直接通过 Rust crate 引用 `vulcan-luaskills`，不经过 C ABI 动态库。
+该目录是非 FFI 模式 demo：宿主直接通过 Rust crate 引用 `luaskills`，不经过 C ABI 动态库。
 
 运行前可先拉取依赖：
 

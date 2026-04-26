@@ -990,8 +990,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("vulcan-luaskills-dependency-test-{}", unique));
+        let root = std::env::temp_dir().join(format!("luaskills-dependency-test-{}", unique));
         let config = DependencyManagerConfig {
             tool_root: root.join("dependencies").join("tools"),
             host_tool_root: root.join("bin").join("tools"),

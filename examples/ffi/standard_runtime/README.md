@@ -6,16 +6,16 @@
 
 它的目标只有一个：
 
-- 让 [Python demo](/D:/projects/vulcan-luaskills/examples/ffi/python/demo.py)
-- 让 [Python lifecycle demo](/D:/projects/vulcan-luaskills/examples/ffi/python/lifecycle_demo.py)
-- 让 [Python query demo](/D:/projects/vulcan-luaskills/examples/ffi/python/query_demo.py)
-- 让 [Go demo](/D:/projects/vulcan-luaskills/examples/ffi/go/demo.go)
-- 让 [Go lifecycle demo](/D:/projects/vulcan-luaskills/examples/ffi/go/lifecycle_demo/main.go)
-- 让 [Go query demo](/D:/projects/vulcan-luaskills/examples/ffi/go/query_demo/main.go)
-- 让 [TypeScript demo](/D:/projects/vulcan-luaskills/examples/ffi/typescript/demo.ts)
-- 让 [TypeScript lifecycle demo](/D:/projects/vulcan-luaskills/examples/ffi/typescript/lifecycle_demo.ts)
-- 让 [TypeScript query demo](/D:/projects/vulcan-luaskills/examples/ffi/typescript/query_demo.ts)
-- 让 [C demo](/D:/projects/vulcan-luaskills/examples/ffi/c/demo.c)
+- 让 [Python demo](/D:/projects/luaskills/examples/ffi/python/demo.py)
+- 让 [Python lifecycle demo](/D:/projects/luaskills/examples/ffi/python/lifecycle_demo.py)
+- 让 [Python query demo](/D:/projects/luaskills/examples/ffi/python/query_demo.py)
+- 让 [Go demo](/D:/projects/luaskills/examples/ffi/go/demo.go)
+- 让 [Go lifecycle demo](/D:/projects/luaskills/examples/ffi/go/lifecycle_demo/main.go)
+- 让 [Go query demo](/D:/projects/luaskills/examples/ffi/go/query_demo/main.go)
+- 让 [TypeScript demo](/D:/projects/luaskills/examples/ffi/typescript/demo.ts)
+- 让 [TypeScript lifecycle demo](/D:/projects/luaskills/examples/ffi/typescript/lifecycle_demo.ts)
+- 让 [TypeScript query demo](/D:/projects/luaskills/examples/ffi/typescript/query_demo.ts)
+- 让 [C demo](/D:/projects/luaskills/examples/ffi/c/demo.c)
 
 都能稳定演示：
 
@@ -55,9 +55,9 @@
 
 这个目录和下面两个目录职责不同：
 
-- [demo_runtime](/D:/projects/vulcan-luaskills/examples/ffi/demo_runtime/README.md)
+- [demo_runtime](/D:/projects/luaskills/examples/ffi/demo_runtime/README.md)
   - 用于动态安装与调用烟测
-- [host_provider_demo](/D:/projects/vulcan-luaskills/examples/ffi/host_provider_demo/README.md)
+- [host_provider_demo](/D:/projects/luaskills/examples/ffi/host_provider_demo/README.md)
   - 用于宿主数据库 callback / provider 接管演示
 
 而 `standard_runtime` 只负责：
@@ -68,20 +68,20 @@
 
 如果您想快速理解当前标准 ABI 示例矩阵，建议按下面的顺序看：
 
-1. 先看 [C demo](/D:/projects/vulcan-luaskills/examples/ffi/c/demo.c)
+1. 先看 [C demo](/D:/projects/luaskills/examples/ffi/c/demo.c)
    - 理解最底层标准 ABI 的最短闭环
 2. 再看任意一门动态语言的主示例
-   - [Python demo](/D:/projects/vulcan-luaskills/examples/ffi/python/demo.py)
-   - [Go demo](/D:/projects/vulcan-luaskills/examples/ffi/go/demo.go)
-   - [TypeScript demo](/D:/projects/vulcan-luaskills/examples/ffi/typescript/demo.ts)
+   - [Python demo](/D:/projects/luaskills/examples/ffi/python/demo.py)
+   - [Go demo](/D:/projects/luaskills/examples/ffi/go/demo.go)
+   - [TypeScript demo](/D:/projects/luaskills/examples/ffi/typescript/demo.ts)
 3. 再按专题补看：
    - 生命周期切换：
-     - [Python lifecycle demo](/D:/projects/vulcan-luaskills/examples/ffi/python/lifecycle_demo.py)
-     - [Go lifecycle demo](/D:/projects/vulcan-luaskills/examples/ffi/go/lifecycle_demo/main.go)
-     - [TypeScript lifecycle demo](/D:/projects/vulcan-luaskills/examples/ffi/typescript/lifecycle_demo.ts)
+     - [Python lifecycle demo](/D:/projects/luaskills/examples/ffi/python/lifecycle_demo.py)
+     - [Go lifecycle demo](/D:/projects/luaskills/examples/ffi/go/lifecycle_demo/main.go)
+     - [TypeScript lifecycle demo](/D:/projects/luaskills/examples/ffi/typescript/lifecycle_demo.ts)
    - 查询辅助接口：
-     - [Python query demo](/D:/projects/vulcan-luaskills/examples/ffi/python/query_demo.py)
-     - [Go query demo](/D:/projects/vulcan-luaskills/examples/ffi/go/query_demo/main.go)
-     - [TypeScript query demo](/D:/projects/vulcan-luaskills/examples/ffi/typescript/query_demo.ts)
+     - [Python query demo](/D:/projects/luaskills/examples/ffi/python/query_demo.py)
+     - [Go query demo](/D:/projects/luaskills/examples/ffi/go/query_demo/main.go)
+     - [TypeScript query demo](/D:/projects/luaskills/examples/ffi/typescript/query_demo.ts)
 
 这样看，最容易把“主调用链”、“生命周期链路”和“查询辅助链路”三类示例区分开。

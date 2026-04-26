@@ -3,7 +3,7 @@ package main
 /*
 #cgo CFLAGS: -I../../../../include
 #include <stdlib.h>
-#include "vulcan_luaskills_ffi.h"
+#include "luaskills_ffi.h"
 */
 import "C"
 
@@ -25,7 +25,7 @@ func mustOK(status C.int32_t, errorOut C.FfiOwnedBuffer) {
 	if errorOut.ptr != nil && errorOut.len > 0 {
 		message = readOwnedBufferText(errorOut)
 	}
-	C.vulcan_luaskills_ffi_buffer_free(errorOut)
+	C.luaskills_ffi_buffer_free(errorOut)
 	if message == "" {
 		message = "Unknown FFI error"
 	}
@@ -150,7 +150,7 @@ func main() {
 
 	var engineID C.uint64_t
 	var errorOut C.FfiOwnedBuffer
-	mustOK(C.vulcan_luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_engine_new(&options, &engineID, &errorOut), errorOut)
 	fmt.Println("Engine created:", uint64(engineID))
 
 	rootName := C.CString("ROOT")
@@ -165,7 +165,7 @@ func main() {
 	}
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_load_from_roots(
+		C.luaskills_ffi_load_from_roots(
 			engineID,
 			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
 			C.size_t(len(skillRoots)),
@@ -183,7 +183,7 @@ func main() {
 	var isSkillValue C.uint8_t
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_is_skill(
+		C.luaskills_ffi_is_skill(
 			engineID,
 			toolName,
 			&isSkillValue,
@@ -196,7 +196,7 @@ func main() {
 	var skillIDOut C.FfiOwnedBuffer
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_skill_name_for_tool(
+		C.luaskills_ffi_skill_name_for_tool(
 			engineID,
 			toolName,
 			&skillIDOut,
@@ -205,12 +205,12 @@ func main() {
 		errorOut,
 	)
 	fmt.Println("Owning skill id:", readOwnedBufferText(skillIDOut))
-	C.vulcan_luaskills_ffi_buffer_free(skillIDOut)
+	C.luaskills_ffi_buffer_free(skillIDOut)
 
 	var valuesOut *C.FfiStringArray
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.vulcan_luaskills_ffi_prompt_argument_completions(
+		C.luaskills_ffi_prompt_argument_completions(
 			engineID,
 			toolName,
 			argumentName,
@@ -220,13 +220,13 @@ func main() {
 		errorOut,
 	)
 	if valuesOut != nil {
-		defer C.vulcan_luaskills_ffi_string_array_free(valuesOut)
+		defer C.luaskills_ffi_string_array_free(valuesOut)
 	}
 	values := readStringArray(valuesOut)
 	fmt.Println("Prompt completion count:", len(values))
 	fmt.Println("Prompt completions:", values)
 
 	errorOut = C.FfiOwnedBuffer{}
-	mustOK(C.vulcan_luaskills_ffi_engine_free(engineID, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_engine_free(engineID, &errorOut), errorOut)
 	fmt.Println("Engine freed")
 }

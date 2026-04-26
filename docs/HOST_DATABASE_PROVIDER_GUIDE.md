@@ -2,7 +2,7 @@
 
 ## 1. 文档目标
 
-本文档用于说明 `vulcan-luaskills` 当前如何把 SQLite / LanceDB 数据库操作交给宿主自己处理。
+本文档用于说明 `luaskills` 当前如何把 SQLite / LanceDB 数据库操作交给宿主自己处理。
 
 本文档重点覆盖：
 
@@ -211,11 +211,11 @@ lib 会一并提供稳定绑定上下文：
 
 注册函数：
 
-- `vulcan_luaskills_ffi_set_sqlite_provider_callback`
+- `luaskills_ffi_set_sqlite_provider_callback`
 
 头文件：
 
-- [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
+- [include/luaskills_ffi.h](../include/luaskills_ffi.h)
 
 回调签名：
 
@@ -230,11 +230,11 @@ lib 会一并提供稳定绑定上下文：
 
 注册函数：
 
-- `vulcan_luaskills_ffi_set_lancedb_provider_callback`
+- `luaskills_ffi_set_lancedb_provider_callback`
 
 头文件：
 
-- [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
+- [include/luaskills_ffi.h](../include/luaskills_ffi.h)
 
 回调签名：
 
@@ -275,8 +275,8 @@ lib 会一并提供稳定绑定上下文：
 
 应优先使用 `luaskills` 提供的辅助函数：
 
-- `vulcan_luaskills_ffi_buffer_clone`
-- `vulcan_luaskills_ffi_buffer_free`
+- `luaskills_ffi_buffer_clone`
+- `luaskills_ffi_buffer_free`
 
 也就是说：
 
@@ -297,21 +297,21 @@ lib 会一并提供稳定绑定上下文：
 
 注册函数：
 
-- `vulcan_luaskills_ffi_set_sqlite_provider_json_callback`
+- `luaskills_ffi_set_sqlite_provider_json_callback`
 
 头文件：
 
-- [include/vulcan_luaskills_json_ffi.h](../include/vulcan_luaskills_json_ffi.h)
+- [include/luaskills_json_ffi.h](../include/luaskills_json_ffi.h)
 
 ### LanceDB
 
 注册函数：
 
-- `vulcan_luaskills_ffi_set_lancedb_provider_json_callback`
+- `luaskills_ffi_set_lancedb_provider_json_callback`
 
 头文件：
 
-- [include/vulcan_luaskills_json_ffi.h](../include/vulcan_luaskills_json_ffi.h)
+- [include/luaskills_json_ffi.h](../include/luaskills_json_ffi.h)
 
 ### JSON 回调规则
 

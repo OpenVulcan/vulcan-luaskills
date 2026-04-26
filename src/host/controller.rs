@@ -39,10 +39,10 @@ impl LuaRuntimeSpaceControllerBridge {
             .unwrap_or_default();
         let registration = ClientRegistration {
             client_name: format!(
-                "vulcan-luaskills-{}-{}-{}",
+                "luaskills-{}-{}-{}",
                 process_id, backend_suffix, started_at_ms
             ),
-            host_kind: "vulcan_luaskills".to_string(),
+            host_kind: "luaskills".to_string(),
             process_id,
             process_name: backend_suffix.to_string(),
             lease_ttl_secs: Some(controller_options.default_lease_ttl_secs),

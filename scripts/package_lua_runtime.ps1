@@ -1,4 +1,4 @@
-﻿param(
+param(
     # Target platform key used in archive and manifest names.
     # 用于归档文件与清单文件命名的目标平台标识。
     [string]$Platform = "",
@@ -804,7 +804,7 @@ $LicenseManifest = [ordered]@{
     schema_version = 1
     package_name = "lua-runtime-$Platform"
     components = @(
-        @{ name = "vulcan-luaskills"; type = "runtime"; license = "MIT"; license_files = @("licenses/luaskills/LICENSE") },
+        @{ name = "luaskills"; type = "runtime"; license = "MIT"; license_files = @("licenses/luaskills/LICENSE") },
         @{ name = "openssl"; type = "native-lib"; license = "Apache-2.0"; license_files = @("licenses/native/openssl") },
         @{ name = "curl"; type = "native-lib"; license = "curl"; license_files = @("licenses/native/curl") },
         @{ name = "zlib"; type = "native-lib"; license = "Zlib"; license_files = @("licenses/native/zlib") },

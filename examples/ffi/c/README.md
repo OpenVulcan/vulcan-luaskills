@@ -4,7 +4,7 @@
 
 这个目录提供一个最小 `C` 标准 ABI 示例，用于演示：
 
-- 通过 [vulcan_luaskills_ffi.h](/D:/projects/vulcan-luaskills/include/vulcan_luaskills_ffi.h) 接入底层标准 C ABI
+- 通过 [luaskills_ffi.h](/D:/projects/luaskills/include/luaskills_ffi.h) 接入底层标准 C ABI
 - 查询 `version`
 - 创建 `engine`
 - `load_from_roots`
@@ -15,11 +15,11 @@
 
 对应源码：
 
-- [demo.c](/D:/projects/vulcan-luaskills/examples/ffi/c/demo.c)
+- [demo.c](/D:/projects/luaskills/examples/ffi/c/demo.c)
 
 ## 2. 运行前提
 
-需要先在仓库根目录构建 `vulcan-luaskills`：
+需要先在仓库根目录构建 `luaskills`：
 
 ```powershell
 cargo build
@@ -28,7 +28,7 @@ cargo build
 如果您希望改用自定义运行时根目录，可以设置：
 
 ```powershell
-$env:VULCAN_LUASKILLS_DEMO_ROOT = "D:\custom\runtime_root"
+$env:LUASKILLS_DEMO_ROOT = "D:\custom\runtime_root"
 ```
 
 否则示例默认使用：
@@ -45,13 +45,13 @@ examples/ffi/standard_runtime/runtime_root
 ### MSVC 典型命令
 
 ```powershell
-cl /utf-8 /std:c11 /I include examples\ffi\c\demo.c /link /LIBPATH:target\debug vulcan_luaskills.dll.lib
+cl /utf-8 /std:c11 /I include examples\ffi\c\demo.c /link /LIBPATH:target\debug luaskills.dll.lib
 ```
 
 ### MinGW GCC 典型命令
 
 ```powershell
-gcc -std=c11 -Iinclude examples/ffi/c/demo.c -Ltarget/debug -lvulcan_luaskills -o examples/ffi/c/demo.exe
+gcc -std=c11 -Iinclude examples/ffi/c/demo.c -Ltarget/debug -lluaskills -o examples/ffi/c/demo.exe
 ```
 
 ## 4. 运行方式
@@ -90,8 +90,8 @@ gcc -std=c11 -Iinclude examples/ffi/c/demo.c -Ltarget/debug -lvulcan_luaskills -
 
 如果需要看高层动态语言入口，请参考：
 
-- [Python demo](/D:/projects/vulcan-luaskills/examples/ffi/python/demo.py)
-- [Go demo](/D:/projects/vulcan-luaskills/examples/ffi/go/demo.go)
-- [TypeScript demo](/D:/projects/vulcan-luaskills/examples/ffi/typescript/demo.ts)
-- [Standard Runtime Fixture](/D:/projects/vulcan-luaskills/examples/ffi/standard_runtime/README.md)
-- [FFI Demo Runtime](/D:/projects/vulcan-luaskills/examples/ffi/demo_runtime/README.md)
+- [Python demo](/D:/projects/luaskills/examples/ffi/python/demo.py)
+- [Go demo](/D:/projects/luaskills/examples/ffi/go/demo.go)
+- [TypeScript demo](/D:/projects/luaskills/examples/ffi/typescript/demo.ts)
+- [Standard Runtime Fixture](/D:/projects/luaskills/examples/ffi/standard_runtime/README.md)
+- [FFI Demo Runtime](/D:/projects/luaskills/examples/ffi/demo_runtime/README.md)

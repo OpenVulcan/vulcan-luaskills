@@ -370,7 +370,7 @@ impl DownloadManager {
     /// 仅在真正需要网络操作时构建一个阻塞式 HTTP 客户端。
     fn build_http_client() -> Result<reqwest::blocking::Client, String> {
         reqwest::blocking::Client::builder()
-            .user_agent("vulcan-luaskills/0.1.0")
+            .user_agent("luaskills/0.1.0")
             .build()
             .map_err(|error| format!("Failed to build HTTP client: {}", error))
     }
@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn file_sha256_verification_succeeds_for_matching_payload() {
         let temp_root = std::env::temp_dir().join(format!(
-            "vulcan_luaskills_download_checksum_test_{}",
+            "luaskills_download_checksum_test_{}",
             std::process::id()
         ));
         if temp_root.exists() {

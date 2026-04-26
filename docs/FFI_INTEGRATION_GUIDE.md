@@ -1,8 +1,8 @@
-# vulcan-luaskills FFI 对接文档
+# luaskills FFI 对接文档
 
 ## 1. 文档目标
 
-本文档用于说明 `vulcan-luaskills` 当前导出的 FFI 接口设计、启动条件、参数模型、调用顺序、返回规则、内存释放方式，以及 install / update / uninstall 等整条链路的处理逻辑。
+本文档用于说明 `luaskills` 当前导出的 FFI 接口设计、启动条件、参数模型、调用顺序、返回规则、内存释放方式，以及 install / update / uninstall 等整条链路的处理逻辑。
 
 如果您希望先按最短路径做宿主自检，而不是从头读完整文档，请先看：
 
@@ -119,9 +119,9 @@
 - `公共 `_json` FFI`
   - 指高层、JSON 包络、面向动态语言和快速集成的 FFI 接口层
 - `标准 C ABI 头文件`
-  - 指 [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
+  - 指 [include/luaskills_ffi.h](../include/luaskills_ffi.h)
 - `公共 `_json` FFI 头文件`
-  - 指 [include/vulcan_luaskills_json_ffi.h](../include/vulcan_luaskills_json_ffi.h)
+  - 指 [include/luaskills_json_ffi.h](../include/luaskills_json_ffi.h)
 
 如果正文里为了简化阅读出现：
 
@@ -145,9 +145,9 @@
 - 公共 JSON FFI 导出：
   - [src/ffi.rs](../src/ffi.rs)
 - 标准头文件：
-  - [include/vulcan_luaskills_ffi.h](../include/vulcan_luaskills_ffi.h)
+  - [include/luaskills_ffi.h](../include/luaskills_ffi.h)
 - JSON 头文件：
-  - [include/vulcan_luaskills_json_ffi.h](../include/vulcan_luaskills_json_ffi.h)
+  - [include/luaskills_json_ffi.h](../include/luaskills_json_ffi.h)
   - 该头文件会复用标准头文件中的共享结构体与释放辅助函数
 - 示例：
   - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
@@ -163,8 +163,8 @@
 
 也就是说：
 
-- 标准 C ABI `vulcan_luaskills_ffi_version`
-- 公共 JSON FFI `vulcan_luaskills_ffi_version_json`
+- 标准 C ABI `luaskills_ffi_version`
+- 公共 JSON FFI `luaskills_ffi_version_json`
 - 自描述结果中的 `ffi_version`
 
 都与 `Cargo.toml` 中的 `version` 保持同源。
@@ -227,7 +227,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 - 标准 C ABI 接口的失败信息不再通过裸 `char **` 传出
 - 调用方应把 `error_out` 当作 UTF-8 错误缓冲读取
-- 读取完成后应通过 `vulcan_luaskills_ffi_buffer_free` 释放
+- 读取完成后应通过 `luaskills_ffi_buffer_free` 释放
 - 标准 C ABI 接口中的直接文本输出也在逐步收敛到 `FfiOwnedBuffer`
 - 当前 `version_out`、`skill_id_out`、`result_json_out` 都应按拥有型缓冲读取与释放
 - 当前 `FfiRuntimeInvocationResult`
@@ -301,7 +301,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 承载，并通过：
 
-- `vulcan_luaskills_ffi_buffer_free`
+- `luaskills_ffi_buffer_free`
 
 释放。
 
@@ -323,11 +323,11 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 由 FFI 返回的独立堆分配字符串必须由调用方释放：
 
-- `vulcan_luaskills_ffi_string_free`
+- `luaskills_ffi_string_free`
 
 适用于：
 
-- `vulcan_luaskills_ffi_string_clone` 这类字符串辅助函数返回值
+- `luaskills_ffi_string_clone` 这类字符串辅助函数返回值
 
 说明：
 
@@ -339,20 +339,20 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 释放函数：
 
-- `vulcan_luaskills_ffi_string_array_free`
+- `luaskills_ffi_string_array_free`
 
 说明：
 
 - `FfiStringArray.items` 当前已经收敛为 `FfiOwnedBuffer *`
 - 每个数组元素都是拥有型 UTF-8 文本缓冲
-- 但调用方仍然不应手动逐项释放，而应继续把整个数组交给 `vulcan_luaskills_ffi_string_array_free`
+- 但调用方仍然不应手动逐项释放，而应继续把整个数组交给 `luaskills_ffi_string_array_free`
 
 ### 6.2.1 拥有型缓冲
 
 当 callback 或后续扩展接口返回 `FfiOwnedBuffer` 时：
 
-- 分配应优先使用 `vulcan_luaskills_ffi_buffer_clone`
-- 释放应使用 `vulcan_luaskills_ffi_buffer_free`
+- 分配应优先使用 `luaskills_ffi_buffer_clone`
+- 释放应使用 `luaskills_ffi_buffer_free`
 
 适用于：
 
@@ -371,12 +371,12 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 当前标准 C ABI 接口返回的结构化对象，都有对应 free 函数：
 
-- `vulcan_luaskills_ffi_entry_list_free`
-- `vulcan_luaskills_ffi_help_list_free`
-- `vulcan_luaskills_ffi_help_detail_free`
-- `vulcan_luaskills_ffi_invocation_result_free`
-- `vulcan_luaskills_ffi_skill_apply_result_free`
-- `vulcan_luaskills_ffi_skill_uninstall_result_free`
+- `luaskills_ffi_entry_list_free`
+- `luaskills_ffi_help_list_free`
+- `luaskills_ffi_help_detail_free`
+- `luaskills_ffi_invocation_result_free`
+- `luaskills_ffi_skill_apply_result_free`
+- `luaskills_ffi_skill_uninstall_result_free`
 
 说明：
 
@@ -398,7 +398,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 旧：标准 C ABI 接口大量使用 `char **error_out`
   - 新：标准 C ABI 接口统一改成 `FfiOwnedBuffer *error_out`
 - 旧：`version_out` / `skill_id_out` / `result_json_out` 这类文本输出按裸字符串读取
-  - 新：这些文本输出都应按 `FfiOwnedBuffer` 读取，并通过 `vulcan_luaskills_ffi_buffer_free` 释放
+  - 新：这些文本输出都应按 `FfiOwnedBuffer` 读取，并通过 `luaskills_ffi_buffer_free` 释放
 - 旧：`_json` 请求输入依赖 NUL 终止字符串
   - 新：`_json` 请求输入统一改成 `FfiBorrowedBuffer`
 - 旧：JSON provider callback 通过裸字符串返回响应
@@ -432,9 +432,9 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 以下规则应视为强约束，而不是最佳实践建议：
 
-- `vulcan_luaskills_ffi_string_free` 只能释放 **luaskills 自己分配并返回** 的字符串
-- `vulcan_luaskills_ffi_string_clone` / `vulcan_luaskills_ffi_bytes_clone` / `vulcan_luaskills_ffi_buffer_clone` 用于把宿主自己的内存复制成 luaskills 自主管理的返回值
-- 宿主不能把自己分配的 `malloc/new/string buffer` 直接交给 `vulcan_luaskills_ffi_string_free`
+- `luaskills_ffi_string_free` 只能释放 **luaskills 自己分配并返回** 的字符串
+- `luaskills_ffi_string_clone` / `luaskills_ffi_bytes_clone` / `luaskills_ffi_buffer_clone` 用于把宿主自己的内存复制成 luaskills 自主管理的返回值
+- 宿主不能把自己分配的 `malloc/new/string buffer` 直接交给 `luaskills_ffi_string_free`
 - 宿主不能把自己分配的裸缓冲伪装成 `FfiOwnedBuffer` 交给运行时
 - 所有传入 FFI 的裸指针、切片指针、输出指针都必须在调用期间保持有效
 - 标准 callback 与 JSON callback 都**不能**把 Rust panic、C++ exception 或其他异常机制穿过 C ABI 边界
@@ -496,7 +496,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 这里要特别注意：
 
-- `vulcan-luaskills` 代码层只通过 `git + tag v0.2.1` 固定依赖 `vldb-controller-client`
+- `luaskills` 代码层只通过 `git + tag v0.2.1` 固定依赖 `vldb-controller-client`
 - 当前上游 Rust SDK 在注册阶段使用 `client_name`，具体 `client_session_id` 由 SDK 内部自动管理并自动回放附着与 backend 期望状态
 - `v0.2.1` 额外修复了共享本地 endpoint 在 `auto_spawn` 场景下的重复拉起协调风险
 - 真正被拉起的 controller 服务程序，不是通过 Cargo 把二进制嵌进宿主，而是由宿主自行复制并管理
@@ -604,7 +604,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 - 该结构用于 `_json` 接口返回值、callback 返回值与后续扩展接口
 - 该结构也已经用于标准结构体结果中的大量单值文本字段
-- 释放必须走 `vulcan_luaskills_ffi_buffer_free`
+- 释放必须走 `luaskills_ffi_buffer_free`
 - 如果 `len > 0`，则 `ptr` 不得为 null
 
 ### 8.3 `FfiLuaRuntimeHostOptions`
@@ -815,113 +815,113 @@ runtime-config(action, skill_id?, key?, value?)
 
 标准 C ABI 接口：
 
-- `vulcan_luaskills_ffi_version`
-- `vulcan_luaskills_ffi_describe`
-- `vulcan_luaskills_ffi_engine_new`
-- `vulcan_luaskills_ffi_engine_free`
+- `luaskills_ffi_version`
+- `luaskills_ffi_describe`
+- `luaskills_ffi_engine_new`
+- `luaskills_ffi_engine_free`
 
 公共 `_json` FFI 接口：
 
-- `vulcan_luaskills_ffi_version_json`
-- `vulcan_luaskills_ffi_describe_json`
-- `vulcan_luaskills_ffi_engine_new_json`
-- `vulcan_luaskills_ffi_engine_free_json`
+- `luaskills_ffi_version_json`
+- `luaskills_ffi_describe_json`
+- `luaskills_ffi_engine_new_json`
+- `luaskills_ffi_engine_free_json`
 
 ### 9.2 加载与重载接口
 
 标准 C ABI 接口：
 
-- `vulcan_luaskills_ffi_load_from_dirs`
-- `vulcan_luaskills_ffi_load_from_roots`
-- `vulcan_luaskills_ffi_reload_from_dirs`
-- `vulcan_luaskills_ffi_reload_from_roots`
+- `luaskills_ffi_load_from_dirs`
+- `luaskills_ffi_load_from_roots`
+- `luaskills_ffi_reload_from_dirs`
+- `luaskills_ffi_reload_from_roots`
 
 公共 `_json` FFI 接口：
 
-- `vulcan_luaskills_ffi_load_from_dirs_json`
-- `vulcan_luaskills_ffi_load_from_roots_json`
-- `vulcan_luaskills_ffi_reload_from_dirs_json`
-- `vulcan_luaskills_ffi_reload_from_roots_json`
+- `luaskills_ffi_load_from_dirs_json`
+- `luaskills_ffi_load_from_roots_json`
+- `luaskills_ffi_reload_from_dirs_json`
+- `luaskills_ffi_reload_from_roots_json`
 
 ### 9.3 描述与帮助接口
 
 标准 C ABI 接口：
 
-- `vulcan_luaskills_ffi_list_entries`
-- `vulcan_luaskills_ffi_list_skill_help`
-- `vulcan_luaskills_ffi_render_skill_help_detail`
-- `vulcan_luaskills_ffi_prompt_argument_completions`
-- `vulcan_luaskills_ffi_is_skill`
-- `vulcan_luaskills_ffi_skill_name_for_tool`
+- `luaskills_ffi_list_entries`
+- `luaskills_ffi_list_skill_help`
+- `luaskills_ffi_render_skill_help_detail`
+- `luaskills_ffi_prompt_argument_completions`
+- `luaskills_ffi_is_skill`
+- `luaskills_ffi_skill_name_for_tool`
 
 公共 `_json` FFI 接口：
 
-- `vulcan_luaskills_ffi_list_entries_json`
-- `vulcan_luaskills_ffi_list_skill_help_json`
-- `vulcan_luaskills_ffi_render_skill_help_detail_json`
-- `vulcan_luaskills_ffi_prompt_argument_completions_json`
-- `vulcan_luaskills_ffi_is_skill_json`
-- `vulcan_luaskills_ffi_skill_name_for_tool_json`
+- `luaskills_ffi_list_entries_json`
+- `luaskills_ffi_list_skill_help_json`
+- `luaskills_ffi_render_skill_help_detail_json`
+- `luaskills_ffi_prompt_argument_completions_json`
+- `luaskills_ffi_is_skill_json`
+- `luaskills_ffi_skill_name_for_tool_json`
 
 ### 9.4 调用接口
 
 标准 C ABI 接口：
 
-- `vulcan_luaskills_ffi_call_skill`
-- `vulcan_luaskills_ffi_run_lua`
+- `luaskills_ffi_call_skill`
+- `luaskills_ffi_run_lua`
 
 公共 `_json` FFI 接口：
 
-- `vulcan_luaskills_ffi_call_skill_json`
-- `vulcan_luaskills_ffi_run_lua_json`
+- `luaskills_ffi_call_skill_json`
+- `luaskills_ffi_run_lua_json`
 
 ### 9.5 生命周期接口
 
 标准 C ABI 接口：
 
-- `vulcan_luaskills_ffi_disable_skill_in_dirs`
-- `vulcan_luaskills_ffi_disable_skill`
-- `vulcan_luaskills_ffi_system_disable_skill_in_dirs`
-- `vulcan_luaskills_ffi_system_disable_skill`
-- `vulcan_luaskills_ffi_enable_skill`
-- `vulcan_luaskills_ffi_system_enable_skill`
-- `vulcan_luaskills_ffi_uninstall_skill`
-- `vulcan_luaskills_ffi_system_uninstall_skill`
-- `vulcan_luaskills_ffi_install_skill`
-- `vulcan_luaskills_ffi_system_install_skill`
-- `vulcan_luaskills_ffi_update_skill`
-- `vulcan_luaskills_ffi_system_update_skill`
+- `luaskills_ffi_disable_skill_in_dirs`
+- `luaskills_ffi_disable_skill`
+- `luaskills_ffi_system_disable_skill_in_dirs`
+- `luaskills_ffi_system_disable_skill`
+- `luaskills_ffi_enable_skill`
+- `luaskills_ffi_system_enable_skill`
+- `luaskills_ffi_uninstall_skill`
+- `luaskills_ffi_system_uninstall_skill`
+- `luaskills_ffi_install_skill`
+- `luaskills_ffi_system_install_skill`
+- `luaskills_ffi_update_skill`
+- `luaskills_ffi_system_update_skill`
 
 公共 `_json` FFI 接口：
 
-- `vulcan_luaskills_ffi_disable_skill_in_dirs_json`
-- `vulcan_luaskills_ffi_disable_skill_json`
-- `vulcan_luaskills_ffi_system_disable_skill_in_dirs_json`
-- `vulcan_luaskills_ffi_system_disable_skill_json`
-- `vulcan_luaskills_ffi_enable_skill_json`
-- `vulcan_luaskills_ffi_system_enable_skill_json`
-- `vulcan_luaskills_ffi_uninstall_skill_json`
-- `vulcan_luaskills_ffi_system_uninstall_skill_json`
-- `vulcan_luaskills_ffi_install_skill_json`
-- `vulcan_luaskills_ffi_system_install_skill_json`
-- `vulcan_luaskills_ffi_update_skill_json`
-- `vulcan_luaskills_ffi_system_update_skill_json`
+- `luaskills_ffi_disable_skill_in_dirs_json`
+- `luaskills_ffi_disable_skill_json`
+- `luaskills_ffi_system_disable_skill_in_dirs_json`
+- `luaskills_ffi_system_disable_skill_json`
+- `luaskills_ffi_enable_skill_json`
+- `luaskills_ffi_system_enable_skill_json`
+- `luaskills_ffi_uninstall_skill_json`
+- `luaskills_ffi_system_uninstall_skill_json`
+- `luaskills_ffi_install_skill_json`
+- `luaskills_ffi_system_install_skill_json`
+- `luaskills_ffi_update_skill_json`
+- `luaskills_ffi_system_update_skill_json`
 
 ### 9.6 Skill 配置接口
 
 标准 C ABI 接口：
 
-- `vulcan_luaskills_ffi_skill_config_list`
-- `vulcan_luaskills_ffi_skill_config_get`
-- `vulcan_luaskills_ffi_skill_config_set`
-- `vulcan_luaskills_ffi_skill_config_delete`
+- `luaskills_ffi_skill_config_list`
+- `luaskills_ffi_skill_config_get`
+- `luaskills_ffi_skill_config_set`
+- `luaskills_ffi_skill_config_delete`
 
 公共 `_json` FFI 接口：
 
-- `vulcan_luaskills_ffi_skill_config_list_json`
-- `vulcan_luaskills_ffi_skill_config_get_json`
-- `vulcan_luaskills_ffi_skill_config_set_json`
-- `vulcan_luaskills_ffi_skill_config_delete_json`
+- `luaskills_ffi_skill_config_list_json`
+- `luaskills_ffi_skill_config_get_json`
+- `luaskills_ffi_skill_config_set_json`
+- `luaskills_ffi_skill_config_delete_json`
 
 ## 10. 每类接口的调用逻辑
 
@@ -1428,7 +1428,7 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 `demo_runtime` 会：
 
 - 使用仓库内空 runtime root
-- 动态安装 `OpenVulcan/luaskills-demo-skill`
+- 动态安装 `LuaSkills/luaskills-demo-skill`
 - 调用 `luaskills-demo-skill-demo-status`
 - 输出 success
 
@@ -1556,4 +1556,4 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - 用标准 C ABI 承载底层稳定主链
 - 用公共 `_json` FFI 承载动态语言接入、动态扩展与调试能力
 
-这也是当前 `vulcan-luaskills` FFI 设计的核心目的。
+这也是当前 `luaskills` FFI 设计的核心目的。

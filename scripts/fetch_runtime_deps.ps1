@@ -1,4 +1,4 @@
-﻿param(
+param(
     # Dependency target to install: all, lua, or vldb.
     # 需要安装的依赖目标：all、lua 或 vldb。
     [ValidateSet("all", "lua", "vldb")]
@@ -8,10 +8,10 @@
     [string]$RuntimeRoot = "output",
     # Lua runtime release repository.
     # Lua runtime 发布仓库。
-    [string]$LuaRuntimeRepo = "OpenVulcan/vulcan-luaskills",
+    [string]$LuaRuntimeRepo = "LuaSkills/luaskills",
     # Lua runtime release tag.
     # Lua runtime 发布标签。
-    [string]$LuaRuntimeVersion = "v0.1.0",
+    [string]$LuaRuntimeVersion = "v0.2.0",
     # vldb-controller release repository.
     # vldb-controller 发布仓库。
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",

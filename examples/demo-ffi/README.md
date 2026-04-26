@@ -1,6 +1,6 @@
 # LuaSkills FFI Demo
 
-该目录是面向动态库宿主的 FFI demo 入口。它不是 skill 本身，而是一个通过 `vulcan_luaskills` 动态库加载示例 skill 的宿主示例。
+该目录是面向动态库宿主的 FFI demo 入口。它不是 skill 本身，而是一个通过 `luaskills` 动态库加载示例 skill 的宿主示例。
 
 默认运行根：
 

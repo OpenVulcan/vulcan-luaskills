@@ -1,8 +1,8 @@
-# vulcan-luaskills FFI Beta 发布说明
+# luaskills FFI Beta 发布说明
 
 ## 1. 文档定位
 
-本文档用于说明当前 `v0.1.x / beta` 阶段，`vulcan-luaskills` FFI 对外发布时最应该让接入方知道的事情。
+本文档用于说明当前 `v0.1.x / beta` 阶段，`luaskills` FFI 对外发布时最应该让接入方知道的事情。
 
 它不是完整 API 参考，也不是完整设计文档。  
 如果您需要更细的参数、内存和接口说明，请继续阅读：
@@ -77,7 +77,7 @@
 - callback 必须先注册，再创建 engine
 - callback 不能跨 C ABI 抛异常
 - 同一线程内，不支持重入同一个 engine
-- `FfiOwnedBuffer` 必须通过 `vulcan_luaskills_ffi_buffer_free` 释放
+- `FfiOwnedBuffer` 必须通过 `luaskills_ffi_buffer_free` 释放
 - 结构化结果必须通过专用 free 函数释放
 - 宿主不能把自己分配的字符串或缓冲伪装成交给 luaskills 回收
 - 远端 controller 场景必须关闭 `auto_spawn`
@@ -131,4 +131,4 @@
 
 ## 9. 当前一句话结论
 
-`v0.1.x / beta` 阶段的 `vulcan-luaskills` 已经具备“可联调、可示例化、可受控发布”的 FFI 基础，但它的定位仍然是 beta 宿主接入面，而不是完全收敛后的终版 ABI。
+`v0.1.x / beta` 阶段的 `luaskills` 已经具备“可联调、可示例化、可受控发布”的 FFI 基础，但它的定位仍然是 beta 宿主接入面，而不是完全收敛后的终版 ABI。

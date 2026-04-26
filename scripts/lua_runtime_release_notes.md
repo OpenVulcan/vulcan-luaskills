@@ -1,14 +1,14 @@
 ## Lua runtime and demo release packages
 
-This Release publishes cross-platform vulcan-luaskills Lua runtime packages, the FFI SDK, runnable demos, and native dependency bundles for build workflows. Each enabled platform emits a matching set of `.tar.gz` assets, such as `linux-x64`, `linux-arm64`, `macos-x64`, `macos-arm64`, and `windows-x64`.
+This Release publishes cross-platform luaskills Lua runtime packages, the FFI SDK, runnable demos, and native dependency bundles for build workflows. Each enabled platform emits a matching set of `.tar.gz` assets, such as `linux-x64`, `linux-arm64`, `macos-x64`, `macos-arm64`, and `windows-x64`.
 
 ### Assets
 
 - `lua-runtime-{platform}.tar.gz`: Default Lua runtime package for end users. It exports `lua_packages/lib/lua`, `lua_packages/share/lua`, `libs`, `resources`, and `licenses`, and includes the LuaRocks modules and native runtime libraries needed by LuaSkills. Windows packages include only `runtime-env.ps1`; Linux/macOS packages include only `runtime-env.sh`.
 - `lua-deps-{platform}.tar.gz`: Native dependency bundle for build workflows. It contains headers, libraries, and build outputs for OpenSSL, curl, zlib, pcre2, libyaml, and other dependencies used to compile LuaRocks C modules. This is mainly for CI, source builds, or advanced reuse, not the default runtime layout.
-- `luaskills-ffi-sdk-{platform}.tar.gz`: FFI SDK package for C ABI or dynamic-library host integration. It contains headers under `include/`, vulcan-luaskills runtime/import libraries under `lib/`, and the project license.
+- `luaskills-ffi-sdk-{platform}.tar.gz`: FFI SDK package for C ABI or dynamic-library host integration. It contains headers under `include/`, luaskills runtime/import libraries under `lib/`, and the project license.
 - `luaskills-demo-ffi-{platform}.tar.gz`: Runnable FFI-mode demo package that shows an external host loading luaskills through the dynamic library. It includes the full `examples/ffi/` tree for C, Go, Python, TypeScript, standard runtime, install smoke tests, and host-provider demos, plus platform-matching runner scripts, standalone dependency upgrade scripts, and dependency fetch scripts.
-- `luaskills-demo-rust-{platform}.tar.gz`: Runnable non-FFI Rust demo package that shows a Rust host using the default runtime root through the `vulcan-luaskills` crate. It also includes platform-matching runner and dependency upgrade scripts.
+- `luaskills-demo-rust-{platform}.tar.gz`: Runnable non-FFI Rust demo package that shows a Rust host using the default runtime root through the `luaskills` crate. It also includes platform-matching runner and dependency upgrade scripts.
 
 ### Bundled Lua Packages
 
@@ -46,15 +46,15 @@ In most demo scenarios, run `all` through `upgrade_deps.bat` or `upgrade_deps.sh
 
 ## Lua runtime 与 demo 发布包说明
 
-本 Release 用于发布 vulcan-luaskills 的跨平台 Lua runtime、FFI SDK、示例 demo 与构建期原生依赖包。每个平台会生成一组同名后缀的 `.tar.gz` 资产，例如 `linux-x64`、`linux-arm64`、`macos-x64`、`macos-arm64`、`windows-x64`。
+本 Release 用于发布 luaskills 的跨平台 Lua runtime、FFI SDK、示例 demo 与构建期原生依赖包。每个平台会生成一组同名后缀的 `.tar.gz` 资产，例如 `linux-x64`、`linux-arm64`、`macos-x64`、`macos-arm64`、`windows-x64`。
 
 ### 资产用途
 
 - `lua-runtime-{platform}.tar.gz`：面向最终运行期使用的 Lua runtime 默认目录包。它导出 `lua_packages/lib/lua`、`lua_packages/share/lua`、`libs`、`resources`、`licenses`，并包含运行 LuaSkills 常用 LuaRocks 模块及其原生运行库。Windows 包只携带 `runtime-env.ps1`，Linux/macOS 包只携带 `runtime-env.sh`。
 - `lua-deps-{platform}.tar.gz`：面向构建链路的原生依赖包，包含 OpenSSL、curl、zlib、pcre2、libyaml 等用于编译 LuaRocks C 模块的头文件、库文件和构建产物。这个包主要给 CI、源码构建或高级用户复用，不是 runtime 默认目录。
-- `luaskills-ffi-sdk-{platform}.tar.gz`：面向 C ABI / 动态库宿主集成的 FFI SDK 包，包含 `include/` 头文件、`lib/` 下的 vulcan-luaskills 动态库或导入库，以及项目许可证。
+- `luaskills-ffi-sdk-{platform}.tar.gz`：面向 C ABI / 动态库宿主集成的 FFI SDK 包，包含 `include/` 头文件、`lib/` 下的 luaskills 动态库或导入库，以及项目许可证。
 - `luaskills-demo-ffi-{platform}.tar.gz`：面向 FFI 模式的可运行 demo 包，演示外部宿主通过动态库加载 luaskills，并携带 `examples/ffi/` 下完整 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例，以及包内平台匹配的运行脚本、独立依赖升级脚本和依赖拉取脚本。
-- `luaskills-demo-rust-{platform}.tar.gz`：面向非 FFI / Rust 直连模式的可运行 demo 包，演示 Rust 宿主直接通过 `vulcan-luaskills` crate 使用默认 runtime root，并同样只携带平台匹配的运行与依赖升级脚本。
+- `luaskills-demo-rust-{platform}.tar.gz`：面向非 FFI / Rust 直连模式的可运行 demo 包，演示 Rust 宿主直接通过 `luaskills` crate 使用默认 runtime root，并同样只携带平台匹配的运行与依赖升级脚本。
 
 ### Lua runtime 内置 Lua 包
 

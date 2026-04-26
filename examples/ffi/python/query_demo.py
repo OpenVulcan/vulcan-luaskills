@@ -50,43 +50,43 @@ def main() -> None:
     """
 
     library = load_library()
-    library.vulcan_luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
-    library.vulcan_luaskills_ffi_buffer_free.restype = None
-    library.vulcan_luaskills_ffi_engine_new.argtypes = [
+    library.luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
+    library.luaskills_ffi_buffer_free.restype = None
+    library.luaskills_ffi_engine_new.argtypes = [
         ctypes.POINTER(FfiLuaEngineOptions),
         ctypes.POINTER(ctypes.c_uint64),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_load_from_roots.argtypes = [
+    library.luaskills_ffi_load_from_roots.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiRuntimeSkillRoot),
         ctypes.c_size_t,
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_is_skill.argtypes = [
+    library.luaskills_ffi_is_skill.argtypes = [
         ctypes.c_uint64,
         ctypes.c_char_p,
         ctypes.POINTER(ctypes.c_uint8),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_skill_name_for_tool.argtypes = [
+    library.luaskills_ffi_skill_name_for_tool.argtypes = [
         ctypes.c_uint64,
         ctypes.c_char_p,
         ctypes.POINTER(FfiOwnedBuffer),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_prompt_argument_completions.argtypes = [
+    library.luaskills_ffi_prompt_argument_completions.argtypes = [
         ctypes.c_uint64,
         ctypes.c_char_p,
         ctypes.c_char_p,
         ctypes.POINTER(ctypes.POINTER(FfiStringArray)),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.vulcan_luaskills_ffi_string_array_free.argtypes = [
+    library.luaskills_ffi_string_array_free.argtypes = [
         ctypes.POINTER(FfiStringArray),
     ]
-    library.vulcan_luaskills_ffi_string_array_free.restype = None
-    library.vulcan_luaskills_ffi_engine_free.argtypes = [
+    library.luaskills_ffi_string_array_free.restype = None
+    library.luaskills_ffi_engine_free.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiOwnedBuffer),
     ]
@@ -135,7 +135,7 @@ def main() -> None:
     engine_id = ctypes.c_uint64()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_engine_new(
+        library.luaskills_ffi_engine_new(
             ctypes.byref(options),
             ctypes.byref(engine_id),
             ctypes.byref(error_buffer),
@@ -153,7 +153,7 @@ def main() -> None:
     )
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_load_from_roots(
+        library.luaskills_ffi_load_from_roots(
             engine_id.value,
             skill_roots,
             len(skill_roots),
@@ -167,7 +167,7 @@ def main() -> None:
     is_skill_value = ctypes.c_uint8()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_is_skill(
+        library.luaskills_ffi_is_skill(
             engine_id.value,
             b"demo-standard-ffi-skill-ping",
             ctypes.byref(is_skill_value),
@@ -181,7 +181,7 @@ def main() -> None:
     skill_name_buffer = FfiOwnedBuffer()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_skill_name_for_tool(
+        library.luaskills_ffi_skill_name_for_tool(
             engine_id.value,
             b"demo-standard-ffi-skill-ping",
             ctypes.byref(skill_name_buffer),
@@ -191,12 +191,12 @@ def main() -> None:
         library,
     )
     print("Owning skill id:", read_owned_buffer_text(skill_name_buffer))
-    library.vulcan_luaskills_ffi_buffer_free(skill_name_buffer)
+    library.luaskills_ffi_buffer_free(skill_name_buffer)
 
     values_ptr = ctypes.POINTER(FfiStringArray)()
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_prompt_argument_completions(
+        library.luaskills_ffi_prompt_argument_completions(
             engine_id.value,
             b"demo-standard-ffi-skill-ping",
             b"note",
@@ -212,11 +212,11 @@ def main() -> None:
         print("Prompt completions:", values)
     finally:
         if values_ptr:
-            library.vulcan_luaskills_ffi_string_array_free(values_ptr)
+            library.luaskills_ffi_string_array_free(values_ptr)
 
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.vulcan_luaskills_ffi_engine_free(
+        library.luaskills_ffi_engine_free(
             engine_id,
             ctypes.byref(error_buffer),
         ),

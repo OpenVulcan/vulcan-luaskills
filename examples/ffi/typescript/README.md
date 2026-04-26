@@ -19,7 +19,7 @@ npm install
 需要先设置动态库路径环境变量：
 
 ```powershell
-$env:VULCAN_LUASKILLS_LIB="D:\projects\vulcan-luaskills\target\debug\vulcan_luaskills.dll"
+$env:LUASKILLS_LIB="D:\projects\luaskills\target\debug\luaskills.dll"
 ```
 
 如果您要运行标准运行时夹具相关示例，还需要保证：

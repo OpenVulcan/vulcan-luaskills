@@ -1,4 +1,4 @@
-﻿param(
+param(
     # Target platform key used in archive and manifest names.
     # 用于归档文件与清单文件命名的目标平台标识。
     [string]$Platform = "",
@@ -128,7 +128,7 @@ Copy-Item -Force -LiteralPath "LICENSE" -Destination (Join-Path $PackageRoot "li
     schema_version = 1
     package_name = "luaskills-ffi-sdk-$Platform"
     platform = $Platform
-    headers = @("include/vulcan_luaskills_ffi.h", "include/vulcan_luaskills_json_ffi.h")
+    headers = @("include/luaskills_ffi.h", "include/luaskills_json_ffi.h")
     library_dir = "lib"
 } | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $PackageRoot "ffi-sdk-manifest.json") -Encoding UTF8
 

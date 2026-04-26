@@ -426,7 +426,7 @@ cat > "$RUNTIME_ROOT/licenses/manifest.json" <<JSON
   "schema_version": 1,
   "package_name": "lua-runtime-${PLATFORM}",
   "components": [
-    { "name": "vulcan-luaskills", "type": "runtime", "license": "MIT", "license_files": ["licenses/luaskills/LICENSE"] },
+    { "name": "luaskills", "type": "runtime", "license": "MIT", "license_files": ["licenses/luaskills/LICENSE"] },
     { "name": "openssl", "type": "native-lib", "license": "Apache-2.0", "license_files": ["licenses/native/openssl"] },
     { "name": "curl", "type": "native-lib", "license": "curl", "license_files": ["licenses/native/curl"] },
     { "name": "zlib", "type": "native-lib", "license": "Zlib", "license_files": ["licenses/native/zlib"] },

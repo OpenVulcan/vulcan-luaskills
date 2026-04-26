@@ -1,6 +1,6 @@
 # Host Callback Demo
 
-这个目录演示如何把 `vulcan-luaskills` 作为 FFI 库接入，同时由宿主自己接管 SQLite 数据库落点与执行。
+这个目录演示如何把 `luaskills` 作为 FFI 库接入，同时由宿主自己接管 SQLite 数据库落点与执行。
 
 当前 demo 重点验证三件事：
 
@@ -23,7 +23,7 @@
 
 - `run_python_host_provider_demo.py`
   - Python 宿主示例
-  - 使用 `ctypes` 加载 `vulcan-luaskills` 与 `vldb-sqlite`
+  - 使用 `ctypes` 加载 `luaskills` 与 `vldb-sqlite`
   - 注册 SQLite JSON provider 回调
 - `runtime_root/`
   - 独立演示运行时目录
@@ -49,7 +49,7 @@
 
 ## 快速准备
 
-### 1. 构建 `vulcan-luaskills`
+### 1. 构建 `luaskills`
 
 在仓库根目录执行：
 
@@ -68,7 +68,7 @@ cargo build
 ### 3. 运行 Python 宿主演示
 
 ```powershell
-$env:VULCAN_LUASKILLS_LIB = "D:\projects\vulcan-luaskills\target\debug\vulcan_luaskills.dll"
+$env:LUASKILLS_LIB = "D:\projects\luaskills\target\debug\luaskills.dll"
 python .\run_python_host_provider_demo.py
 ```
 
