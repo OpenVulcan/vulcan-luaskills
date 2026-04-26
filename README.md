@@ -110,6 +110,28 @@ bash scripts/fetch_runtime_deps.sh vldb
 
 发布 demo 包内的运行入口与依赖升级入口是分离的：`run.ps1` / `run.sh` 只运行 demo，不会自动下载依赖；Windows 包可双击 `upgrade_deps.bat` 默认拉取 `all`，Linux/macOS 包执行 `./upgrade_deps.sh` 默认拉取 `all`，也可以传入 `lua` 或 `vldb` 单独更新对应部分。
 
+## 依赖许可证证明
+
+项目使用 `cargo-deny` 作为 Rust 依赖许可证检查与证明生成的数据源。生成前会默认执行 `cargo deny check licenses`，确认当前依赖许可证满足 `deny.toml` 的 allow list 与澄清配置，然后输出原始清单、JSON 证明与 Markdown 证明。
+
+Windows：
+
+```powershell
+.\scripts\generate_dependency_license_certificate.ps1
+```
+
+默认输出目录：
+
+```text
+target/license-certificate/
+```
+
+如只需要重新生成证明文件、暂时跳过校验，可使用：
+
+```powershell
+.\scripts\generate_dependency_license_certificate.ps1 -SkipCheck
+```
+
 ## 核心原则
 
 ### 1. 库不读取宿主配置文件
