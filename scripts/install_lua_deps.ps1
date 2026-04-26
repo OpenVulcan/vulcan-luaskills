@@ -1,8 +1,8 @@
-# install_lua_deps.ps1 — Install Lua C modules via luarocks into third_party/lua_packages/
+# install_lua_deps.ps1 - Install Lua C modules via luarocks into third_party/lua_packages/
 # Developer/build use only. End users do not need luarocks.
-# Reuses LuaJIT source from luajit-src cargo crate — no network download needed.
+# Reuses LuaJIT source from luajit-src cargo crate - no network download needed.
 # Reads package list AND C dependencies from scripts/lua_packages.txt.
-# All build tools are downloaded to third_party/tools/ — system environment is NOT modified.
+# All build tools are downloaded to third_party/tools/ - system environment is NOT modified.
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/install_lua_deps.ps1
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +48,18 @@ function Resolve-ProjectRoot {
 
 # ScriptDir points at the current script directory when PowerShell exposes it.
 # ScriptDir 在 PowerShell 提供脚本路径时指向当前脚本目录。
-$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { "" }
+$ScriptDir = ""
+if ($PSScriptRoot) {
+    $ScriptDir = $PSScriptRoot
+} elseif ($PSCommandPath) {
+    $ScriptDir = Split-Path -Parent $PSCommandPath
+} elseif ($MyInvocation.PSScriptRoot) {
+    $ScriptDir = $MyInvocation.PSScriptRoot
+} elseif ($MyInvocation.MyCommand.Path) {
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+} elseif (Test-Path -LiteralPath (Join-Path (Get-Location).Path "scripts\install_lua_deps.ps1")) {
+    $ScriptDir = Join-Path (Get-Location).Path "scripts"
+}
 
 # ProjectDir points at the repository root regardless of the caller location.
 # ProjectDir 指向仓库根目录，避免调用方当前位置影响路径解析。
@@ -300,7 +311,7 @@ $UserVcpkgDir = Join-Path $env:USERPROFILE ".vcpkg"
 function Check-Vcpkg {
     $localBinName = if ($script:IsWindowsPlatform) { "vcpkg.exe" } else { "vcpkg" }
 
-    # 1. From user's ~/.vcpkg (installed via vcpkg-init.ps1) — use directly, no copy needed
+    # 1. From user's ~/.vcpkg (installed via vcpkg-init.ps1) - use directly, no copy needed
     $userExe = Join-Path $UserVcpkgDir $localBinName
     if (Test-Path $userExe) {
         $script:VcpkgExe = $userExe
@@ -412,7 +423,7 @@ function Install-Deps-With-Vcpkg {
         Write-Host "  ==> vcpkg partial success ($installedCount/$($DepNames.Count) packages installed)."
         return $VcpkgInstallDir
     } else {
-        Write-Host "  ==> vcpkg install failed — no packages installed (exit code $($proc.ExitCode))" -ForegroundColor Yellow
+        Write-Host "  ==> vcpkg install failed - no packages installed (exit code $($proc.ExitCode))" -ForegroundColor Yellow
         return $null
     }
 }
@@ -441,7 +452,7 @@ function Install-VsTools {
 
     if (Get-Command "winget" -ErrorAction SilentlyContinue) {
         Write-Host "    Attempting winget install of VS BuildTools..."
-        Write-Host "    (This will open an installer window — please complete it manually if prompted)"
+        Write-Host "    (This will open an installer window - please complete it manually if prompted)"
         $proc = Start-Process "winget" -ArgumentList "install","--id=Microsoft.VisualStudio.2022.BuildTools","--silent","--override","--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" -NoNewWindow -Wait -PassThru
         if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq -1978334960) {
             # Re-detect after install
@@ -757,7 +768,7 @@ $CmakePath = Detect-Tool "cmake" { Check-Cmake } { Install-Cmake } "cmake"
 $VcpkgAvailable = Detect-Tool "vcpkg" { Check-Vcpkg } { Install-Vcpkg } "vcpkg"
 
 if ($VcpkgAvailable) {
-    Write-Host "`n  [INFO] vcpkg available — C deps will use vcpkg (preferred)."
+    Write-Host "`n  [INFO] vcpkg available - C deps will use vcpkg (preferred)."
 } else {
     Write-Host "`n  [WARN] vcpkg not available. Will fall back to source compilation for C deps."
     Write-Host "         Consider installing vcpkg: iex (iwr -useb https://aka.ms/vcpkg-init.ps1)"
@@ -1105,7 +1116,7 @@ if ((Test-Path $LuaJITDLL) -and (Test-Path $LuaIncludeDir)) {
         try {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = "cmd.exe"
-            $psi.Arguments = "/c `"set PATH=.;$($script:BuildEnvPath);%PATH% && msvcbuild.bat`""
+            $psi.Arguments = '/c "set PATH=.;' + $script:BuildEnvPath + ';%PATH% && msvcbuild.bat"'
             $psi.EnvironmentVariables["PATH"] = $script:BuildEnvPath
             $psi.WorkingDirectory = $BuildSrcDir
             $psi.RedirectStandardOutput = $true
@@ -1203,13 +1214,13 @@ Ensure-Dir $LuaPackages
 
 $ConfigContent = @"
 rocks_trees = {
-    { name = [[project]], root = [[${LuaPackages}]] },
+    { name = [[project]], root = [[$($LuaPackages)]] },
 }
 lua_interpreter = [[luajit.exe]]
-lua_dir = [[${LuaJITDir}]]
+lua_dir = [[$($LuaJITDir)]]
 variables = {
-    LUA_INCDIR = [[${LuaIncludeDir}]],
-    LUA_LIBDIR = [[${LuaJITDir}]],
+    LUA_INCDIR = [[$($LuaIncludeDir)]],
+    LUA_LIBDIR = [[$($LuaJITDir)]],
     MSVCRT = [[msvcrt]],
 }
 "@
@@ -1217,7 +1228,7 @@ variables = {
 Set-Content -Path (Join-Path $LuarocksDir "config.lua") -Value $ConfigContent -Encoding UTF8
 
 # ============================================================
-# Step 3: C dependencies — pre-built → vcpkg → source compile
+# Step 3: C dependencies - pre-built -> vcpkg -> source compile
 # ============================================================
 Write-Host "`n=== Step 3: C Dependencies ==="
 
