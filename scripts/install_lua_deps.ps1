@@ -1153,8 +1153,8 @@ if ((Test-Path $LuaJITDLL) -and (Test-Path $LuaIncludeDir)) {
         try {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = "cmd.exe"
-            $psi.Arguments = '/c "set PATH=.;' + $script:BuildEnvPath + ';%PATH% && msvcbuild.bat"'
-            $psi.EnvironmentVariables["PATH"] = $script:BuildEnvPath
+            $psi.Arguments = "/c msvcbuild.bat"
+            $psi.EnvironmentVariables["PATH"] = ".;$($script:BuildEnvPath)"
             $psi.WorkingDirectory = $BuildSrcDir
             $psi.RedirectStandardOutput = $true
             $psi.RedirectStandardError = $true
