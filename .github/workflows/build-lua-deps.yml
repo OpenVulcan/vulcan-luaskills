@@ -12,33 +12,33 @@ on:
       linux_x64_runner:
         description: "Linux x64 runner (off to disable)"
         required: true
-        default: "9950x"
+        default: "ubuntu-24.04"
         type: choice
-        options: ["off", "9950x", "proart", "ubuntu-24.04"]
+        options: ["off", "ubuntu-24.04"]
       linux_arm64_runner:
         description: "Linux ARM64 runner (off to disable)"
         required: true
-        default: "off"
+        default: "ubuntu-24.04-arm"
         type: choice
-        options: ["off", "9950x", "proart", "ubuntu-24.04-arm", "ubuntu-22.04-arm"]
+        options: ["off", "ubuntu-24.04-arm"]
       macos_arm64_runner:
         description: "macOS ARM64 runner (off to disable)"
         required: true
         default: "macos-15"
         type: choice
-        options: ["off", "macos-15", "9950x", "proart"]
+        options: ["off", "macos-15"]
       macos_x64_runner:
         description: "macOS x64 runner (off to disable)"
         required: true
         default: "macos-15-intel"
         type: choice
-        options: ["off", "macos-15-intel", "macos-26-intel", "9950x", "proart"]
+        options: ["off", "macos-15-intel"]
       windows_x64_runner:
         description: "Windows x64 runner (off to disable)"
         required: true
-        default: "9950x-win"
+        default: "windows-latest"
         type: choice
-        options: ["off", "9950x-win", "proart-win", "windows-latest"]
+        options: ["off", "windows-latest"]
 
 permissions:
   contents: write
