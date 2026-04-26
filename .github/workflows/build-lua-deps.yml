@@ -183,6 +183,8 @@ jobs:
       # RELEASE_PACKAGE_DIR 保存最终面向用户的 runtime、SDK 与 demo 压缩包。
       RELEASE_PACKAGE_DIR: target/release-packages
     steps:
+      - uses: actions/checkout@v4
+
       - name: Setup Rust 1.94
         shell: pwsh
         run: |
