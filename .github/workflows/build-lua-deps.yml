@@ -7,8 +7,8 @@ on:
     inputs:
       version:
         description: "Release tag (e.g. v0.1.0)"
-        required: true
-        default: "v0.1.0"
+        required: false
+        default: ""
       linux_x64_runner:
         description: "Linux x64 runner (off to disable)"
         required: true
@@ -44,7 +44,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: lua-deps-${{ github.workflow }}-${{ inputs.version }}
+  group: lua-deps-${{ github.workflow }}-${{ inputs.version || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -70,7 +70,34 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       has_targets: ${{ steps.build-matrix.outputs.has_targets }}
+      release_tag: ${{ steps.resolve-version.outputs.release_tag }}
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: resolve-version
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          # ReleaseTag prefers the manual input and falls back to Cargo.toml version when left blank.
+          # ReleaseTag 优先使用手动输入；若留空，则回退到 Cargo.toml 中的版本号。
+          $releaseTag = $env:INPUT_VERSION
+          if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+            $cargoToml = Get-Content -Raw -LiteralPath "Cargo.toml"
+            $versionMatch = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"([^"]+)"')
+            if (-not $versionMatch.Success) {
+              throw "Unable to resolve version from Cargo.toml"
+            }
+            $releaseTag = "v$($versionMatch.Groups[1].Value)"
+          }
+
+          if ($releaseTag -notmatch '^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z\.-]+)?$') {
+            throw "Resolved release tag is invalid: $releaseTag"
+          }
+
+          "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Build matrix from manual runner inputs
         id: build-matrix
         shell: pwsh
@@ -156,8 +183,6 @@ jobs:
       # RELEASE_PACKAGE_DIR 保存最终面向用户的 runtime、SDK 与 demo 压缩包。
       RELEASE_PACKAGE_DIR: target/release-packages
     steps:
-      - uses: actions/checkout@v4
-
       - name: Setup Rust 1.94
         shell: pwsh
         run: |
@@ -747,8 +772,8 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/package_lua_runtime.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR"
           powershell -ExecutionPolicy Bypass -File scripts/package_ffi_sdk.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR"
-          powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode ffi -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ inputs.version }}"
-          powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode rust -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ inputs.version }}"
+          powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode ffi -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
+          powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode rust -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
           # ExpectedAssets prevents the release step from silently publishing an incomplete platform set.
           # ExpectedAssets 防止发布步骤静默上传缺少 runtime 等关键文件的平台产物集合。
           $expectedAssets = @(
@@ -773,8 +798,8 @@ jobs:
           set -euo pipefail
           bash scripts/package_lua_runtime.sh "${{ matrix.platform }}"
           bash scripts/package_ffi_sdk.sh "${{ matrix.platform }}"
-          bash scripts/package_demo.sh ffi "${{ matrix.platform }}" "${{ inputs.version }}"
-          bash scripts/package_demo.sh rust "${{ matrix.platform }}" "${{ inputs.version }}"
+          bash scripts/package_demo.sh ffi "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}"
+          bash scripts/package_demo.sh rust "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}"
           # ExpectedAssets prevents the release step from silently publishing an incomplete platform set.
           # ExpectedAssets 防止发布步骤静默上传缺少 runtime 等关键文件的平台产物集合。
           for asset in \
@@ -809,7 +834,7 @@ jobs:
         with:
           files: |
             ${{ env.RELEASE_PACKAGE_DIR }}/*.tar.gz
-          tag_name: ${{ inputs.version }}
+          tag_name: ${{ needs.prepare-matrix.outputs.release_tag }}
           body_path: ${{ env.RELEASE_PACKAGE_DIR }}/RELEASE_NOTES.md
           fail_on_unmatched_files: true
         env:
