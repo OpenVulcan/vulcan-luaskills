@@ -158,6 +158,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Rust 1.94
+        shell: pwsh
+        run: |
+          # InstallRustToolchain pins the compiler to the minimum version required by vldb-controller-client.
+          # InstallRustToolchain 将编译器固定到 vldb-controller-client 要求的最低版本。
+          rustup toolchain install 1.94.0 --profile minimal
+          rustup default 1.94.0
+          rustc --version
+          cargo --version
+
       - name: Restore deps from local state (Windows)
         id: local-deps-windows
         if: runner.os == 'Windows'
