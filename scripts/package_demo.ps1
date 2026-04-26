@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Mode = "ffi",
     [string]$Platform = "",
     [string]$OutputDir = "target\release-packages",
@@ -410,60 +410,57 @@ function Write-PackagedDemoReadme {
     $FetchAllCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat" } else { "./upgrade_deps.sh" }
     $FetchLuaCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat lua" } else { "./upgrade_deps.sh lua" }
     $FetchVldbCommand = if (Test-WindowsPackagePlatform -PlatformKey $Platform) { ".\upgrade_deps.bat vldb" } else { "./upgrade_deps.sh vldb" }
-    $ModeDescription = if ($Mode -eq "ffi") { 'FFI demo 默认通过 `lib/` 下的动态库运行 `examples/ffi/python/demo.py`，同时包含 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例。' } else { "Rust demo 通过包内 ``Cargo.toml`` 直接依赖 ``luaskills`` 的 ``$ReleaseTag`` tag，适合验证非 FFI 接入。" }
-    $ExamplesSection = if ($Mode -eq "ffi") { "- ``examples/ffi/``：完整 FFI 示例源码，包含 C、Go、Python、TypeScript 与共享 runtime 夹具。" } else { "" }
-    $ReadmeTemplate = @'
-# LuaSkills __MODE__ demo package
+    $PackageFile = "luaskills-demo-$Mode-$Platform.tar.gz"
+    $ModeDescription = if ($Mode -eq "ffi") {
+        "This FFI demo runs examples/ffi/python/demo.py through the packaged dynamic library and also includes the C, Go, Python, TypeScript, standard runtime, install smoke test, and host provider examples."
+    } else {
+        "This Rust demo depends on the luaskills crate at tag $ReleaseTag through the packaged Cargo.toml and is intended for validating the non-FFI integration path."
+    }
 
-这是 `luaskills-demo-__MODE__-__PLATFORM__.tar.gz` 解压后的发布包说明，路径与命令均按包根目录设计，不依赖仓库源码布局。
+    $ReadmeLines = @(
+        "# LuaSkills $Mode demo package",
+        "",
+        "This README describes the extracted $PackageFile package. Paths and commands are package-root based and do not require the source repository layout.",
+        "",
+        "## Package Contents",
+        "",
+        "- runtime/: default demo runtime root; fetch scripts can install lua-runtime-$Platform.tar.gz into it.",
+        "- scripts/: dependency fetch scripts for the current platform only.",
+        "- licenses/: project and bundled component license files.",
+        "- demo-manifest.json: package mode, platform, runtime root, and supported fetch targets."
+    )
 
-This README describes the extracted `luaskills-demo-__MODE__-__PLATFORM__.tar.gz` package. Paths and commands are package-root based and do not require the source repository layout.
+    if ($Mode -eq "ffi") {
+        $ReadmeLines += "- examples/ffi/: complete FFI examples for C, Go, Python, TypeScript, and the shared runtime fixture."
+    }
 
-## 包内容 / Package Contents
+    $ReadmeLines += @(
+        "",
+        $ModeDescription,
+        "",
+        "## Run",
+        "",
+        ('```' + $ShellName),
+        $RunCommand,
+        '```',
+        "",
+        "The run script only executes the demo and does not download dependencies automatically. Run this first when dependencies are missing or need to be refreshed:",
+        "",
+        ('```' + $ShellName),
+        $FetchAllCommand,
+        '```',
+        "",
+        "You can also fetch subsets on demand:",
+        "",
+        ('```' + $ShellName),
+        $FetchLuaCommand,
+        $FetchVldbCommand,
+        '```',
+        "",
+        "Windows packages include run.ps1, upgrade_deps.bat, and scripts/fetch_runtime_deps.ps1. Linux and macOS packages include run.sh, upgrade_deps.sh, and scripts/fetch_runtime_deps.sh."
+    )
 
-- `runtime/`：demo 默认 runtime 根目录，可由拉取脚本安装 `lua-runtime-__PLATFORM__.tar.gz`。
-- `scripts/`：仅包含当前平台可用的依赖拉取脚本。
-- `licenses/`：项目与随包组件授权材料。
-- `demo-manifest.json`：包模式、平台、runtime 根和可拉取目标清单。
-__EXAMPLES_SECTION__
-
-__MODE_DESCRIPTION__
-
-## 运行 / Run
-
-```__SHELL_NAME__
-__RUN_COMMAND__
-```
-
-`run` 脚本只负责运行 demo，不会自动下载依赖。首次使用或升级依赖时请先执行：
-
-```__SHELL_NAME__
-__FETCH_ALL_COMMAND__
-```
-
-也可以按需单独拉取：
-
-```__SHELL_NAME__
-__FETCH_LUA_COMMAND__
-__FETCH_VLDB_COMMAND__
-```
-
-Windows 包包含 `run.ps1`、`upgrade_deps.bat` 与 `scripts/fetch_runtime_deps.ps1`；Linux/macOS 包包含 `run.sh`、`upgrade_deps.sh` 与 `scripts/fetch_runtime_deps.sh`。
-
-Windows packages include `run.ps1`, `upgrade_deps.bat`, and `scripts/fetch_runtime_deps.ps1`; Linux/macOS packages include `run.sh`, `upgrade_deps.sh`, and `scripts/fetch_runtime_deps.sh`.
-'@
-
-    $ReadmeContent = $ReadmeTemplate
-    $ReadmeContent = $ReadmeContent.Replace("__MODE__", $Mode)
-    $ReadmeContent = $ReadmeContent.Replace("__PLATFORM__", $Platform)
-    $ReadmeContent = $ReadmeContent.Replace("__MODE_DESCRIPTION__", $ModeDescription)
-    $ReadmeContent = $ReadmeContent.Replace("__EXAMPLES_SECTION__", $ExamplesSection)
-    $ReadmeContent = $ReadmeContent.Replace("__SHELL_NAME__", $ShellName)
-    $ReadmeContent = $ReadmeContent.Replace("__RUN_COMMAND__", $RunCommand)
-    $ReadmeContent = $ReadmeContent.Replace("__FETCH_ALL_COMMAND__", $FetchAllCommand)
-    $ReadmeContent = $ReadmeContent.Replace("__FETCH_LUA_COMMAND__", $FetchLuaCommand)
-    $ReadmeContent = $ReadmeContent.Replace("__FETCH_VLDB_COMMAND__", $FetchVldbCommand)
-    $ReadmeContent | Set-Content -Path (Join-Path $PackageRoot "README.md") -Encoding UTF8
+    ($ReadmeLines -join [Environment]::NewLine) | Set-Content -Path (Join-Path $PackageRoot "README.md") -Encoding UTF8
 }
 
 if (-not $Platform) {
@@ -513,7 +510,7 @@ if ($Mode -eq "ffi") {
 } else {
     $CargoTomlPath = Join-Path $PackageRoot "Cargo.toml"
     if (Test-Path -LiteralPath $CargoTomlPath) {
-        (Get-Content -Raw -Path $CargoTomlPath).Replace('luaskills = { path = "../.." }', "luaskills = { git = `"https://github.com/LuaSkills/luaskills.git`", tag = `"$ReleaseTag`" }") |
+        (Get-Content -Raw -Path $CargoTomlPath).Replace('luaskills = { path = "../.." }', ('luaskills = {{ git = "https://github.com/LuaSkills/luaskills.git", tag = "{0}" }}' -f $ReleaseTag)) |
             Set-Content -Path $CargoTomlPath -Encoding UTF8
     }
 }
