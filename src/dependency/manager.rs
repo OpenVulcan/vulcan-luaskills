@@ -201,6 +201,53 @@ impl DependencyManager {
         platform_key: &str,
         install_root: &Path,
     ) -> Result<(), String> {
+        if self
+            .find_existing_local_dependency_request(
+                skill_id,
+                kind,
+                dependency_name,
+                version.as_deref(),
+                scope,
+                package,
+                platform_key,
+                install_root,
+            )?
+            .is_some()
+        {
+            log_info(format!(
+                "[LuaSkills:dependency] Skill '{}' reuses existing dependency '{}' on {}",
+                skill_id, dependency_name, platform_key
+            ));
+            return Ok(());
+        }
+
+        if scope == DependencyScope::Host {
+            if required {
+                return Err(format!(
+                    "required host dependency '{}' is missing",
+                    dependency_name
+                ));
+            }
+            log_warn(format!(
+                "[LuaSkills:dependency] Optional host dependency '{}' is missing",
+                dependency_name
+            ));
+            return Ok(());
+        }
+        if !self.config.allow_network_download {
+            if required {
+                return Err(format!(
+                    "required dependency '{}' is missing and network download is disabled",
+                    dependency_name
+                ));
+            }
+            log_warn(format!(
+                "[LuaSkills:dependency] Optional dependency '{}' is missing and download is disabled",
+                dependency_name
+            ));
+            return Ok(());
+        }
+
         let resolved_request = self.resolve_dependency_request(
             skill_id,
             kind,
@@ -223,33 +270,6 @@ impl DependencyManager {
                 Ok(())
             }
             DependencyDetectionStatus::Missing => {
-                if scope == DependencyScope::Host {
-                    if required {
-                        return Err(format!(
-                            "required host dependency '{}' is missing",
-                            dependency_name
-                        ));
-                    }
-                    log_warn(format!(
-                        "[LuaSkills:dependency] Optional host dependency '{}' is missing",
-                        dependency_name
-                    ));
-                    return Ok(());
-                }
-                if !self.config.allow_network_download {
-                    if required {
-                        return Err(format!(
-                            "required dependency '{}' is missing and network download is disabled",
-                            dependency_name
-                        ));
-                    }
-                    log_warn(format!(
-                        "[LuaSkills:dependency] Optional dependency '{}' is missing and download is disabled",
-                        dependency_name
-                    ));
-                    return Ok(());
-                }
-
                 let cache_key = format!(
                     "{}-{}-{}",
                     match kind {
@@ -312,6 +332,135 @@ impl DependencyManager {
                 Ok(())
             }
         }
+    }
+
+    /// Find one already-installed dependency request without resolving any remote source.
+    /// 在不解析任何远程来源的前提下查找一个已安装依赖请求。
+    #[allow(clippy::too_many_arguments)]
+    fn find_existing_local_dependency_request(
+        &self,
+        skill_id: &str,
+        kind: SkillDependencyKind,
+        dependency_name: &str,
+        version: Option<&str>,
+        scope: DependencyScope,
+        package: Option<&crate::skill::dependencies::DependencyPackageSpec>,
+        platform_key: &str,
+        install_root: &Path,
+    ) -> Result<Option<ResolvedDependencyRequest>, String> {
+        let Some(package) = package else {
+            return Ok(None);
+        };
+        for request in self.local_dependency_probe_requests(
+            skill_id,
+            kind,
+            dependency_name,
+            version,
+            scope,
+            package,
+            platform_key,
+            install_root,
+        ) {
+            if matches!(
+                self.detect_dependency(&request)?,
+                DependencyDetectionStatus::Present
+            ) {
+                return Ok(Some(request));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Build local-only dependency probe requests before network-backed resolution is needed.
+    /// 在需要网络解析前构造仅用于本地探测的依赖请求。
+    #[allow(clippy::too_many_arguments)]
+    fn local_dependency_probe_requests(
+        &self,
+        skill_id: &str,
+        kind: SkillDependencyKind,
+        dependency_name: &str,
+        version: Option<&str>,
+        scope: DependencyScope,
+        package: &crate::skill::dependencies::DependencyPackageSpec,
+        platform_key: &str,
+        install_root: &Path,
+    ) -> Vec<ResolvedDependencyRequest> {
+        let mut requests = Vec::new();
+        for version_candidate in local_dependency_version_candidates(version) {
+            requests.extend(local_dependency_probe_request_variants(
+                skill_id,
+                kind,
+                dependency_name,
+                version_candidate.as_deref(),
+                scope,
+                package,
+                platform_key,
+                install_root,
+            ));
+        }
+
+        if version.is_none() {
+            requests.extend(self.local_unversioned_dependency_probe_requests(
+                skill_id,
+                kind,
+                dependency_name,
+                scope,
+                package,
+                platform_key,
+                install_root,
+            ));
+        }
+
+        requests
+    }
+
+    /// Build probe requests for existing version directories when the manifest omits a version.
+    /// 当清单省略版本时，根据已有版本目录构造探测请求。
+    #[allow(clippy::too_many_arguments)]
+    fn local_unversioned_dependency_probe_requests(
+        &self,
+        skill_id: &str,
+        kind: SkillDependencyKind,
+        dependency_name: &str,
+        scope: DependencyScope,
+        package: &crate::skill::dependencies::DependencyPackageSpec,
+        platform_key: &str,
+        install_root: &Path,
+    ) -> Vec<ResolvedDependencyRequest> {
+        let normalized_name = normalize_dependency_path_component(dependency_name);
+        let dependency_root = match scope {
+            DependencyScope::Host => install_root.join(normalized_name),
+            DependencyScope::Skill => install_root.join(skill_id).join(normalized_name),
+        };
+        let Ok(version_entries) = fs::read_dir(&dependency_root) else {
+            return Vec::new();
+        };
+
+        let normalized_platform = normalize_dependency_path_component(platform_key);
+        version_entries
+            .filter_map(Result::ok)
+            .flat_map(|entry| {
+                let file_type = entry.file_type().ok()?;
+                if !file_type.is_dir() {
+                    return None;
+                }
+                let version_component = entry.file_name().to_string_lossy().to_string();
+                let candidate_root = entry.path().join(&normalized_platform);
+                if !candidate_root.is_dir() {
+                    return None;
+                }
+                Some(local_dependency_probe_request_variants_for_root(
+                    kind,
+                    dependency_name,
+                    Some(version_component.as_str()),
+                    scope,
+                    platform_key,
+                    candidate_root,
+                    package,
+                ))
+            })
+            .flatten()
+            .collect()
     }
 
     /// Resolve one dependency declaration into a concrete install request.
@@ -672,6 +821,109 @@ fn build_dependency_install_root(
     }
 }
 
+/// Build local version candidates that may map to one already-installed dependency root.
+/// 构造可能映射到已安装依赖根目录的本地版本候选值。
+fn local_dependency_version_candidates(version: Option<&str>) -> Vec<Option<String>> {
+    let Some(raw_version) = version else {
+        return vec![None];
+    };
+    let trimmed_version = raw_version.trim();
+    let normalized_version = trimmed_version.trim_start_matches('v');
+    let mut candidates = Vec::new();
+    push_unique_optional_candidate(&mut candidates, Some(trimmed_version.to_string()));
+    if normalized_version != trimmed_version {
+        push_unique_optional_candidate(&mut candidates, Some(normalized_version.to_string()));
+    }
+    candidates
+}
+
+/// Build local tag candidates used for export-template probing without GitHub access.
+/// 构造不访问 GitHub 时用于导出模板探测的本地标签候选值。
+fn local_dependency_tag_candidates(version: Option<&str>) -> Vec<Option<String>> {
+    let Some(raw_version) = version else {
+        return vec![None];
+    };
+    let trimmed_version = raw_version.trim();
+    let normalized_version = trimmed_version.trim_start_matches('v');
+    let mut candidates = Vec::new();
+    push_unique_optional_candidate(&mut candidates, Some(trimmed_version.to_string()));
+    if normalized_version != trimmed_version {
+        push_unique_optional_candidate(&mut candidates, Some(normalized_version.to_string()));
+    }
+    if !normalized_version.is_empty() {
+        push_unique_optional_candidate(&mut candidates, Some(format!("v{}", normalized_version)));
+    }
+    candidates
+}
+
+/// Append one optional string candidate while preserving insertion order.
+/// 在保留插入顺序的同时追加一个可选字符串候选值。
+fn push_unique_optional_candidate(candidates: &mut Vec<Option<String>>, candidate: Option<String>) {
+    if !candidates.iter().any(|value| value == &candidate) {
+        candidates.push(candidate);
+    }
+}
+
+/// Build local probe request variants for one dependency root derived from a version candidate.
+/// 为一个由版本候选值派生的依赖根目录构造本地探测请求变体。
+#[allow(clippy::too_many_arguments)]
+fn local_dependency_probe_request_variants(
+    skill_id: &str,
+    kind: SkillDependencyKind,
+    dependency_name: &str,
+    version: Option<&str>,
+    scope: DependencyScope,
+    package: &crate::skill::dependencies::DependencyPackageSpec,
+    platform_key: &str,
+    install_root: &Path,
+) -> Vec<ResolvedDependencyRequest> {
+    let candidate_root = build_dependency_install_root(
+        install_root,
+        scope,
+        skill_id,
+        dependency_name,
+        version,
+        platform_key,
+    );
+    local_dependency_probe_request_variants_for_root(
+        kind,
+        dependency_name,
+        version,
+        scope,
+        platform_key,
+        candidate_root,
+        package,
+    )
+}
+
+/// Build local probe request variants for one concrete dependency root and tag candidate set.
+/// 为一个具体依赖根目录和标签候选集合构造本地探测请求变体。
+#[allow(clippy::too_many_arguments)]
+fn local_dependency_probe_request_variants_for_root(
+    kind: SkillDependencyKind,
+    dependency_name: &str,
+    version: Option<&str>,
+    scope: DependencyScope,
+    platform_key: &str,
+    install_root: PathBuf,
+    package: &crate::skill::dependencies::DependencyPackageSpec,
+) -> Vec<ResolvedDependencyRequest> {
+    local_dependency_tag_candidates(version)
+        .into_iter()
+        .map(|tag| ResolvedDependencyRequest {
+            kind,
+            name: dependency_name.to_string(),
+            scope,
+            platform_key: platform_key.to_string(),
+            download_url: String::new(),
+            version: version.map(str::to_string),
+            install_root: install_root.clone(),
+            archive_type: package.archive_type,
+            exports: resolve_export_templates(&package.exports, version, tag.as_deref()),
+        })
+        .collect()
+}
+
 /// Normalize one dependency path component for stable cross-platform directory generation.
 /// 归一化单个依赖路径片段，以生成稳定的跨平台目录结构。
 fn normalize_dependency_path_component(raw: &str) -> String {
@@ -726,7 +978,7 @@ mod tests {
     use super::*;
     use crate::skill::dependencies::{
         DependencyArchiveType, DependencyExportSpec, DependencyPackageSpec, DependencySourceSpec,
-        SkillDependencyManifest, ToolDependencySpec, UrlSourceSpec,
+        GithubReleaseSourceSpec, SkillDependencyManifest, ToolDependencySpec, UrlSourceSpec,
     };
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -785,6 +1037,253 @@ mod tests {
             },
             packages,
         }
+    }
+
+    /// Build one GitHub-release tool dependency that must not touch GitHub when exports exist.
+    /// 构造一个在导出产物已存在时不应访问 GitHub 的 GitHub Release 工具依赖。
+    fn github_tool_dependency(
+        name: &str,
+        version: Option<&str>,
+        platform_key: &str,
+    ) -> ToolDependencySpec {
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            platform_key.to_string(),
+            DependencyPackageSpec {
+                archive_type: DependencyArchiveType::Zip,
+                asset_name: Some("demo-{version}.zip".to_string()),
+                url: None,
+                exports: vec![DependencyExportSpec {
+                    archive_path: "demo-{version}.bin".to_string(),
+                    target_path: "bin/demo-{version}.bin".to_string(),
+                    executable: false,
+                }],
+            },
+        );
+        ToolDependencySpec {
+            name: name.to_string(),
+            version: version.map(str::to_string),
+            required: true,
+            scope: DependencyScope::Skill,
+            source: DependencySourceSpec {
+                source_type: DependencySourceType::GithubRelease,
+                github: Some(GithubReleaseSourceSpec {
+                    repo: "OpenVulcan/demo-dependency".to_string(),
+                    tag_api: None,
+                }),
+                url: None,
+                skilllist: None,
+            },
+            packages,
+        }
+    }
+
+    /// Build one GitHub-release tool dependency whose export target uses the release tag.
+    /// 构造一个导出目标使用 release 标签的 GitHub Release 工具依赖。
+    fn github_tagged_tool_dependency(
+        name: &str,
+        version: Option<&str>,
+        platform_key: &str,
+    ) -> ToolDependencySpec {
+        let mut dependency = github_tool_dependency(name, version, platform_key);
+        let package = dependency
+            .packages
+            .get_mut(platform_key)
+            .expect("test package should exist");
+        package.exports = vec![DependencyExportSpec {
+            archive_path: "demo-{tag}.bin".to_string(),
+            target_path: "bin/demo-{tag}.bin".to_string(),
+            executable: false,
+        }];
+        dependency
+    }
+
+    /// Existing GitHub-release exports should enable the skill without remote resolution.
+    /// 已存在的 GitHub Release 导出产物应直接启用 skill 而不进行远程解析。
+    #[test]
+    fn ensure_dependency_reuses_existing_github_release_exports_without_remote_resolution() {
+        let platform_key = current_platform_key();
+        if platform_key == "unknown" {
+            return;
+        }
+
+        let (mut manager, root) = test_manager();
+        manager.config.allow_network_download = true;
+        manager.config.github_api_base_url = Some("https://example.invalid/github-api".to_string());
+        manager.downloader = DownloadManager::new(DownloadManagerConfig {
+            cache_root: manager.config.download_cache_root.clone(),
+            allow_network_download: manager.config.allow_network_download,
+            github_base_url: manager.config.github_base_url.clone(),
+            github_api_base_url: manager.config.github_api_base_url.clone(),
+        });
+        let skill_id = "demo-skill";
+        let manifest = SkillDependencyManifest {
+            tool_dependencies: vec![github_tool_dependency(
+                "demo-tool",
+                Some("1.2.3"),
+                platform_key,
+            )],
+            lua_dependencies: Vec::new(),
+            ffi_dependencies: Vec::new(),
+        };
+        let dependency_root = build_dependency_install_root(
+            &manager.config.tool_root,
+            DependencyScope::Skill,
+            skill_id,
+            "demo-tool",
+            Some("1.2.3"),
+            platform_key,
+        );
+        fs::create_dir_all(dependency_root.join("bin")).unwrap();
+        fs::write(dependency_root.join("bin").join("demo-1.2.3.bin"), b"ready").unwrap();
+
+        manager
+            .ensure_skill_dependencies(skill_id, &manifest)
+            .expect("existing exports should bypass GitHub release lookup");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Existing version directories should be reused when a GitHub dependency omits version.
+    /// 当 GitHub 依赖省略版本时，应复用已有版本目录中的导出产物。
+    #[test]
+    fn ensure_dependency_reuses_existing_unversioned_github_release_exports() {
+        let platform_key = current_platform_key();
+        if platform_key == "unknown" {
+            return;
+        }
+
+        let (mut manager, root) = test_manager();
+        manager.config.allow_network_download = true;
+        manager.config.github_api_base_url = Some("https://example.invalid/github-api".to_string());
+        manager.downloader = DownloadManager::new(DownloadManagerConfig {
+            cache_root: manager.config.download_cache_root.clone(),
+            allow_network_download: manager.config.allow_network_download,
+            github_base_url: manager.config.github_base_url.clone(),
+            github_api_base_url: manager.config.github_api_base_url.clone(),
+        });
+        let skill_id = "demo-skill";
+        let manifest = SkillDependencyManifest {
+            tool_dependencies: vec![github_tool_dependency("demo-tool", None, platform_key)],
+            lua_dependencies: Vec::new(),
+            ffi_dependencies: Vec::new(),
+        };
+        let dependency_root = build_dependency_install_root(
+            &manager.config.tool_root,
+            DependencyScope::Skill,
+            skill_id,
+            "demo-tool",
+            Some("1.2.3"),
+            platform_key,
+        );
+        fs::create_dir_all(dependency_root.join("bin")).unwrap();
+        fs::write(dependency_root.join("bin").join("demo-1.2.3.bin"), b"ready").unwrap();
+
+        manager
+            .ensure_skill_dependencies(skill_id, &manifest)
+            .expect("existing version directories should bypass GitHub release lookup");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Existing GitHub-release exports using `{tag}` should reuse the likely `v` tag variant.
+    /// 使用 `{tag}` 的 GitHub Release 已有导出产物应复用可能的 `v` 标签变体。
+    #[test]
+    fn ensure_dependency_reuses_existing_github_release_tag_exports_without_remote_resolution() {
+        let platform_key = current_platform_key();
+        if platform_key == "unknown" {
+            return;
+        }
+
+        let (mut manager, root) = test_manager();
+        manager.config.allow_network_download = true;
+        manager.config.github_api_base_url = Some("https://example.invalid/github-api".to_string());
+        manager.downloader = DownloadManager::new(DownloadManagerConfig {
+            cache_root: manager.config.download_cache_root.clone(),
+            allow_network_download: manager.config.allow_network_download,
+            github_base_url: manager.config.github_base_url.clone(),
+            github_api_base_url: manager.config.github_api_base_url.clone(),
+        });
+        let skill_id = "demo-skill";
+        let manifest = SkillDependencyManifest {
+            tool_dependencies: vec![github_tagged_tool_dependency(
+                "demo-tool",
+                Some("1.2.3"),
+                platform_key,
+            )],
+            lua_dependencies: Vec::new(),
+            ffi_dependencies: Vec::new(),
+        };
+        let dependency_root = build_dependency_install_root(
+            &manager.config.tool_root,
+            DependencyScope::Skill,
+            skill_id,
+            "demo-tool",
+            Some("1.2.3"),
+            platform_key,
+        );
+        fs::create_dir_all(dependency_root.join("bin")).unwrap();
+        fs::write(
+            dependency_root.join("bin").join("demo-v1.2.3.bin"),
+            b"ready",
+        )
+        .unwrap();
+
+        manager
+            .ensure_skill_dependencies(skill_id, &manifest)
+            .expect("existing tag exports should bypass GitHub release lookup");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Existing unversioned GitHub exports using `{tag}` should reuse scanned version roots.
+    /// 未声明版本且使用 `{tag}` 的 GitHub 已有导出产物应复用扫描到的版本根目录。
+    #[test]
+    fn ensure_dependency_reuses_existing_unversioned_github_release_tag_exports() {
+        let platform_key = current_platform_key();
+        if platform_key == "unknown" {
+            return;
+        }
+
+        let (mut manager, root) = test_manager();
+        manager.config.allow_network_download = true;
+        manager.config.github_api_base_url = Some("https://example.invalid/github-api".to_string());
+        manager.downloader = DownloadManager::new(DownloadManagerConfig {
+            cache_root: manager.config.download_cache_root.clone(),
+            allow_network_download: manager.config.allow_network_download,
+            github_base_url: manager.config.github_base_url.clone(),
+            github_api_base_url: manager.config.github_api_base_url.clone(),
+        });
+        let skill_id = "demo-skill";
+        let manifest = SkillDependencyManifest {
+            tool_dependencies: vec![github_tagged_tool_dependency(
+                "demo-tool",
+                None,
+                platform_key,
+            )],
+            lua_dependencies: Vec::new(),
+            ffi_dependencies: Vec::new(),
+        };
+        let dependency_root = build_dependency_install_root(
+            &manager.config.tool_root,
+            DependencyScope::Skill,
+            skill_id,
+            "demo-tool",
+            Some("1.2.3"),
+            platform_key,
+        );
+        fs::create_dir_all(dependency_root.join("bin")).unwrap();
+        fs::write(
+            dependency_root.join("bin").join("demo-v1.2.3.bin"),
+            b"ready",
+        )
+        .unwrap();
+
+        manager
+            .ensure_skill_dependencies(skill_id, &manifest)
+            .expect("existing unversioned tag exports should bypass GitHub release lookup");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Updated-skill cleanup removes stale private dependency roots while preserving unchanged ones.

@@ -70,8 +70,13 @@ impl LuaRuntimeSpaceControllerBridge {
             client.connect().await
         })
         .map_err(|error| format!("failed to connect space controller client: {}", error))?;
-        let binding_scope_id = resolve_controller_binding_scope_id(&runtime, &client)
-            .map_err(|error| format!("failed to resolve space controller session scope: {}", error))?;
+        let binding_scope_id =
+            resolve_controller_binding_scope_id(&runtime, &client).map_err(|error| {
+                format!(
+                    "failed to resolve space controller session scope: {}",
+                    error
+                )
+            })?;
         Ok(Arc::new(Self {
             client,
             runtime: Mutex::new(runtime),
@@ -110,7 +115,10 @@ impl LuaRuntimeSpaceControllerBridge {
 
     /// Build one client-scoped controller binding identifier while preserving the stable host binding tag for diagnostics.
     /// 构造一个按客户端实例隔离的控制器绑定标识，同时保留稳定宿主绑定标签用于诊断。
-    pub fn controller_binding_id_for_binding(&self, binding: &RuntimeDatabaseBindingContext) -> String {
+    pub fn controller_binding_id_for_binding(
+        &self,
+        binding: &RuntimeDatabaseBindingContext,
+    ) -> String {
         build_controller_binding_id(binding.binding_tag.as_str(), self.binding_scope_id.as_str())
     }
 }
