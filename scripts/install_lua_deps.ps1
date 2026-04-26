@@ -311,6 +311,43 @@ $UserVcpkgDir = Join-Path $env:USERPROFILE ".vcpkg"
 function Check-Vcpkg {
     $localBinName = if ($script:IsWindowsPlatform) { "vcpkg.exe" } else { "vcpkg" }
 
+    # 0. Use a globally discoverable vcpkg first when it is already on PATH.
+    $command = Get-Command $localBinName -ErrorAction SilentlyContinue
+    if ($command -and $command.Source) {
+        $script:VcpkgExe = $command.Source
+        $ver = & $script:VcpkgExe version 2>$null | Select-Object -First 1
+        return "$ver (PATH)"
+    }
+
+    # 0.1. Honor VCPKG_ROOT when the caller or bootstrap script exposes it.
+    if ($env:VCPKG_ROOT) {
+        $envExe = Join-Path $env:VCPKG_ROOT $localBinName
+        if (Test-Path $envExe) {
+            $script:VcpkgExe = $envExe
+            $ver = & $envExe version 2>$null | Select-Object -First 1
+            return "$ver (VCPKG_ROOT)"
+        }
+    }
+
+    # 0.2. Visual Studio hosted images can place vcpkg under the VC directory.
+    $vsVcpkgCandidates = @()
+    if ($script:VsInstallPath) {
+        $vsVcpkgCandidates += (Join-Path $script:VsInstallPath "VC\vcpkg\$localBinName")
+    }
+    if ($env:VCToolsInstallDir) {
+        $vsVcpkgCandidates += (Join-Path (Split-Path -Parent $env:VCToolsInstallDir.TrimEnd('\')) "vcpkg\$localBinName")
+    }
+    if ($env:VSINSTALLDIR) {
+        $vsVcpkgCandidates += (Join-Path $env:VSINSTALLDIR "VC\vcpkg\$localBinName")
+    }
+    foreach ($candidate in ($vsVcpkgCandidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-Path $candidate) {
+            $script:VcpkgExe = $candidate
+            $ver = & $candidate version 2>$null | Select-Object -First 1
+            return "$ver (Visual Studio)"
+        }
+    }
+
     # 1. From user's ~/.vcpkg (installed via vcpkg-init.ps1) - use directly, no copy needed
     $userExe = Join-Path $UserVcpkgDir $localBinName
     if (Test-Path $userExe) {
