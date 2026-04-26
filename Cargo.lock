@@ -872,7 +872,8 @@ dependencies = [
 [[package]]
 name = "mlua"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/mlua-rs/mlua#72824a468a1fdb78c3cb40c2709be2fa714ce1cd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab462a58a9c7c422e84f20908f70840a3478503d2d295b5c3ec1995abcad4119"
 dependencies = [
  "bstr",
  "either",
@@ -889,7 +890,8 @@ dependencies = [
 [[package]]
 name = "mlua-sys"
 version = "0.11.0-rc.1"
-source = "git+https://github.com/mlua-rs/mlua#72824a468a1fdb78c3cb40c2709be2fa714ce1cd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e9871be51a244d4b9b75aa38d2859c09869d55074dcec5507c25c2cade7ad7"
 dependencies = [
  "cc",
  "cfg-if",
@@ -1983,7 +1985,8 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vldb-controller-client"
 version = "0.2.1"
-source = "git+https://github.com/OpenVulcan/vldb-controller.git?tag=v0.2.1#3f66926fa2eab036d13025f9139287de6cee38c3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8d6cb87b92b27403eda4eb9d254f811ba536520eced69146702b0e407975394"
 dependencies = [
  "prost",
  "protoc-bin-vendored",
