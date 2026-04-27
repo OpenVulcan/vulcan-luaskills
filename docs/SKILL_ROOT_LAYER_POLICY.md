@@ -34,10 +34,14 @@ ROOT -> PROJECT -> USER
 
 规则如下：
 
-1. `ROOT` 中存在某个 `skill_id` 时，`PROJECT` 和 `USER` 中的同名 skill 不应被加载。
+1. `ROOT` 中存在某个 `skill_id` 时，该 `skill_id` 由系统层全局占用，`PROJECT` 和 `USER` 中的同名 skill 不应被加载。
 2. `PROJECT` 中存在某个 `skill_id` 且 `ROOT` 中不存在同名 skill 时，`PROJECT` 覆盖 `USER`。
 3. `USER` 是最低优先级用户可写层。
 4. `ROOT` 级 skill 一旦通过 system tools 安装，就表示宿主声明该 skill 属于系统控制级，低层同名实现必须让位。
+5. 无论调用方是 `System` 还是 `DelegatedTool`，只要 `ROOT` 已存在同名 `skill_id`，都禁止向 `PROJECT` / `USER` 主动 install 或 update 同名 skill。
+6. `PROJECT` / `USER` 中已经存在的同名残留允许通过显式目标 uninstall 清理；清理残留不会影响 `ROOT` 中的系统 skill。
+
+LuaSkills 不再使用 `protected_skills` 或按 `skill_id` 配置的默认保护清单。保护不是配置出来的，而是由 `ROOT` 层级归属天然决定。
 
 这套模型故意不支持多层 `PROJECT_A / PROJECT_B / ORG / WORKSPACE` 的用户可见层级。若宿主内部确实有更复杂的组织结构，应在宿主侧折叠成单个对外 `PROJECT` 标签。
 
@@ -54,6 +58,8 @@ ROOT -> PROJECT -> USER
 5. 暴露把目标层级设为 `ROOT` 的选项。
 
 如果宿主允许普通桥接指定目标层级，目标层级只能来自宿主声明的可操作层级列表。未指定目标层级时，普通安装默认优先落到 `USER`，没有 `USER` 时才落到 `PROJECT`；如果当前只有 `ROOT`，普通安装必须失败。
+
+如果 `ROOT` 中已有同名 `skill_id`，普通 install / update 必须失败并提示该 skill 由系统层管理；普通 uninstall 可以用于删除 `PROJECT` / `USER` 中的同名残留。
 
 ## 5. 层级列表函数
 
@@ -100,6 +106,17 @@ vulcan.runtime.skills.layers()
 
 system tools 是宿主控制面，可以安装、更新、删除 `ROOT` 级 skill。未显式传入目标 root 时，system install 默认只允许写入已配置的 `ROOT`；如果 root 链缺少 `ROOT`，必须失败，不能回退到普通层。
 
+system 管理入口必须区分宿主注入的权限上下文：
+
+```text
+System = 可以写 ROOT
+DelegatedTool = 普通 tools 委托权限，不能写 ROOT，也看不到 ROOT skills
+```
+
+可见性查询与 prompt completion 属于 authority 边界：`list_entries`、`list_skill_help`、`render_skill_help_detail`、`prompt_argument_completions`、`is_skill`、`skill_name_for_tool` 等入口在 `DelegatedTool` 下不得返回 `ROOT` skill 信息。`call_skill` 与 `run_lua` 是运行时执行面，面向当前已激活的 skill，不作为 `ROOT` 可见性或技能管理权限边界；如果宿主不希望普通用户执行任意 Lua，应在暴露 `run_lua` 前自行封装权限。
+
+`System` 不是“跳过规则”。它与 `DelegatedTool` 的唯一区别是是否允许管理 `ROOT` 层 skill；ROOT 同名占用、普通层 install/update 冲突、普通层残留清理等规则完全一致。
+
 建议宿主将面向用户或 AI 的技能管理能力组合成一个统一工具，例如：
 
 ```text
@@ -112,7 +129,10 @@ luaskills-manager(action, layer?, skill_id?, source?, options?)
 2. `layer` 对普通用户默认只允许 `PROJECT` / `USER`。
 3. 默认安装到 `USER` 还是 `PROJECT` 由宿主策略决定。
 4. 不建议向普通用户开放 `ROOT` 级 skill 的调整能力。
-5. 若确需开放 `ROOT` 操作，应只放在宿主内部维护、管理员模式、修复流程或受控 system updater 中。
+5. 若确需开放 system tools 给普通 tools，应由宿主 wrapper 固定注入 `DelegatedTool` authority，而不是让调用方自由声明权限。
+6. 若确需开放 `ROOT` 操作，应只放在宿主内部维护、管理员模式、修复流程或受控 system updater 中，并固定注入 `System` authority。
+
+如果宿主只配置 `ROOT`，却仍希望让用户增删改 skill，本质上是在让用户操作系统层。LuaSkills 不会把这种场景伪装成普通 skills plane；宿主必须自行完成权限、白名单、确认、审计和合法性判断。
 
 ## 7. ROOT 手工修改与修复建议
 

@@ -96,7 +96,7 @@
 
 这样做的目的，是把“主调用链稳定性”和“扩展能力接入”分开验证。
 
-接入 `install / update / uninstall` 前，宿主应先固定 skill root 层级策略：正式对外语义为 `ROOT -> PROJECT -> USER`，启动或加载时必须传入 `ROOT` root。普通用户管理面只操作实际存在的 `PROJECT` / `USER`，`ROOT` 级调整只通过 system tools 或受控 system updater 执行；system install 缺少 `ROOT` 时应失败，不应回退到普通层。
+接入 `install / update / uninstall` 前，宿主应先固定 skill root 层级策略：正式对外语义为 `ROOT -> PROJECT -> USER`，启动或加载时必须传入 `ROOT` root。普通用户管理面只操作实际存在的 `PROJECT` / `USER`，`ROOT` 级调整只通过注入 `System` authority 的 system tools 或受控 system updater 执行；若 system tools、查询或 prompt completion 被封装给普通 tools，应注入 `DelegatedTool`，且 system install 缺少 `ROOT` 时应失败，不应回退到普通层。运行时调用工具面向当前已激活 skill，不作为 root 管理权限边界。
 
 ## 7. 推荐查看的示例
 

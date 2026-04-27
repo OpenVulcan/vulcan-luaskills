@@ -1,6 +1,5 @@
 use crate::host::database::{LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode};
 use crate::runtime_context::RuntimeRequestContext;
-use crate::skill::manager::SkillProtectionConfig;
 use crate::tool_cache::ToolCacheConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -162,9 +161,6 @@ pub struct LuaRuntimeHostOptions {
     /// Optional unified skill config file path owned by the host.
     /// 由宿主拥有的可选统一技能配置文件路径。
     pub skill_config_file_path: Option<PathBuf>,
-    /// Host-provided protected skill identifiers reserved for the system plane.
-    /// 由宿主提供、保留给 system 平面的受保护技能标识符。
-    pub protection: SkillProtectionConfig,
     /// Whether the runtime is allowed to perform network downloads while installing dependencies.
     /// 运行时在安装依赖时是否允许执行网络下载。
     pub allow_network_download: bool,

@@ -92,7 +92,7 @@ func ensureStandardFixtureLayout(root string) {
 func printEntryCount(engineID C.uint64_t) int {
 	var entryList *C.FfiRuntimeEntryDescriptorList
 	var errorOut C.FfiOwnedBuffer
-	mustOK(C.luaskills_ffi_list_entries(engineID, &entryList, &errorOut), errorOut)
+	mustOK(C.luaskills_ffi_list_entries(engineID, C.LUASKILLS_SKILL_AUTHORITY_SYSTEM, &entryList, &errorOut), errorOut)
 	if entryList == nil {
 		fmt.Println("Current entry count: 0")
 		return 0
@@ -149,8 +149,6 @@ func main() {
 		state_dir_name:                   C.CString("state"),
 		database_dir_name:                C.CString("databases"),
 		skill_config_file_path:           nil,
-		protected_skill_ids:              nil,
-		protected_skill_ids_len:          0,
 		allow_network_download:           0,
 		github_base_url:                  nil,
 		github_api_base_url:              nil,

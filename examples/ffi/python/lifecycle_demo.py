@@ -14,6 +14,7 @@ from demo import (
     FfiRuntimeEntryDescriptorList,
     FfiRuntimeInvocationResult,
     FfiRuntimeSkillRoot,
+    LUASKILLS_SKILL_AUTHORITY_SYSTEM,
     ensure_standard_fixture_layout,
     load_library,
     make_borrowed_buffer,
@@ -34,6 +35,7 @@ def print_entry_count(engine_id: int, library: ctypes.CDLL) -> int:
     must_ok(
         library.luaskills_ffi_list_entries(
             engine_id,
+            LUASKILLS_SKILL_AUTHORITY_SYSTEM,
             ctypes.byref(entries_ptr),
             ctypes.byref(error_buffer),
         ),
@@ -101,6 +103,7 @@ def main() -> None:
     ]
     library.luaskills_ffi_list_entries.argtypes = [
         ctypes.c_uint64,
+        ctypes.c_int32,
         ctypes.POINTER(ctypes.POINTER(FfiRuntimeEntryDescriptorList)),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
@@ -154,8 +157,6 @@ def main() -> None:
     host.dependency_dir_name = b"dependencies"
     host.state_dir_name = b"state"
     host.database_dir_name = b"databases"
-    host.protected_skill_ids = None
-    host.protected_skill_ids_len = 0
     host.allow_network_download = 0
     host.github_base_url = None
     host.github_api_base_url = None

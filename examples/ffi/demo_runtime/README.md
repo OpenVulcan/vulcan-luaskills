@@ -10,7 +10,7 @@
 - 调用 `luaskills-demo-skill-demo-status`
 - 输出 success 级别的烟测结果
 
-注意：这个 smoke demo 使用单一 `ROOT` 演示 root 验证 system 安装链路，不代表正式产品的用户可见层级设计。正式宿主启动或加载时必须传入 `ROOT` root；若要开放普通用户安装，应额外传入 `PROJECT` 或 `USER`，并让普通 install/update/uninstall 只落到这些层，不要把 `ROOT` 级调整能力暴露给普通用户。
+注意：这个 smoke demo 使用单一 `ROOT` 演示 root 验证 system 安装链路，并显式注入 `authority = "system"`，不代表正式产品的用户可见层级设计。正式宿主启动或加载时必须传入 `ROOT` root；若要开放普通用户安装，应额外传入 `PROJECT` 或 `USER`，并让普通 install/update/uninstall 只落到这些层。若把 system tools 封装给普通 tools，应固定注入 `DelegatedTool` authority，不要把 `ROOT` 级调整能力暴露给普通用户。
 
 ## 2. 目录结构
 

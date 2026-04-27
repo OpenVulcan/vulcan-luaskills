@@ -105,8 +105,6 @@ func main() {
 		state_dir_name:                   C.CString("state"),
 		database_dir_name:                C.CString("databases"),
 		skill_config_file_path:           nil,
-		protected_skill_ids:              nil,
-		protected_skill_ids_len:          0,
 		allow_network_download:           0,
 		github_base_url:                  nil,
 		github_api_base_url:              nil,
@@ -185,6 +183,7 @@ func main() {
 	mustOK(
 		C.luaskills_ffi_is_skill(
 			engineID,
+			C.LUASKILLS_SKILL_AUTHORITY_SYSTEM,
 			toolName,
 			&isSkillValue,
 			&errorOut,
@@ -198,6 +197,7 @@ func main() {
 	mustOK(
 		C.luaskills_ffi_skill_name_for_tool(
 			engineID,
+			C.LUASKILLS_SKILL_AUTHORITY_SYSTEM,
 			toolName,
 			&skillIDOut,
 			&errorOut,
@@ -212,6 +212,7 @@ func main() {
 	mustOK(
 		C.luaskills_ffi_prompt_argument_completions(
 			engineID,
+			C.LUASKILLS_SKILL_AUTHORITY_SYSTEM,
 			toolName,
 			argumentName,
 			&valuesOut,

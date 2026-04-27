@@ -2,7 +2,7 @@
     [string]$Mode = "ffi",
     [string]$Platform = "",
     [string]$OutputDir = "target\release-packages",
-    [string]$ReleaseTag = "v0.2.1"
+    [string]$ReleaseTag = "v0.2.2"
 )
 
 $ErrorActionPreference = "Stop"

@@ -32,6 +32,18 @@ v0.1.x beta 集成契约：
 extern "C" {
 #endif
 
+/*
+Skill-management authority value for host-owned system operations and visibility queries.
+宿主侧 system 操作与可见性查询使用的技能管理权限值。
+*/
+#define LUASKILLS_SKILL_AUTHORITY_SYSTEM 0
+
+/*
+Delegated-tool authority value for ordinary-tool system wrappers and visibility queries.
+普通 tools 的 system 封装与可见性查询使用的委托工具权限值。
+*/
+#define LUASKILLS_SKILL_AUTHORITY_DELEGATED_TOOL 1
+
 typedef struct FfiLuaVmPoolConfig {
     size_t min_size;
     size_t max_size;
@@ -70,8 +82,6 @@ typedef struct FfiLuaRuntimeHostOptions {
     由宿主拥有的可选统一技能配置文件路径。
     */
     const char *skill_config_file_path;
-    const char **protected_skill_ids;
-    size_t protected_skill_ids_len;
     uint8_t allow_network_download;
     const char *github_base_url;
     const char *github_api_base_url;
@@ -533,31 +543,34 @@ int32_t luaskills_ffi_reload_from_roots(
 );
 
 /*
-List runtime entries through the standard C ABI surface.
-通过标准 C ABI 接口列出运行时入口。
+List runtime entries visible to one host-injected authority through the standard C ABI surface.
+通过标准 C ABI 接口列出单个宿主注入权限可见的运行时入口。
 */
 int32_t luaskills_ffi_list_entries(
     uint64_t engine_id,
+    int32_t authority,
     FfiRuntimeEntryDescriptorList **entries_out,
     FfiOwnedBuffer *error_out
 );
 
 /*
-List runtime help trees through the standard C ABI surface.
-通过标准 C ABI 接口列出运行时帮助树。
+List runtime help trees visible to one host-injected authority through the standard C ABI surface.
+通过标准 C ABI 接口列出单个宿主注入权限可见的运行时帮助树。
 */
 int32_t luaskills_ffi_list_skill_help(
     uint64_t engine_id,
+    int32_t authority,
     FfiRuntimeSkillHelpDescriptorList **help_out,
     FfiOwnedBuffer *error_out
 );
 
 /*
-Render one help detail through the standard C ABI surface.
-通过标准 C ABI 接口渲染单个帮助详情。
+Render one help detail visible to one host-injected authority through the standard C ABI surface.
+通过标准 C ABI 接口渲染单个宿主注入权限可见的帮助详情。
 */
 int32_t luaskills_ffi_render_skill_help_detail(
     uint64_t engine_id,
+    int32_t authority,
     const char *skill_id,
     const char *flow_name,
     FfiBorrowedBuffer request_context_json,
@@ -566,11 +579,12 @@ int32_t luaskills_ffi_render_skill_help_detail(
 );
 
 /*
-Resolve prompt argument completions through the standard C ABI surface.
-通过标准 C ABI 接口解析提示词参数补全项。
+Resolve prompt argument completions through the authority-gated standard C ABI surface.
+通过带权限边界的标准 C ABI 接口解析提示词参数补全项。
 */
 int32_t luaskills_ffi_prompt_argument_completions(
     uint64_t engine_id,
+    int32_t authority,
     const char *prompt_name,
     const char *argument_name,
     FfiStringArray **values_out,
@@ -578,22 +592,24 @@ int32_t luaskills_ffi_prompt_argument_completions(
 );
 
 /*
-Check whether one tool belongs to a Lua skill through the standard C ABI surface.
-通过标准 C ABI 接口检查单个工具是否属于 Lua 技能。
+Check whether one tool belongs to a visible Lua skill through the standard C ABI surface.
+通过标准 C ABI 接口检查单个工具是否属于可见 Lua 技能。
 */
 int32_t luaskills_ffi_is_skill(
     uint64_t engine_id,
+    int32_t authority,
     const char *tool_name,
     uint8_t *value_out,
     FfiOwnedBuffer *error_out
 );
 
 /*
-Resolve the owning skill id of one tool through the standard C ABI surface.
-通过标准 C ABI 接口解析单个工具所属的技能标识符。
+Resolve the visible owning skill id of one tool through the standard C ABI surface.
+通过标准 C ABI 接口解析单个工具可见的所属技能标识符。
 */
 int32_t luaskills_ffi_skill_name_for_tool(
     uint64_t engine_id,
+    int32_t authority,
     const char *tool_name,
     FfiOwnedBuffer *skill_id_out,
     FfiOwnedBuffer *error_out
@@ -648,8 +664,8 @@ int32_t luaskills_ffi_skill_config_delete(
 );
 
 /*
-Call one loaded skill entry through the standard C ABI surface.
-通过标准 C ABI 接口调用单个已加载技能入口。
+Call one active loaded skill entry through the standard C ABI surface.
+通过标准 C ABI 接口调用单个已激活的已加载技能入口。
 */
 int32_t luaskills_ffi_call_skill(
     uint64_t engine_id,
@@ -707,6 +723,7 @@ int32_t luaskills_ffi_system_disable_skill_in_dirs(
     uint64_t engine_id,
     const char *base_dir,
     const char *override_dir,
+    int32_t authority,
     const char *skill_id,
     const char *reason,
     FfiOwnedBuffer *error_out
@@ -720,6 +737,7 @@ int32_t luaskills_ffi_system_disable_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
+    int32_t authority,
     const char *skill_id,
     const char *reason,
     FfiOwnedBuffer *error_out
@@ -745,6 +763,7 @@ int32_t luaskills_ffi_system_enable_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
+    int32_t authority,
     const char *skill_id,
     FfiOwnedBuffer *error_out
 );
@@ -771,6 +790,7 @@ int32_t luaskills_ffi_system_uninstall_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
+    int32_t authority,
     const char *skill_id,
     const FfiSkillUninstallOptions *options,
     FfiSkillUninstallResult **result_out,
@@ -798,6 +818,7 @@ int32_t luaskills_ffi_system_install_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
+    int32_t authority,
     const FfiSkillInstallRequest *request,
     FfiSkillApplyResult **result_out,
     FfiOwnedBuffer *error_out
@@ -824,6 +845,7 @@ int32_t luaskills_ffi_system_update_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
+    int32_t authority,
     const FfiSkillInstallRequest *request,
     FfiSkillApplyResult **result_out,
     FfiOwnedBuffer *error_out

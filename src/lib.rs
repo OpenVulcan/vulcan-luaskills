@@ -48,8 +48,8 @@ pub use skill::dependencies::{
 };
 pub use skill::manager::{
     DisabledSkillRecord, ResolvedSkillInstance, SkillApplyResult, SkillInstallRequest,
-    SkillLifecycleAction, SkillManager, SkillManagerConfig, SkillOperationPlane,
-    SkillProtectionConfig, SkillUninstallOptions, SkillUninstallResult,
+    SkillLifecycleAction, SkillManagementAuthority, SkillManager, SkillManagerConfig,
+    SkillOperationPlane, SkillUninstallOptions, SkillUninstallResult,
     collect_effective_skill_instances, resolve_declared_skill_instance_from_roots,
     resolve_effective_skill_instance,
 };

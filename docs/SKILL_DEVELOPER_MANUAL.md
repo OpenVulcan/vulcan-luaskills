@@ -234,6 +234,8 @@ ROOT -> PROJECT -> USER
 
 其中 `ROOT` 是系统控制级，运行时启动或加载时必须存在该层。普通 skill 不能通过 `vulcan.runtime.skills.*` 请求安装、更新、卸载、启用或停用 `ROOT` 级 skill。普通桥接只面向宿主开放且当前实际存在的 `PROJECT` / `USER` 层级。
 
+`vulcan.runtime.skills.*` 固定等价于 `DelegatedTool` 权限：它看不到 `ROOT` skills，也不能写入 `ROOT`。FFI 查询与 prompt completion 入口在 `DelegatedTool` 下同样不会返回 `ROOT` entries、help 或 ROOT tool name 归属。`call_skill` 与 `run_lua` 是运行时执行面，允许调用当前已激活的 skill，不作为技能管理权限边界。如果 `ROOT` 已经存在同名 `skill_id`，普通层 install / update 会被拒绝；普通层 uninstall 仍可用于清理 `PROJECT` / `USER` 中的同名残留。
+
 正式桥接建议包含：
 
 - `vulcan.runtime.skills.enabled`

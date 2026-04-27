@@ -276,8 +276,6 @@ static void run_standard_ffi_demo(void) {
         .state_dir_name = "state",
         .database_dir_name = "databases",
         .skill_config_file_path = NULL,
-        .protected_skill_ids = NULL,
-        .protected_skill_ids_len = 0,
         .allow_network_download = 0,
         .github_base_url = NULL,
         .github_api_base_url = NULL,
@@ -338,7 +336,7 @@ static void run_standard_ffi_demo(void) {
     请求一个结构化入口列表并输出首个入口预览。
     */
     error_buffer = (FfiOwnedBuffer){0};
-    if (luaskills_ffi_list_entries(engine_id, &entry_list, &error_buffer) != 0) {
+    if (luaskills_ffi_list_entries(engine_id, LUASKILLS_SKILL_AUTHORITY_SYSTEM, &entry_list, &error_buffer) != 0) {
         exit_with_owned_error("failed to list runtime entries", error_buffer);
     }
     if (entry_list == NULL) {

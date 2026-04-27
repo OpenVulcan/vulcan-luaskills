@@ -11,6 +11,7 @@ from demo import (
     FfiLuaVmPoolConfig,
     FfiOwnedBuffer,
     FfiRuntimeSkillRoot,
+    LUASKILLS_SKILL_AUTHORITY_SYSTEM,
     ensure_standard_fixture_layout,
     load_library,
     must_ok,
@@ -65,18 +66,21 @@ def main() -> None:
     ]
     library.luaskills_ffi_is_skill.argtypes = [
         ctypes.c_uint64,
+        ctypes.c_int32,
         ctypes.c_char_p,
         ctypes.POINTER(ctypes.c_uint8),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.luaskills_ffi_skill_name_for_tool.argtypes = [
         ctypes.c_uint64,
+        ctypes.c_int32,
         ctypes.c_char_p,
         ctypes.POINTER(FfiOwnedBuffer),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
     library.luaskills_ffi_prompt_argument_completions.argtypes = [
         ctypes.c_uint64,
+        ctypes.c_int32,
         ctypes.c_char_p,
         ctypes.c_char_p,
         ctypes.POINTER(ctypes.POINTER(FfiStringArray)),
@@ -105,8 +109,6 @@ def main() -> None:
     host.dependency_dir_name = b"dependencies"
     host.state_dir_name = b"state"
     host.database_dir_name = b"databases"
-    host.protected_skill_ids = None
-    host.protected_skill_ids_len = 0
     host.allow_network_download = 0
     host.github_base_url = None
     host.github_api_base_url = None
@@ -169,6 +171,7 @@ def main() -> None:
     must_ok(
         library.luaskills_ffi_is_skill(
             engine_id.value,
+            LUASKILLS_SKILL_AUTHORITY_SYSTEM,
             b"demo-standard-ffi-skill-ping",
             ctypes.byref(is_skill_value),
             ctypes.byref(error_buffer),
@@ -183,6 +186,7 @@ def main() -> None:
     must_ok(
         library.luaskills_ffi_skill_name_for_tool(
             engine_id.value,
+            LUASKILLS_SKILL_AUTHORITY_SYSTEM,
             b"demo-standard-ffi-skill-ping",
             ctypes.byref(skill_name_buffer),
             ctypes.byref(error_buffer),
@@ -198,6 +202,7 @@ def main() -> None:
     must_ok(
         library.luaskills_ffi_prompt_argument_completions(
             engine_id.value,
+            LUASKILLS_SKILL_AUTHORITY_SYSTEM,
             b"demo-standard-ffi-skill-ping",
             b"note",
             ctypes.byref(values_ptr),

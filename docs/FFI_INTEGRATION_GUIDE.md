@@ -619,7 +619,6 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 关键字段：
 
 - 路径字段
-- `protected_skill_ids`
 - `allow_network_download`
 - GitHub base URL
 - SQLite / LanceDB 动态库路径
@@ -632,6 +631,10 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `ignored_skill_ids`
 - `skill_config_file_path`
 - `enable_skill_management_bridge`
+
+已取消字段：
+
+- `protected_skill_ids` 已移除。三层模型下默认保护边界是 `ROOT` 层归属，不再通过 skill id 清单声明保护。
 
 数据库后端模式规则如下：
 
@@ -866,6 +869,12 @@ runtime-config(action, skill_id?, key?, value?)
 - `luaskills_ffi_is_skill_json`
 - `luaskills_ffi_skill_name_for_tool_json`
 
+说明：
+
+- `list_entries / list_skill_help / render_skill_help_detail / prompt_argument_completions / is_skill / skill_name_for_tool` 都属于可见性查询，必须由宿主注入 authority。
+- `System` 可看到 `ROOT / PROJECT / USER` 的运行时描述。
+- `DelegatedTool` 只能看到 `PROJECT / USER`，不会返回 `ROOT` entries、help detail 或已知 ROOT tool name 的归属信息。
+
 ### 9.4 调用接口
 
 标准 C ABI 接口：
@@ -877,6 +886,13 @@ runtime-config(action, skill_id?, key?, value?)
 
 - `luaskills_ffi_call_skill_json`
 - `luaskills_ffi_run_lua_json`
+
+说明：
+
+- 调用接口不接收 authority，也不作为 root 可见性或技能管理权限边界。
+- `call_skill` 调用当前已激活运行时视图中的 skill，包括已加载的 `ROOT / PROJECT / USER` skill。
+- `run_lua` 执行当前运行时环境中的 Lua 代码；如果宿主不希望普通用户执行任意 Lua，应在工具封装层单独限制或不暴露该接口。
+- `DelegatedTool` 对 ROOT 的隐藏只适用于管理、查询与 prompt completion 面，不限制运行时 skill 调用。
 
 ### 9.5 生命周期接口
 
@@ -895,6 +911,11 @@ runtime-config(action, skill_id?, key?, value?)
 - `luaskills_ffi_update_skill`
 - `luaskills_ffi_system_update_skill`
 
+system 版本的标准 C ABI 生命周期接口，以及可见性查询、prompt completion 接口必须传入 `authority` 整数：
+
+- `0` 表示 `System`，允许管理 `ROOT`
+- `1` 表示 `DelegatedTool`，用于 system 工具、查询或补全被封装后开放给普通 tools 的场景，不允许写入或查询 `ROOT`
+
 公共 `_json` FFI 接口：
 
 - `luaskills_ffi_disable_skill_in_dirs_json`
@@ -909,6 +930,18 @@ runtime-config(action, skill_id?, key?, value?)
 - `luaskills_ffi_system_install_skill_json`
 - `luaskills_ffi_update_skill_json`
 - `luaskills_ffi_system_update_skill_json`
+
+system 版本的 `_json` 生命周期接口，以及可见性查询、prompt completion 接口必须在 JSON 请求中由宿主注入 `authority`：
+
+```json
+{ "authority": "system" }
+```
+
+或：
+
+```json
+{ "authority": "delegated_tool" }
+```
 
 ### 9.6 Skill 配置接口
 
@@ -925,6 +958,12 @@ runtime-config(action, skill_id?, key?, value?)
 - `luaskills_ffi_skill_config_get_json`
 - `luaskills_ffi_skill_config_set_json`
 - `luaskills_ffi_skill_config_delete_json`
+
+说明：
+
+- skill config 按 `skill_id` 管理配置，不按 `ROOT` / `PROJECT` / `USER` 可见性过滤。
+- 配置只有在 Lua skill 主动通过 `vulcan.config.*` 读取时才会影响运行行为。
+- 如果宿主不希望客户修改某些配置，不应暴露对应 `set/delete` 工具；必须强制锁定的核心行为应通过宿主硬逻辑或内置核心 skill 实现。
 
 ## 10. 每类接口的调用逻辑
 
@@ -1031,6 +1070,7 @@ runtime-config(action, skill_id?, key?, value?)
 - 推荐把这组底层 API 封装成单工具：
   - `runtime-config(action, skill_id?, key?, value?)`
 - 不建议把 `list/get/set/delete` 暴露成四个独立终端工具，避免占用过多上下文
+- 这组接口不是 ROOT 可见性查询接口；宿主如果开放它，应按自己的产品权限决定哪些 `skill_id` 可以读写
 
 调用逻辑：
 
@@ -1046,7 +1086,7 @@ runtime-config(action, skill_id?, key?, value?)
 
 作用：
 
-- 列出当前运行时全部工具入口描述
+- 按宿主注入 authority 列出当前运行时可见的工具入口描述
 
 返回内容：
 
@@ -1058,11 +1098,17 @@ runtime-config(action, skill_id?, key?, value?)
 - description
 - parameters
 
+权限说明：
+
+- 标准 C ABI 需要传入 `authority` 整数。
+- `_json` 请求需要包含 `"authority": "system"` 或 `"authority": "delegated_tool"`。
+- `DelegatedTool` 不返回 `ROOT` entries。
+
 ### 10.7 `list_skill_help`
 
 作用：
 
-- 列出每个 skill 的 help 树节点描述
+- 按宿主注入 authority 列出每个可见 skill 的 help 树节点描述
 
 返回内容：
 
@@ -1072,11 +1118,15 @@ runtime-config(action, skill_id?, key?, value?)
 - skill 目录
 - help 节点列表
 
+权限说明：
+
+- `DelegatedTool` 不返回 `ROOT` help 树。
+
 ### 10.8 `render_skill_help_detail`
 
 作用：
 
-- 渲染某个 skill 某个 help 流程节点的详情
+- 按宿主注入 authority 渲染某个可见 skill 某个 help 流程节点的详情
 
 参数：
 
@@ -1088,6 +1138,7 @@ runtime-config(action, skill_id?, key?, value?)
 
 - 标准 C ABI 接口中的请求上下文当前通过 `FfiBorrowedBuffer request_context_json` 传入
 - 传空缓冲表示“不附带请求上下文”
+- `DelegatedTool` 请求 `ROOT` help detail 时返回未找到或空结果，不暴露 ROOT 内容。
 
 ### 10.9 `prompt_argument_completions`
 
@@ -1100,17 +1151,31 @@ runtime-config(action, skill_id?, key?, value?)
 - 目标 prompt 已存在
 - 引擎已经 load
 
+权限说明：
+
+- 标准 C ABI 需要传入 `authority` 整数。
+- `_json` 请求需要包含 `"authority": "system"` 或 `"authority": "delegated_tool"`。
+- 当前接口仍返回空候选；后续若从 skill 元数据读取候选，必须保持同一 authority 可见性边界。
+
 ### 10.10 `is_skill`
 
 作用：
 
-- 判断一个 canonical tool name 是否属于 Lua skill
+- 按宿主注入 authority 判断一个 canonical tool name 是否属于可见 Lua skill
+
+说明：
+
+- `DelegatedTool` 对 ROOT tool name 返回 `false`。
 
 ### 10.11 `skill_name_for_tool`
 
 作用：
 
-- 解析一个 canonical tool name 所属的 skill id
+- 按宿主注入 authority 解析一个 canonical tool name 可见的所属 skill id
+
+说明：
+
+- `DelegatedTool` 对 ROOT tool name 返回空归属。
 
 ### 10.12 `call_skill`
 
@@ -1129,6 +1194,12 @@ runtime-config(action, skill_id?, key?, value?)
 - `tool_name`
 - `args`
 - 可选调用上下文
+
+权限说明：
+
+- 标准 C ABI 与 `_json` 请求都不接收 authority。
+- 该接口调用当前已激活的运行时 skill；它不是 ROOT 可见性过滤接口，也不是技能管理权限判断接口。
+- 如果宿主只想让普通用户调用经过筛选的工具集合，应在宿主工具路由层做白名单，而不是依赖 `call_skill` 的 authority。
 
 调用逻辑：
 
@@ -1160,7 +1231,7 @@ runtime-config(action, skill_id?, key?, value?)
 1. 先检查宿主能力开关是否允许
 2. 再检查宿主是否注册技能管理回调
 3. 将 Lua 输入转换为 JSON
-4. 通过宿主回调转发结构化管理请求
+4. 以固定 `DelegatedTool` authority 通过宿主回调转发结构化管理请求
 5. 将宿主回调结果再转换回 Lua
 
 设计意图：
@@ -1169,6 +1240,7 @@ runtime-config(action, skill_id?, key?, value?)
 - 最终是否允许执行，由宿主策略决定
 - 适合拥有自己 TUI、GUI 或专用管理界面的宿主
 - 普通桥接只应操作 `PROJECT` / `USER` 层，不应暴露 `ROOT` 目标选项
+- 普通桥接固定等价于 `DelegatedTool` 权限，宿主 callback 不应自行拼接 prepare / reload / commit，而应调用 LuaEngine 的普通显式 root API
 
 `layers()` 用于发现宿主当前开放给普通桥接的可操作层级标签。推荐返回：
 
@@ -1211,6 +1283,9 @@ runtime-config(action, skill_id?, key?, value?)
 - `code` 仍然是普通 UTF-8 字符串
 - `args_json` 当前通过 `FfiBorrowedBuffer` 传入
 - 返回值 `result_json_out` 继续通过 `FfiOwnedBuffer` 返回
+- 标准 C ABI 与 `_json` 请求都不接收 authority。
+- 该接口执行当前运行时环境中的 Lua 代码，Lua 代码可以调用当前已激活的 skill。
+- 如果宿主不希望普通用户执行任意 Lua，应在暴露前单独封装权限或不开放该接口。
 
 ## 11. 生命周期链路处理逻辑
 
@@ -1224,7 +1299,7 @@ runtime-config(action, skill_id?, key?, value?)
 当前语义：
 
 - 失败会回滚
-- system 版本允许操作受保护 skill
+- system 版本必须由宿主注入 authority；只有 `System` 可操作 `ROOT`
 
 ### 11.2 enable
 
@@ -1260,6 +1335,7 @@ runtime-config(action, skill_id?, key?, value?)
 - 未指定目标时，普通 install 优先写入 `USER`，没有 `USER` 时写入 `PROJECT`；只有 `ROOT` 时失败
 - `ROOT` 级安装应走 system tools 或受控 system updater
 - system install 未指定目标时只默认写入 `ROOT`；缺少 `ROOT` 时明确失败，不回退到普通层
+- 如果 `ROOT` 已存在同名 `skill_id`，任何 authority 都不能向 `PROJECT` / `USER` install 同名 skill；必须先用系统权限卸载 ROOT 层 skill
 
 ### 11.4 update
 
@@ -1288,6 +1364,7 @@ runtime-config(action, skill_id?, key?, value?)
 - 普通用户管理面更新目标只能是 `PROJECT` 或 `USER`
 - `ROOT` 级更新应走 system tools 或受控 system updater
 - 显式目标 root 必须属于当前 root 链，否则在解析目标 skill 前直接拒绝
+- 如果 `ROOT` 已存在同名 `skill_id`，任何 authority 都不能向 `PROJECT` / `USER` update 同名 skill
 
 ### 11.5 uninstall
 
@@ -1311,6 +1388,7 @@ runtime-config(action, skill_id?, key?, value?)
 - 普通用户管理面卸载目标只能是 `PROJECT` 或 `USER`
 - `ROOT` 级卸载应走 system tools 或受控 system updater
 - 显式目标 root 必须属于当前 root 链，否则直接拒绝
+- 即使 `ROOT` 存在同名 `skill_id`，显式目标 uninstall 仍允许删除 `PROJECT` / `USER` 中的同名残留
 
 ## 12. install / update 的来源模型
 
@@ -1353,10 +1431,15 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 - 前面的优先级更高
 - `ROOT` 是系统控制级
-- `ROOT` 中存在同名 `skill_id` 时，`PROJECT` 与 `USER` 中的同名 skill 不应加载
+- `ROOT` 中存在同名 `skill_id` 时，该 id 由系统层全局占用，`PROJECT` 与 `USER` 中的同名 skill 不应加载
+- `ROOT` 中存在同名 `skill_id` 时，无论 `System` 还是 `DelegatedTool`，都不能向 `PROJECT` / `USER` install 或 update 同名 skill
+- `PROJECT` / `USER` 中的同名残留允许通过显式目标 uninstall 清理
 - `PROJECT` 在 `ROOT` 无同名 skill 时覆盖 `USER`
 - 普通 `vulcan.runtime.skills.*` 管理面只能操作 `PROJECT` / `USER`
-- system tools 可以操作 `ROOT`，但不建议把 ROOT 调整能力暴露给普通用户
+- system tools 只有在 `System` authority 下可以操作 `ROOT`；`DelegatedTool` 在管理、查询与 prompt completion 面不可见 ROOT skills
+- 不建议把 ROOT 调整能力暴露给普通用户；若必须开放 system tools，应由宿主 wrapper 固定注入 `DelegatedTool`
+
+如果宿主只配置 `ROOT`，却仍希望让用户增删改 skill，本质上是在开放系统层操作。此时 LuaSkills 无法替宿主判断业务合法性，宿主必须自行处理权限、白名单、确认与审计。
 
 如果宿主内部存在组织、工作区、模板等更复杂来源，建议在宿主侧折叠成单个对外 `PROJECT` 标签，而不是向用户暴露任意多层 root 链。
 

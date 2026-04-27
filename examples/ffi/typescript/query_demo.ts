@@ -9,6 +9,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
+Full host-system authority for standard FFI query examples.
+标准 FFI 查询示例使用的完整宿主系统权限。
+ */
+const LUASKILLS_SKILL_AUTHORITY_SYSTEM = 0;
+
+/**
 Resolve the dynamic library path from one explicit environment variable.
 从一个显式环境变量解析动态库路径。
  */
@@ -132,8 +138,6 @@ function main(): void {
     state_dir_name: "str",
     database_dir_name: "str",
     skill_config_file_path: "str",
-    protected_skill_ids: "void *",
-    protected_skill_ids_len: "size_t",
     allow_network_download: "uint8_t",
     github_base_url: "str",
     github_api_base_url: "str",
@@ -179,9 +183,9 @@ function main(): void {
   const freeBuffer = library.func("void luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
   const engineNew = library.func("int luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
   const loadFromRoots = library.func("int luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, FfiOwnedBuffer *error_out)");
-  const isSkill = library.func("int luaskills_ffi_is_skill(uint64_t engine_id, const char *tool_name, uint8_t *value_out, FfiOwnedBuffer *error_out)");
-  const skillNameForTool = library.func("int luaskills_ffi_skill_name_for_tool(uint64_t engine_id, const char *tool_name, FfiOwnedBuffer *skill_id_out, FfiOwnedBuffer *error_out)");
-  const promptArgumentCompletions = library.func("int luaskills_ffi_prompt_argument_completions(uint64_t engine_id, const char *prompt_name, const char *argument_name, void **values_out, FfiOwnedBuffer *error_out)");
+  const isSkill = library.func("int luaskills_ffi_is_skill(uint64_t engine_id, int32_t authority, const char *tool_name, uint8_t *value_out, FfiOwnedBuffer *error_out)");
+  const skillNameForTool = library.func("int luaskills_ffi_skill_name_for_tool(uint64_t engine_id, int32_t authority, const char *tool_name, FfiOwnedBuffer *skill_id_out, FfiOwnedBuffer *error_out)");
+  const promptArgumentCompletions = library.func("int luaskills_ffi_prompt_argument_completions(uint64_t engine_id, int32_t authority, const char *prompt_name, const char *argument_name, void **values_out, FfiOwnedBuffer *error_out)");
   const freeStringArray = library.func("void luaskills_ffi_string_array_free(void *value)");
   const engineFree = library.func("int luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
 
@@ -199,8 +203,6 @@ function main(): void {
       state_dir_name: "state",
       database_dir_name: "databases",
       skill_config_file_path: null,
-      protected_skill_ids: null,
-      protected_skill_ids_len: 0,
       allow_network_download: 0,
       github_base_url: null,
       github_api_base_url: null,
@@ -244,6 +246,7 @@ function main(): void {
   mustOK(
     isSkill(
       engineIdOut[0],
+      LUASKILLS_SKILL_AUTHORITY_SYSTEM,
       "demo-standard-ffi-skill-ping",
       isSkillOut,
       isSkillError,
@@ -258,6 +261,7 @@ function main(): void {
   mustOK(
     skillNameForTool(
       engineIdOut[0],
+      LUASKILLS_SKILL_AUTHORITY_SYSTEM,
       "demo-standard-ffi-skill-ping",
       skillIdOut,
       skillIdError,
@@ -273,6 +277,7 @@ function main(): void {
   mustOK(
     promptArgumentCompletions(
       engineIdOut[0],
+      LUASKILLS_SKILL_AUTHORITY_SYSTEM,
       "demo-standard-ffi-skill-ping",
       "note",
       completionsOut,

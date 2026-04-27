@@ -221,6 +221,9 @@ runtime-config(action, skill_id?, key?, value?)
 
 - skill 自己通过 `vulcan.config.*` 读写当前命名空间
 - 宿主与 AI 则通过一个统一的 `runtime-config` 工具跨 skill 管理配置
+- 配置按 `skill_id` 读写，不按 `ROOT` / `PROJECT` / `USER` 可见性过滤；只有 Lua skill 主动通过 `vulcan.config.*` 读取时才会影响运行行为
+- 如果宿主不希望用户修改某类核心配置，不应把对应的 `set/delete` 能力开放给普通工具
+- 如果某个核心 skill 的行为必须完全由宿主锁定，更适合通过硬性宿主逻辑或内置核心 skill 固化，而不是依赖可写配置实现
 
 ### 3. System 与 Skill 分层
 
@@ -243,7 +246,7 @@ ROOT -> PROJECT -> USER
 
 **宿主使用 system 管理 ROOT，最终用户使用 skills 管理 PROJECT / USER。**
 
-普通 `vulcan.runtime.skills.*` 桥接只允许请求宿主操作实际存在的 `PROJECT` / `USER`，不提供 `ROOT` 目标选项。system tools 可以操作 `ROOT`，未显式指定目标时也只默认写入 `ROOT`；如果缺少 `ROOT`，system install 会失败，不会写入 `PROJECT` 或 `USER`。不建议向普通用户开放 ROOT 级 skill 的调整能力。完整策略见 [docs/SKILL_ROOT_LAYER_POLICY.md](docs/SKILL_ROOT_LAYER_POLICY.md)。
+普通 `vulcan.runtime.skills.*` 桥接只允许请求宿主操作实际存在的 `PROJECT` / `USER`，不提供 `ROOT` 目标选项，并固定等价于 `DelegatedTool` 权限。system tools 只有在宿主注入 `System` authority 时可以操作 `ROOT`；若暴露给普通 tools，宿主 wrapper 应固定注入 `DelegatedTool`。查询与 prompt completion 类 FFI 入口按 authority 过滤，`DelegatedTool` 看不到 `ROOT` entries、help 或 ROOT tool name 归属；运行时 `call_skill` / `run_lua` 则是对当前已激活 skill 的执行面，不作为 ROOT 可见性或技能管理权限边界。`ROOT` 中存在同名 `skill_id` 时，任何 authority 都不能向 `PROJECT` / `USER` install 或 update 同名 skill；普通层显式 uninstall 仅用于清理残留。完整策略见 [docs/SKILL_ROOT_LAYER_POLICY.md](docs/SKILL_ROOT_LAYER_POLICY.md)。
 
 ## 当前能力
 
@@ -325,7 +328,8 @@ skill **不应该**：
 - 默认关闭
 - 由宿主通过 `LuaRuntimeHostOptions.capabilities.enable_skill_management_bridge` 决定是否开放
 - 即使开放，也必须由宿主注册技能管理回调后才会真正执行安装、更新、启停、卸载
-- 普通桥接只应暴露 `PROJECT` / `USER` 层管理能力，不允许操作 `ROOT`
+- 普通桥接只应暴露 `PROJECT` / `USER` 层管理能力，不允许操作 `ROOT`，层级列表也不返回 `ROOT`
+- 普通桥接请求固定携带 `DelegatedTool` authority；宿主 callback 应复用 LuaEngine 普通显式 root API，不应自行拼接 prepare / reload / commit
 - 普通桥接应提供层级列表能力，例如 `vulcan.runtime.skills.layers()`，用于返回当前 root 链中实际存在的 `PROJECT` / `USER` 标签；bridge 关闭时这些层级必须标记为不可写
 
 这意味着：

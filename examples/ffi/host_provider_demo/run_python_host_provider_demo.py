@@ -47,8 +47,6 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("state_dir_name", ctypes.c_char_p),
         ("database_dir_name", ctypes.c_char_p),
         ("skill_config_file_path", ctypes.c_char_p),
-        ("protected_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
-        ("protected_skill_ids_len", ctypes.c_size_t),
         ("allow_network_download", ctypes.c_uint8),
         ("github_base_url", ctypes.c_char_p),
         ("github_api_base_url", ctypes.c_char_p),
@@ -461,8 +459,6 @@ def main() -> None:
     host.state_dir_name = b"state"
     host.database_dir_name = b"databases"
     host.skill_config_file_path = None
-    host.protected_skill_ids = None
-    host.protected_skill_ids_len = 0
     host.allow_network_download = 0
     host.github_base_url = None
     host.github_api_base_url = None
@@ -503,9 +499,6 @@ def main() -> None:
                 "state_dir_name": "state",
                 "database_dir_name": "databases",
                 "skill_config_file_path": None,
-                "protection": {
-                    "protected_skill_ids": [],
-                },
                 "allow_network_download": False,
                 "github_base_url": None,
                 "github_api_base_url": None,

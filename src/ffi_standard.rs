@@ -23,7 +23,7 @@ use crate::runtime_options::{
     LuaRuntimeRunLuaPoolConfig, LuaRuntimeSpaceControllerOptions,
     LuaRuntimeSpaceControllerProcessMode, RuntimeSkillRoot,
 };
-use crate::skill::manager::{SkillInstallRequest, SkillUninstallOptions};
+use crate::skill::manager::{SkillInstallRequest, SkillManagementAuthority, SkillUninstallOptions};
 use crate::skill::source::SkillInstallSourceType;
 use crate::tool_cache::ToolCacheConfig;
 use crate::{
@@ -67,6 +67,12 @@ const FFI_LANCEDB_PROVIDER_ACTION_VECTOR_UPSERT: i32 = 1;
 const FFI_LANCEDB_PROVIDER_ACTION_VECTOR_SEARCH: i32 = 2;
 const FFI_LANCEDB_PROVIDER_ACTION_DELETE: i32 = 3;
 const FFI_LANCEDB_PROVIDER_ACTION_DROP_TABLE: i32 = 4;
+/// Stable integer value for full host-system skill-management authority.
+/// 完整宿主系统技能管理权限的稳定整数值。
+const FFI_SKILL_AUTHORITY_SYSTEM: i32 = 0;
+/// Stable integer value for delegated-tool skill-management authority.
+/// 委托工具技能管理权限的稳定整数值。
+const FFI_SKILL_AUTHORITY_DELEGATED_TOOL: i32 = 1;
 
 /// Plain C ABI engine pool config used by standard non-JSON FFI calls.
 /// 标准非 JSON FFI 调用使用的原生 C ABI 引擎池配置。
@@ -159,12 +165,6 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Optional unified skill config file path owned by the host.
     /// 由宿主拥有的可选统一技能配置文件路径。
     pub skill_config_file_path: *const c_char,
-    /// Protected skill identifiers reserved for the system plane.
-    /// 为 system 平面保留的受保护技能标识符数组。
-    pub protected_skill_ids: *const *const c_char,
-    /// Number of protected skill identifiers.
-    /// 受保护技能标识符数组长度。
-    pub protected_skill_ids_len: usize,
     /// Whether the runtime may perform network downloads.
     /// 运行时是否允许执行网络下载。
     pub allow_network_download: u8,
@@ -928,13 +928,6 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             "skill_config_file_path",
         )?
         .map(PathBuf::from),
-        protection: crate::skill::manager::SkillProtectionConfig {
-            protected_skill_ids: parse_string_array(
-                value.protected_skill_ids,
-                value.protected_skill_ids_len,
-                "protected_skill_ids",
-            )?,
-        },
         allow_network_download: value.allow_network_download != 0,
         github_base_url: parse_optional_string(value.github_base_url, "github_base_url")?,
         github_api_base_url: parse_optional_string(
@@ -1013,6 +1006,22 @@ fn parse_provider_mode(
         FFI_PROVIDER_MODE_HOST_CALLBACK => Ok(LuaRuntimeDatabaseProviderMode::HostCallback),
         FFI_PROVIDER_MODE_SPACE_CONTROLLER => Ok(LuaRuntimeDatabaseProviderMode::SpaceController),
         _ => Err(format!("Unsupported {} value '{}'", field_name, value)),
+    }
+}
+
+/// Convert one stable integer authority value into the Rust skill-management authority enum.
+/// 将一个稳定整数权限值转换为 Rust 技能管理权限枚举。
+fn parse_skill_management_authority(
+    value: i32,
+    field_name: &str,
+) -> Result<SkillManagementAuthority, String> {
+    match value {
+        FFI_SKILL_AUTHORITY_SYSTEM => Ok(SkillManagementAuthority::System),
+        FFI_SKILL_AUTHORITY_DELEGATED_TOOL => Ok(SkillManagementAuthority::DelegatedTool),
+        other => Err(format!(
+            "{} must be 0 (system) or 1 (delegated_tool); got {}",
+            field_name, other
+        )),
     }
 }
 
@@ -2266,11 +2275,12 @@ pub unsafe extern "C" fn luaskills_ffi_reload_from_roots(
     }
 }
 
-/// List runtime entries through the standard C ABI surface.
-/// 通过标准 C ABI 接口列出运行时入口。
+/// List runtime entries visible to one host-injected authority through the standard C ABI surface.
+/// 通过标准 C ABI 接口列出单个宿主注入权限可见的运行时入口。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_list_entries(
     engine_id: u64,
+    authority: i32,
     entries_out: *mut *mut FfiRuntimeEntryDescriptorList,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
@@ -2279,7 +2289,13 @@ pub unsafe extern "C" fn luaskills_ffi_list_entries(
     if entries_out.is_null() {
         return ffi_error_status(error_out, "entries_out must not be null");
     }
-    match with_engine(engine_id, |engine| Ok(engine.list_entries())) {
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match with_engine(engine_id, |engine| {
+        Ok(engine.list_entries_for_authority(authority))
+    }) {
         Ok(entries) => {
             let mut items: Vec<FfiRuntimeEntryDescriptor> =
                 entries.iter().map(alloc_entry_descriptor).collect();
@@ -2295,11 +2311,12 @@ pub unsafe extern "C" fn luaskills_ffi_list_entries(
     }
 }
 
-/// List runtime help trees through the standard C ABI surface.
-/// 通过标准 C ABI 接口列出运行时帮助树。
+/// List runtime help trees visible to one host-injected authority through the standard C ABI surface.
+/// 通过标准 C ABI 接口列出单个宿主注入权限可见的运行时帮助树。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_list_skill_help(
     engine_id: u64,
+    authority: i32,
     help_out: *mut *mut FfiRuntimeSkillHelpDescriptorList,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
@@ -2308,7 +2325,13 @@ pub unsafe extern "C" fn luaskills_ffi_list_skill_help(
     if help_out.is_null() {
         return ffi_error_status(error_out, "help_out must not be null");
     }
-    match with_engine(engine_id, |engine| Ok(engine.list_skill_help())) {
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match with_engine(engine_id, |engine| {
+        Ok(engine.list_skill_help_for_authority(authority))
+    }) {
         Ok(help_descriptors) => {
             let mut items: Vec<FfiRuntimeSkillHelpDescriptor> =
                 help_descriptors.iter().map(alloc_help_descriptor).collect();
@@ -2324,11 +2347,12 @@ pub unsafe extern "C" fn luaskills_ffi_list_skill_help(
     }
 }
 
-/// Render one help detail through the standard C ABI surface.
-/// 通过标准 C ABI 接口渲染单个帮助详情。
+/// Render one help detail visible to one host-injected authority through the standard C ABI surface.
+/// 通过标准 C ABI 接口渲染单个宿主注入权限可见的帮助详情。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_render_skill_help_detail(
     engine_id: u64,
+    authority: i32,
     skill_id: *const c_char,
     flow_name: *const c_char,
     request_context_json: FfiBorrowedBuffer,
@@ -2348,13 +2372,22 @@ pub unsafe extern "C" fn luaskills_ffi_render_skill_help_detail(
         Ok(flow_name) => flow_name,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     let request_context =
         match parse_request_context_buffer(&request_context_json, "request_context_json") {
             Ok(request_context) => request_context,
             Err(error) => return ffi_error_status(error_out, error),
         };
     match with_engine(engine_id, |engine| {
-        engine.render_skill_help_detail(&skill_id, &flow_name, request_context.as_ref())
+        engine.render_skill_help_detail_for_authority(
+            authority,
+            &skill_id,
+            &flow_name,
+            request_context.as_ref(),
+        )
     }) {
         Ok(Some(detail)) => {
             unsafe { *detail_out = Box::into_raw(Box::new(alloc_help_detail(&detail))) };
@@ -2370,6 +2403,7 @@ pub unsafe extern "C" fn luaskills_ffi_render_skill_help_detail(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_prompt_argument_completions(
     engine_id: u64,
+    authority: i32,
     prompt_name: *const c_char,
     argument_name: *const c_char,
     values_out: *mut *mut FfiStringArray,
@@ -2388,8 +2422,16 @@ pub unsafe extern "C" fn luaskills_ffi_prompt_argument_completions(
         Ok(argument_name) => argument_name,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     match with_engine(engine_id, |engine| {
-        Ok(engine.prompt_argument_completions(&prompt_name, &argument_name))
+        Ok(engine.prompt_argument_completions_for_authority(
+            authority,
+            &prompt_name,
+            &argument_name,
+        ))
     }) {
         Ok(Some(values)) => {
             unsafe { *values_out = Box::into_raw(Box::new(alloc_string_array(&values))) };
@@ -2403,11 +2445,12 @@ pub unsafe extern "C" fn luaskills_ffi_prompt_argument_completions(
     }
 }
 
-/// Check whether one tool belongs to a Lua skill through the standard C ABI surface.
-/// 通过标准 C ABI 接口检查单个工具是否属于 Lua 技能。
+/// Check whether one tool belongs to a visible Lua skill through the standard C ABI surface.
+/// 通过标准 C ABI 接口检查单个工具是否属于可见 Lua 技能。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_is_skill(
     engine_id: u64,
+    authority: i32,
     tool_name: *const c_char,
     value_out: *mut u8,
     error_out: *mut FfiOwnedBuffer,
@@ -2421,7 +2464,13 @@ pub unsafe extern "C" fn luaskills_ffi_is_skill(
         Ok(tool_name) => tool_name,
         Err(error) => return ffi_error_status(error_out, error),
     };
-    match with_engine(engine_id, |engine| Ok(engine.is_skill(&tool_name))) {
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match with_engine(engine_id, |engine| {
+        Ok(engine.is_skill_for_authority(authority, &tool_name))
+    }) {
         Ok(value) => {
             unsafe { *value_out = u8::from(value) };
             ffi_ok_status(error_out)
@@ -2430,11 +2479,12 @@ pub unsafe extern "C" fn luaskills_ffi_is_skill(
     }
 }
 
-/// Resolve the owning skill id of one tool through the standard C ABI surface.
-/// 通过标准 C ABI 接口解析单个工具所属的技能标识符。
+/// Resolve the visible owning skill id of one tool through the standard C ABI surface.
+/// 通过标准 C ABI 接口解析单个工具可见的所属技能标识符。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_skill_name_for_tool(
     engine_id: u64,
+    authority: i32,
     tool_name: *const c_char,
     skill_id_out: *mut FfiOwnedBuffer,
     error_out: *mut FfiOwnedBuffer,
@@ -2448,8 +2498,12 @@ pub unsafe extern "C" fn luaskills_ffi_skill_name_for_tool(
         Ok(tool_name) => tool_name,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     match with_engine(engine_id, |engine| {
-        Ok(engine.skill_name_for_tool(&tool_name))
+        Ok(engine.skill_name_for_tool_for_authority(authority, &tool_name))
     }) {
         Ok(skill_id) => {
             unsafe { *skill_id_out = alloc_optional_owned_buffer_from_string(skill_id.as_deref()) };
@@ -2769,6 +2823,7 @@ pub unsafe extern "C" fn luaskills_ffi_system_disable_skill_in_dirs(
     engine_id: u64,
     base_dir: *const c_char,
     override_dir: *const c_char,
+    authority: i32,
     skill_id: *const c_char,
     reason: *const c_char,
     error_out: *mut FfiOwnedBuffer,
@@ -2790,11 +2845,16 @@ pub unsafe extern "C" fn luaskills_ffi_system_disable_skill_in_dirs(
         Ok(reason) => reason,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     match with_engine_mut(engine_id, |engine| {
         engine
             .system_disable_skill(
                 &base_dir,
                 override_dir.as_deref(),
+                authority,
                 &skill_id,
                 reason.as_deref(),
             )
@@ -2812,6 +2872,7 @@ pub unsafe extern "C" fn luaskills_ffi_system_disable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
+    authority: i32,
     skill_id: *const c_char,
     reason: *const c_char,
     error_out: *mut FfiOwnedBuffer,
@@ -2829,9 +2890,13 @@ pub unsafe extern "C" fn luaskills_ffi_system_disable_skill(
         Ok(reason) => reason,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     match with_engine_mut(engine_id, |engine| {
         engine
-            .system_disable_skill_in_roots(&skill_roots, &skill_id, reason.as_deref())
+            .system_disable_skill_in_roots(&skill_roots, authority, &skill_id, reason.as_deref())
             .map_err(|error| error.to_string())
     }) {
         Ok(()) => ffi_ok_status(error_out),
@@ -2875,6 +2940,7 @@ pub unsafe extern "C" fn luaskills_ffi_system_enable_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
+    authority: i32,
     skill_id: *const c_char,
     error_out: *mut FfiOwnedBuffer,
 ) -> i32 {
@@ -2887,9 +2953,13 @@ pub unsafe extern "C" fn luaskills_ffi_system_enable_skill(
         Ok(skill_id) => skill_id,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     match with_engine_mut(engine_id, |engine| {
         engine
-            .system_enable_skill(&skill_roots, &skill_id)
+            .system_enable_skill(&skill_roots, authority, &skill_id)
             .map_err(|error| error.to_string())
     }) {
         Ok(()) => ffi_ok_status(error_out),
@@ -2943,6 +3013,7 @@ pub unsafe extern "C" fn luaskills_ffi_system_uninstall_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
+    authority: i32,
     skill_id: *const c_char,
     options: *const FfiSkillUninstallOptions,
     result_out: *mut *mut FfiSkillUninstallResult,
@@ -2961,10 +3032,14 @@ pub unsafe extern "C" fn luaskills_ffi_system_uninstall_skill(
         Ok(skill_id) => skill_id,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     let options = parse_uninstall_options(unsafe { options.as_ref() });
     match with_engine_mut(engine_id, |engine| {
         engine
-            .system_uninstall_skill(&skill_roots, &skill_id, &options)
+            .system_uninstall_skill(&skill_roots, authority, &skill_id, &options)
             .map_err(|error| error.to_string())
     }) {
         Ok(result) => {
@@ -3022,6 +3097,7 @@ pub unsafe extern "C" fn luaskills_ffi_system_install_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
+    authority: i32,
     request: *const FfiSkillInstallRequest,
     result_out: *mut *mut FfiSkillApplyResult,
     error_out: *mut FfiOwnedBuffer,
@@ -3042,9 +3118,13 @@ pub unsafe extern "C" fn luaskills_ffi_system_install_skill(
         Ok(request) => request,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     match with_engine_mut(engine_id, |engine| {
         engine
-            .system_install_skill(&skill_roots, &request)
+            .system_install_skill(&skill_roots, authority, &request)
             .map_err(|error| error.to_string())
     }) {
         Ok(result) => {
@@ -3102,6 +3182,7 @@ pub unsafe extern "C" fn luaskills_ffi_system_update_skill(
     engine_id: u64,
     skill_roots: *const FfiRuntimeSkillRoot,
     skill_roots_len: usize,
+    authority: i32,
     request: *const FfiSkillInstallRequest,
     result_out: *mut *mut FfiSkillApplyResult,
     error_out: *mut FfiOwnedBuffer,
@@ -3122,9 +3203,13 @@ pub unsafe extern "C" fn luaskills_ffi_system_update_skill(
         Ok(request) => request,
         Err(error) => return ffi_error_status(error_out, error),
     };
+    let authority = match parse_skill_management_authority(authority, "authority") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
     match with_engine_mut(engine_id, |engine| {
         engine
-            .system_update_skill(&skill_roots, &request)
+            .system_update_skill(&skill_roots, authority, &request)
             .map_err(|error| error.to_string())
     }) {
         Ok(result) => {
@@ -3417,9 +3502,10 @@ mod tests {
         let dependency_dir_name = CString::new("dependencies").expect("dependencies cstring");
         let state_dir_name = CString::new("state").expect("state cstring");
         let database_dir_name = CString::new("databases").expect("databases cstring");
-        let root_name = CString::new("ROOT").expect("root name cstring");
+        let root_name = CString::new(" ROOT ").expect("root name cstring");
         let skills_root_text =
             CString::new(skills_root.display().to_string()).expect("skills root cstring");
+        let tool_name = CString::new("demo-skill-ping").expect("tool name cstring");
 
         let host_options = FfiLuaRuntimeHostOptions {
             temp_dir: temp_dir_text.as_ptr(),
@@ -3433,8 +3519,6 @@ mod tests {
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
             skill_config_file_path: ptr::null(),
-            protected_skill_ids: ptr::null(),
-            protected_skill_ids_len: 0,
             allow_network_download: 0,
             github_base_url: ptr::null(),
             github_api_base_url: ptr::null(),
@@ -3499,8 +3583,14 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let list_status =
-            unsafe { luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error) };
+        let list_status = unsafe {
+            luaskills_ffi_list_entries(
+                engine_id,
+                FFI_SKILL_AUTHORITY_SYSTEM,
+                &mut entries_out,
+                &mut list_error,
+            )
+        };
         assert_eq!(list_status, FFI_STATUS_OK);
         assert!(list_error.ptr.is_null());
         assert!(!entries_out.is_null());
@@ -3514,7 +3604,7 @@ mod tests {
         );
         assert_eq!(read_owned_buffer_text(&entry_ref.skill_id), "demo-skill");
         assert_eq!(read_owned_buffer_text(&entry_ref.local_name), "ping");
-        assert_eq!(read_owned_buffer_text(&entry_ref.root_name), "ROOT");
+        assert_eq!(read_owned_buffer_text(&entry_ref.root_name), " ROOT ");
         assert_eq!(
             read_owned_buffer_text(&entry_ref.description),
             "Ping entry."
@@ -3530,6 +3620,140 @@ mod tests {
         assert_eq!(parameter_ref.required, 0);
 
         unsafe { luaskills_ffi_entry_list_free(entries_out) };
+
+        entries_out = ptr::null_mut();
+        list_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let delegated_list_status = unsafe {
+            luaskills_ffi_list_entries(
+                engine_id,
+                FFI_SKILL_AUTHORITY_DELEGATED_TOOL,
+                &mut entries_out,
+                &mut list_error,
+            )
+        };
+        assert_eq!(delegated_list_status, FFI_STATUS_OK);
+        assert!(list_error.ptr.is_null());
+        assert!(!entries_out.is_null());
+        let delegated_entries_ref = unsafe { &*entries_out };
+        assert_eq!(delegated_entries_ref.len, 0);
+        unsafe { luaskills_ffi_entry_list_free(entries_out) };
+
+        let mut is_skill_out = 0_u8;
+        let mut is_skill_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let delegated_is_skill_status = unsafe {
+            luaskills_ffi_is_skill(
+                engine_id,
+                FFI_SKILL_AUTHORITY_DELEGATED_TOOL,
+                tool_name.as_ptr(),
+                &mut is_skill_out,
+                &mut is_skill_error,
+            )
+        };
+        assert_eq!(delegated_is_skill_status, FFI_STATUS_OK);
+        assert!(is_skill_error.ptr.is_null());
+        assert_eq!(is_skill_out, 0);
+
+        let mut skill_id_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut skill_name_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let delegated_skill_name_status = unsafe {
+            luaskills_ffi_skill_name_for_tool(
+                engine_id,
+                FFI_SKILL_AUTHORITY_DELEGATED_TOOL,
+                tool_name.as_ptr(),
+                &mut skill_id_out,
+                &mut skill_name_error,
+            )
+        };
+        assert_eq!(delegated_skill_name_status, FFI_STATUS_OK);
+        assert!(skill_name_error.ptr.is_null());
+        assert_eq!(read_owned_buffer_text(&skill_id_out), "");
+        unsafe { luaskills_ffi_buffer_free(skill_id_out) };
+
+        let (call_args_storage, call_args_buffer) = make_borrowed_buffer("{}");
+        let (run_args_storage, run_args_buffer) = make_borrowed_buffer("{}");
+        let mut call_result_out: *mut FfiRuntimeInvocationResult = ptr::null_mut();
+        let mut call_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let call_status = unsafe {
+            luaskills_ffi_call_skill(
+                engine_id,
+                tool_name.as_ptr(),
+                call_args_buffer,
+                ptr::null(),
+                &mut call_result_out,
+                &mut call_error,
+            )
+        };
+        assert_eq!(call_status, FFI_STATUS_OK);
+        assert!(call_error.ptr.is_null());
+        assert!(!call_result_out.is_null());
+        let call_result_ref = unsafe { &*call_result_out };
+        assert_eq!(read_owned_buffer_text(&call_result_ref.content), "ok");
+        unsafe { luaskills_ffi_invocation_result_free(call_result_out) };
+
+        let run_code =
+            CString::new("return vulcan.call('demo-skill-ping', {})").expect("run code cstring");
+        let mut run_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut run_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let run_status = unsafe {
+            luaskills_ffi_run_lua(
+                engine_id,
+                run_code.as_ptr(),
+                run_args_buffer,
+                ptr::null(),
+                &mut run_out,
+                &mut run_error,
+            )
+        };
+        assert_eq!(run_status, FFI_STATUS_OK);
+        assert!(run_error.ptr.is_null());
+        assert_eq!(read_owned_buffer_text(&run_out), "\"ok\"");
+        unsafe { luaskills_ffi_buffer_free(run_out) };
+        let _ = (call_args_storage, run_args_storage);
+
+        let prompt_name = CString::new("demo").expect("prompt name cstring");
+        let argument_name = CString::new("target").expect("argument name cstring");
+        let mut prompt_values_out: *mut FfiStringArray = ptr::null_mut();
+        let mut prompt_error = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let prompt_status = unsafe {
+            luaskills_ffi_prompt_argument_completions(
+                engine_id,
+                FFI_SKILL_AUTHORITY_DELEGATED_TOOL,
+                prompt_name.as_ptr(),
+                argument_name.as_ptr(),
+                &mut prompt_values_out,
+                &mut prompt_error,
+            )
+        };
+        assert_eq!(prompt_status, FFI_STATUS_OK);
+        assert!(prompt_error.ptr.is_null());
+        assert!(!prompt_values_out.is_null());
+        let prompt_values_ref = unsafe { &*prompt_values_out };
+        assert_eq!(prompt_values_ref.len, 0);
+        unsafe { luaskills_ffi_string_array_free(prompt_values_out) };
 
         let mut free_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),
@@ -3609,8 +3833,6 @@ mod tests {
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
             skill_config_file_path: ptr::null(),
-            protected_skill_ids: ptr::null(),
-            protected_skill_ids_len: 0,
             allow_network_download: 0,
             github_base_url: ptr::null(),
             github_api_base_url: ptr::null(),
@@ -3767,8 +3989,6 @@ mod tests {
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
             skill_config_file_path: ptr::null(),
-            protected_skill_ids: ptr::null(),
-            protected_skill_ids_len: 0,
             allow_network_download: 0,
             github_base_url: ptr::null(),
             github_api_base_url: ptr::null(),
@@ -3923,8 +4143,6 @@ mod tests {
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
             skill_config_file_path: skill_config_file_path.as_ptr(),
-            protected_skill_ids: ptr::null(),
-            protected_skill_ids_len: 0,
             allow_network_download: 0,
             github_base_url: ptr::null(),
             github_api_base_url: ptr::null(),
@@ -4175,8 +4393,6 @@ mod tests {
             state_dir_name: state_dir_name.as_ptr(),
             database_dir_name: database_dir_name.as_ptr(),
             skill_config_file_path: ptr::null(),
-            protected_skill_ids: ptr::null(),
-            protected_skill_ids_len: 0,
             allow_network_download: 0,
             github_base_url: ptr::null(),
             github_api_base_url: ptr::null(),
@@ -4248,8 +4464,14 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let list_status =
-            unsafe { luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error) };
+        let list_status = unsafe {
+            luaskills_ffi_list_entries(
+                engine_id,
+                FFI_SKILL_AUTHORITY_SYSTEM,
+                &mut entries_out,
+                &mut list_error,
+            )
+        };
         assert_eq!(list_status, FFI_STATUS_OK);
         assert!(list_error.ptr.is_null());
         assert!(!entries_out.is_null());
@@ -4305,8 +4527,14 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let disabled_list_status =
-            unsafe { luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error) };
+        let disabled_list_status = unsafe {
+            luaskills_ffi_list_entries(
+                engine_id,
+                FFI_SKILL_AUTHORITY_SYSTEM,
+                &mut entries_out,
+                &mut list_error,
+            )
+        };
         assert_eq!(disabled_list_status, FFI_STATUS_OK);
         assert!(list_error.ptr.is_null());
         assert!(!entries_out.is_null());
@@ -4357,8 +4585,14 @@ mod tests {
             ptr: ptr::null_mut(),
             len: 0,
         };
-        let enabled_list_status =
-            unsafe { luaskills_ffi_list_entries(engine_id, &mut entries_out, &mut list_error) };
+        let enabled_list_status = unsafe {
+            luaskills_ffi_list_entries(
+                engine_id,
+                FFI_SKILL_AUTHORITY_SYSTEM,
+                &mut entries_out,
+                &mut list_error,
+            )
+        };
         assert_eq!(enabled_list_status, FFI_STATUS_OK);
         assert!(list_error.ptr.is_null());
         assert!(!entries_out.is_null());

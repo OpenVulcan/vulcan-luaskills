@@ -7,6 +7,10 @@ import ctypes
 import os
 from pathlib import Path
 
+# Full host-system authority for standard FFI query examples.
+# 标准 FFI 查询示例使用的完整宿主系统权限。
+LUASKILLS_SKILL_AUTHORITY_SYSTEM = 0
+
 
 class FfiLuaVmPoolConfig(ctypes.Structure):
     """
@@ -39,8 +43,6 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("state_dir_name", ctypes.c_char_p),
         ("database_dir_name", ctypes.c_char_p),
         ("skill_config_file_path", ctypes.c_char_p),
-        ("protected_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
-        ("protected_skill_ids_len", ctypes.c_size_t),
         ("allow_network_download", ctypes.c_uint8),
         ("github_base_url", ctypes.c_char_p),
         ("github_api_base_url", ctypes.c_char_p),
@@ -300,6 +302,7 @@ def main() -> None:
     ]
     library.luaskills_ffi_list_entries.argtypes = [
         ctypes.c_uint64,
+        ctypes.c_int32,
         ctypes.POINTER(ctypes.POINTER(FfiRuntimeEntryDescriptorList)),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
@@ -358,8 +361,6 @@ def main() -> None:
     host.state_dir_name = b"state"
     host.database_dir_name = b"databases"
     host.skill_config_file_path = None
-    host.protected_skill_ids = None
-    host.protected_skill_ids_len = 0
     host.allow_network_download = 0
     host.github_base_url = None
     host.github_api_base_url = None
@@ -416,7 +417,10 @@ def main() -> None:
     error_buffer = FfiOwnedBuffer()
     must_ok(
         library.luaskills_ffi_list_entries(
-            engine_id.value, ctypes.byref(entries_ptr), ctypes.byref(error_buffer)
+            engine_id.value,
+            LUASKILLS_SKILL_AUTHORITY_SYSTEM,
+            ctypes.byref(entries_ptr),
+            ctypes.byref(error_buffer),
         ),
         error_buffer,
         library,

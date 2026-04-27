@@ -122,38 +122,38 @@ Reload skills from one ordered root chain.
 FfiOwnedBuffer luaskills_ffi_reload_from_roots_json(FfiBorrowedBuffer input_json);
 
 /*
-List runtime entry descriptors as JSON.
-以 JSON 形式列出运行时入口描述。
+List runtime entry descriptors as JSON with host-injected query authority.
+通过宿主注入查询权限以 JSON 形式列出运行时入口描述。
 */
 FfiOwnedBuffer luaskills_ffi_list_entries_json(FfiBorrowedBuffer input_json);
 
 /*
-List runtime help descriptors as JSON.
-以 JSON 形式列出运行时帮助描述。
+List runtime help descriptors as JSON with host-injected query authority.
+通过宿主注入查询权限以 JSON 形式列出运行时帮助描述。
 */
 FfiOwnedBuffer luaskills_ffi_list_skill_help_json(FfiBorrowedBuffer input_json);
 
 /*
-Render one runtime help detail payload as JSON.
-以 JSON 形式渲染单个运行时帮助详情。
+Render one runtime help detail payload as JSON with host-injected query authority.
+通过宿主注入查询权限以 JSON 形式渲染单个运行时帮助详情。
 */
 FfiOwnedBuffer luaskills_ffi_render_skill_help_detail_json(FfiBorrowedBuffer input_json);
 
 /*
-Resolve prompt argument completions as JSON.
-以 JSON 形式解析提示词参数补全项。
+Resolve prompt argument completions as JSON with host-injected authority.
+通过宿主注入权限以 JSON 形式解析提示词参数补全项。
 */
 FfiOwnedBuffer luaskills_ffi_prompt_argument_completions_json(FfiBorrowedBuffer input_json);
 
 /*
-Check whether one canonical tool name belongs to a Lua skill.
-检查某个 canonical 工具名是否属于 Lua 技能。
+Check whether one canonical tool name belongs to a visible Lua skill.
+检查某个 canonical 工具名是否属于可见 Lua 技能。
 */
 FfiOwnedBuffer luaskills_ffi_is_skill_json(FfiBorrowedBuffer input_json);
 
 /*
-Resolve the owning skill id of one canonical tool name.
-解析某个 canonical 工具名所属的技能标识符。
+Resolve the visible owning skill id of one canonical tool name.
+解析某个 canonical 工具名可见的所属技能标识符。
 */
 FfiOwnedBuffer luaskills_ffi_skill_name_for_tool_json(FfiBorrowedBuffer input_json);
 
@@ -182,8 +182,8 @@ Delete one skill config key as JSON.
 FfiOwnedBuffer luaskills_ffi_skill_config_delete_json(FfiBorrowedBuffer input_json);
 
 /*
-Call one loaded skill entry using one JSON request.
-使用一段 JSON 请求调用单个已加载技能入口。
+Call one active loaded skill entry using one JSON request.
+使用一段 JSON 请求调用单个已激活的已加载技能入口。
 */
 FfiOwnedBuffer luaskills_ffi_call_skill_json(FfiBorrowedBuffer input_json);
 
@@ -206,14 +206,14 @@ Disable one skill through one ordered root chain.
 FfiOwnedBuffer luaskills_ffi_disable_skill_json(FfiBorrowedBuffer input_json);
 
 /*
-Disable one protected-capable skill through legacy directory-style roots.
-通过旧目录风格根参数在 system 平面停用单个技能。
+Disable one skill through legacy directory-style roots with host-injected system authority.
+通过旧目录风格根参数和宿主注入的 system 权限停用单个技能。
 */
 FfiOwnedBuffer luaskills_ffi_system_disable_skill_in_dirs_json(FfiBorrowedBuffer input_json);
 
 /*
-Disable one protected-capable skill through one ordered root chain.
-通过一条有序根链在 system 平面停用单个技能。
+Disable one skill through one ordered root chain with host-injected system authority.
+通过一条有序根链和宿主注入的 system 权限停用单个技能。
 */
 FfiOwnedBuffer luaskills_ffi_system_disable_skill_json(FfiBorrowedBuffer input_json);
 
@@ -224,8 +224,8 @@ Enable one skill through one ordered root chain.
 FfiOwnedBuffer luaskills_ffi_enable_skill_json(FfiBorrowedBuffer input_json);
 
 /*
-Enable one protected-capable skill through one ordered root chain.
-通过一条有序根链在 system 平面启用单个技能。
+Enable one skill through one ordered root chain with host-injected system authority.
+通过一条有序根链和宿主注入的 system 权限启用单个技能。
 */
 FfiOwnedBuffer luaskills_ffi_system_enable_skill_json(FfiBorrowedBuffer input_json);
 
@@ -236,8 +236,8 @@ Uninstall one skill through one ordered root chain.
 FfiOwnedBuffer luaskills_ffi_uninstall_skill_json(FfiBorrowedBuffer input_json);
 
 /*
-Uninstall one protected-capable skill through one ordered root chain.
-通过一条有序根链在 system 平面卸载单个技能。
+Uninstall one skill through one ordered root chain with host-injected system authority.
+通过一条有序根链和宿主注入的 system 权限卸载单个技能。
 */
 FfiOwnedBuffer luaskills_ffi_system_uninstall_skill_json(FfiBorrowedBuffer input_json);
 
@@ -248,8 +248,8 @@ Install one managed skill through one ordered root chain.
 FfiOwnedBuffer luaskills_ffi_install_skill_json(FfiBorrowedBuffer input_json);
 
 /*
-Install one managed skill through one ordered root chain on the system plane.
-通过一条有序根链在 system 平面安装单个受管技能。
+Install one managed skill through one ordered root chain with host-injected system authority.
+通过一条有序根链和宿主注入的 system 权限安装单个受管技能。
 */
 FfiOwnedBuffer luaskills_ffi_system_install_skill_json(FfiBorrowedBuffer input_json);
 
@@ -260,8 +260,8 @@ Update one managed skill through one ordered root chain.
 FfiOwnedBuffer luaskills_ffi_update_skill_json(FfiBorrowedBuffer input_json);
 
 /*
-Update one managed skill through one ordered root chain on the system plane.
-通过一条有序根链在 system 平面更新单个受管技能。
+Update one managed skill through one ordered root chain with host-injected system authority.
+通过一条有序根链和宿主注入的 system 权限更新单个受管技能。
 */
 FfiOwnedBuffer luaskills_ffi_system_update_skill_json(FfiBorrowedBuffer input_json);
 

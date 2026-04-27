@@ -1,5 +1,5 @@
 use crate::runtime::entry::RuntimeEntryDescriptor;
-use crate::skill::manager::{SkillLifecycleAction, SkillOperationPlane};
+use crate::skill::manager::{SkillLifecycleAction, SkillManagementAuthority, SkillOperationPlane};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -46,6 +46,9 @@ pub struct RuntimeSkillManagementRequest {
     /// Requested management action kind.
     /// 请求的管理动作类型。
     pub action: RuntimeSkillManagementAction,
+    /// Host-injected authority level for this ordinary runtime bridge request.
+    /// 当前普通运行时桥接请求的宿主注入权限等级。
+    pub authority: SkillManagementAuthority,
     /// Arbitrary JSON payload supplied by the Lua caller.
     /// 由 Lua 调用方提供的任意 JSON 载荷。
     pub input: Value,

@@ -9,6 +9,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
+Full host-system authority for standard FFI query examples.
+标准 FFI 查询示例使用的完整宿主系统权限。
+ */
+const LUASKILLS_SKILL_AUTHORITY_SYSTEM = 0;
+
+/**
 Resolve the dynamic library path from one explicit environment variable.
 从一个显式环境变量解析动态库路径。
  */
@@ -130,8 +136,6 @@ function main(): void {
     state_dir_name: "str",
     database_dir_name: "str",
     skill_config_file_path: "str",
-    protected_skill_ids: "void *",
-    protected_skill_ids_len: "size_t",
     allow_network_download: "uint8_t",
     github_base_url: "str",
     github_api_base_url: "str",
@@ -215,7 +219,7 @@ function main(): void {
   const version = library.func("int luaskills_ffi_version(FfiOwnedBuffer *version_out, FfiOwnedBuffer *error_out)");
   const engineNew = library.func("int luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
   const loadFromRoots = library.func("int luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, FfiOwnedBuffer *error_out)");
-  const listEntries = library.func("int luaskills_ffi_list_entries(uint64_t engine_id, void **entries_out, FfiOwnedBuffer *error_out)");
+  const listEntries = library.func("int luaskills_ffi_list_entries(uint64_t engine_id, int32_t authority, void **entries_out, FfiOwnedBuffer *error_out)");
   const callSkill = library.func("int luaskills_ffi_call_skill(uint64_t engine_id, const char *tool_name, FfiBorrowedBuffer args_json, const FfiLuaInvocationContext *invocation_context, void **result_out, FfiOwnedBuffer *error_out)");
   const runLua = library.func("int luaskills_ffi_run_lua(uint64_t engine_id, const char *code, FfiBorrowedBuffer args_json, const FfiLuaInvocationContext *invocation_context, FfiOwnedBuffer *result_json_out, FfiOwnedBuffer *error_out)");
   const freeEntryList = library.func("void luaskills_ffi_entry_list_free(void *value)");
@@ -242,8 +246,6 @@ function main(): void {
       state_dir_name: "state",
       database_dir_name: "databases",
       skill_config_file_path: null,
-      protected_skill_ids: null,
-      protected_skill_ids_len: 0,
       allow_network_download: 0,
       github_base_url: null,
       github_api_base_url: null,
@@ -284,7 +286,7 @@ function main(): void {
 
   const entriesOut = [null];
   const entriesError = [{ ptr: null, len: 0 }];
-  mustOK(listEntries(engineIdOut[0], entriesOut, entriesError), entriesError[0], freeBuffer);
+  mustOK(listEntries(engineIdOut[0], LUASKILLS_SKILL_AUTHORITY_SYSTEM, entriesOut, entriesError), entriesError[0], freeBuffer);
   if (entriesOut[0]) {
     const entryList = koffi.decode(entriesOut[0], FfiRuntimeEntryDescriptorList) as {
       items: Buffer | null;

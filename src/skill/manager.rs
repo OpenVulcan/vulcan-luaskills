@@ -34,14 +34,17 @@ pub enum SkillOperationPlane {
     System,
 }
 
-/// Host-owned protection configuration that reserves specific skill identifiers.
-/// 由宿主持有的保护配置，用于保留特定技能标识符。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SkillProtectionConfig {
-    /// Reserved protected skill identifiers that cannot be handled through the `skills` plane.
-    /// 受保护的保留技能标识符列表，禁止通过 `skills` 平面处理。
-    #[serde(default)]
-    pub protected_skill_ids: Vec<String>,
+/// Authority level supplied by the host for system skill-management entrypoints.
+/// 宿主为系统级技能管理入口注入的权限等级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillManagementAuthority {
+    /// Full host-system authority that may write the ROOT skill layer.
+    /// 可写入 ROOT 技能层的完整宿主系统权限。
+    System,
+    /// Delegated tool authority that must follow ordinary PROJECT/USER boundaries.
+    /// 必须遵守普通 PROJECT/USER 边界的委托工具权限。
+    DelegatedTool,
 }
 
 /// High-level manager configuration that defines where installed skills and their state are stored.
@@ -54,10 +57,6 @@ pub struct SkillManagerConfig {
     /// Root directory where lifecycle sidecar state of the current named skill root is persisted.
     /// 当前命名技能根生命周期旁路状态的持久化根目录。
     pub lifecycle_root: PathBuf,
-    /// Host-owned protection policy that reserves core skill identifiers.
-    /// 宿主拥有的保护策略，用于保留核心技能标识符。
-    #[serde(default)]
-    pub protection: SkillProtectionConfig,
     /// Root directory used to cache downloaded skill packages and remote manifests.
     /// 用于缓存下载技能包与远程清单的根目录。
     pub download_cache_root: PathBuf,
@@ -333,8 +332,8 @@ impl SkillManager {
         })
     }
 
-    /// Validate one skill id and enforce the plane-specific protection rules.
-    /// 校验单个 skill id 并执行按平面划分的保护规则。
+    /// Validate one skill id and enforce the root-plane protection boundary.
+    /// 校验单个 skill id 并执行根层级平面保护边界。
     pub fn guard_operation(
         &self,
         plane: SkillOperationPlane,
@@ -348,23 +347,7 @@ impl SkillManager {
                 action
             ));
         }
-        if self.is_protected_skill(skill_id) && plane == SkillOperationPlane::Skills {
-            return Err(format!(
-                "protected skill '{}' cannot be processed through the skills plane for action {:?}",
-                skill_id, action
-            ));
-        }
         Ok(())
-    }
-
-    /// Return whether one skill identifier is reserved by the host protection policy.
-    /// 返回单个技能标识符是否被宿主保护策略保留。
-    pub fn is_protected_skill(&self, skill_id: &str) -> bool {
-        self.config
-            .protection
-            .protected_skill_ids
-            .iter()
-            .any(|protected| protected.trim() == skill_id)
     }
 
     /// Return whether one skill is currently enabled.
@@ -1535,9 +1518,9 @@ fn is_skill_manifest_enabled(skill_dir: &Path) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        SkillInstallRequest, SkillInstallSourceType, SkillLifecycleAction, SkillManager,
-        SkillManagerConfig, SkillOperationPlane, SkillProtectionConfig, TempDirGuard,
-        collect_effective_skill_instances, resolve_effective_skill_instance,
+        SkillInstallRequest, SkillInstallSourceType, SkillManager, SkillManagerConfig,
+        SkillOperationPlane, TempDirGuard, collect_effective_skill_instances,
+        resolve_effective_skill_instance,
     };
     use crate::runtime_options::RuntimeSkillRoot;
 
@@ -1550,7 +1533,6 @@ mod tests {
         SkillManagerConfig {
             skill_root,
             lifecycle_root: temp_root.join("state"),
-            protection: SkillProtectionConfig::default(),
             download_cache_root: temp_root.join("downloads"),
             allow_network_download: false,
             github_base_url: None,
@@ -1589,7 +1571,6 @@ mod tests {
         }
         let skill_root = temp_root.join("skills");
         let manager = SkillManager::new(SkillManagerConfig {
-            protection: SkillProtectionConfig::default(),
             ..test_manager_config(
                 &temp_root,
                 RuntimeSkillRoot {
@@ -1622,48 +1603,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_root);
     }
 
-    /// Verify that protected skills are blocked in the skills plane but still allowed in the system plane.
-    /// 验证受保护技能会在 skills 平面被阻止，但在 system 平面仍然允许。
-    #[test]
-    fn protected_skills_are_blocked_only_in_skills_plane() {
-        let temp_root =
-            std::env::temp_dir().join(format!("luaskills_protection_test_{}", std::process::id()));
-        let skill_root = temp_root.join("skills");
-        let manager = SkillManager::new(SkillManagerConfig {
-            protection: SkillProtectionConfig {
-                protected_skill_ids: vec!["vulcan-runtime".to_string()],
-            },
-            ..test_manager_config(
-                &temp_root,
-                RuntimeSkillRoot {
-                    name: "USER".to_string(),
-                    skills_dir: skill_root,
-                },
-            )
-        });
-
-        assert!(
-            manager
-                .guard_operation(
-                    SkillOperationPlane::Skills,
-                    SkillLifecycleAction::Disable,
-                    "vulcan-runtime"
-                )
-                .is_err()
-        );
-        assert!(
-            manager
-                .guard_operation(
-                    SkillOperationPlane::System,
-                    SkillLifecycleAction::Disable,
-                    "vulcan-runtime"
-                )
-                .is_ok()
-        );
-    }
-
-    /// Verify that install/update entrypoints still enforce protection and return strict structured states before networking succeeds.
-    /// 验证 install/update 入口在真正下载前依旧会执行保护判断，并返回严格的结构化状态。
+    /// Verify that install/update entrypoints return strict structured states before networking succeeds.
+    /// 验证 install/update 入口在真正下载前会返回严格的结构化状态。
     #[test]
     fn install_update_entrypoints_return_strict_structured_results() {
         let temp_root = std::env::temp_dir().join(format!(
@@ -1676,26 +1617,7 @@ mod tests {
             skills_dir: skill_root.clone(),
         }];
         let _ = std::fs::create_dir_all(&skill_root);
-        let manager = SkillManager::new(SkillManagerConfig {
-            protection: SkillProtectionConfig {
-                protected_skill_ids: vec!["vulcan-runtime".to_string()],
-            },
-            ..test_manager_config(&temp_root, skill_roots[0].clone())
-        });
-
-        assert!(
-            manager
-                .prepare_install_skill(
-                    SkillOperationPlane::Skills,
-                    &skill_roots,
-                    &SkillInstallRequest {
-                        skill_id: Some("vulcan-runtime".to_string()),
-                        source: None,
-                        source_type: SkillInstallSourceType::Github,
-                    }
-                )
-                .is_err()
-        );
+        let manager = SkillManager::new(test_manager_config(&temp_root, skill_roots[0].clone()));
 
         let install_result = manager
             .prepare_install_skill(
@@ -1739,16 +1661,13 @@ mod tests {
             let _ = std::fs::remove_dir_all(&temp_root);
         }
         let skill_root = temp_root.join("skills");
-        let manager = SkillManager::new(SkillManagerConfig {
-            protection: SkillProtectionConfig::default(),
-            ..test_manager_config(
-                &temp_root,
-                RuntimeSkillRoot {
-                    name: "USER".to_string(),
-                    skills_dir: skill_root.clone(),
-                },
-            )
-        });
+        let manager = SkillManager::new(test_manager_config(
+            &temp_root,
+            RuntimeSkillRoot {
+                name: "USER".to_string(),
+                skills_dir: skill_root.clone(),
+            },
+        ));
         let _ = std::fs::create_dir_all(skill_root.join("vulcan-codekit"));
 
         let result = manager

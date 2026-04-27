@@ -46,8 +46,6 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("state_dir_name", ctypes.c_char_p),
         ("database_dir_name", ctypes.c_char_p),
         ("skill_config_file_path", ctypes.c_char_p),
-        ("protected_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
-        ("protected_skill_ids_len", ctypes.c_size_t),
         ("allow_network_download", ctypes.c_uint8),
         ("github_base_url", ctypes.c_char_p),
         ("github_api_base_url", ctypes.c_char_p),
@@ -260,8 +258,6 @@ def build_engine_options(root: Path) -> FfiLuaEngineOptions:
     host.state_dir_name = b"state"
     host.database_dir_name = b"databases"
     host.skill_config_file_path = None
-    host.protected_skill_ids = None
-    host.protected_skill_ids_len = 0
     host.allow_network_download = 1
     host.github_base_url = None
     host.github_api_base_url = None
@@ -355,6 +351,7 @@ def main() -> None:
             "luaskills_ffi_system_install_skill_json",
             {
                 "engine_id": engine_id.value,
+                "authority": "system",
                 "skill_roots": roots_payload["skill_roots"],
                 "request": {
                     "source": DEMO_SKILL_REPO,

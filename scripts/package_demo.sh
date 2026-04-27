@@ -19,7 +19,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-target/release-packages}"
 
 # ReleaseTag stores the Git tag used by packaged Rust demos.
 # ReleaseTag 保存发布 Rust demo 使用的 Git 标签。
-RELEASE_TAG="${3:-${RELEASE_TAG:-v0.2.1}}"
+RELEASE_TAG="${3:-${RELEASE_TAG:-v0.2.2}}"
 
 ensure_dir() {
   # Create one directory when it does not exist.

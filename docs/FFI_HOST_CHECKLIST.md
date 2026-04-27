@@ -84,6 +84,11 @@ ROOT -> PROJECT -> USER
 - `ROOT` root 必须出现在启动或加载 root 链中；缺失时应直接报错。
 - 普通 `vulcan.runtime.skills.*` 不应暴露 `ROOT` 目标选项。
 - 若开放普通技能管理桥接，应同时提供层级列表能力，例如 `vulcan.runtime.skills.layers()`，让调用方获取当前实际存在的 `PROJECT` / `USER` 标签；bridge 关闭时不要把层级标记为可写。
+- `ROOT` 中存在同名 `skill_id` 时，任何 authority 都不能向 `PROJECT` / `USER` install 或 update 同名 skill；普通层显式 uninstall 可用于清理残留。
+- 若将 system tools 暴露给普通 tools，宿主 wrapper 必须固定注入 `DelegatedTool` authority；只有管理员、修复或受控更新流程才应注入 `System`。
+- 查询与 prompt completion 类 FFI 入口也必须注入 authority；`DelegatedTool` 下不得返回 `ROOT` entries、help detail、`is_skill=true` 或 ROOT tool name 归属。`call_skill` / `run_lua` 是运行时执行面，不作为 ROOT 可见性边界；如果不希望普通用户执行任意 Lua，应由宿主单独封装或不暴露 `run_lua`。
+- skill config 接口按 `skill_id` 管理配置，不按 root 可见性过滤；配置只有被 Lua 通过 `vulcan.config.*` 读取时才会影响行为。若不希望客户修改配置，不应暴露对应 `set/delete` 能力，核心行为应通过宿主硬逻辑或内置核心 skill 固化。
+- `protected_skill_ids` 已取消，不应再作为宿主接入参数或普通管理保护机制。
 
 ## 5. 生命周期与查询辅助的第二阶段顺序
 

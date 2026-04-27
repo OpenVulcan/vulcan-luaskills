@@ -16,7 +16,7 @@ use crate::runtime_help::{RuntimeHelpDetail, RuntimeSkillHelpDescriptor};
 use crate::runtime_options::{LuaInvocationContext, RuntimeSkillRoot};
 use crate::{
     LuaEngine, LuaEngineOptions, RuntimeEntryDescriptor, RuntimeInvocationResult, SkillApplyResult,
-    SkillInstallRequest, SkillUninstallOptions, SkillUninstallResult,
+    SkillInstallRequest, SkillManagementAuthority, SkillUninstallOptions, SkillUninstallResult,
 };
 
 /// Stable FFI protocol version derived from the crate package version.
@@ -85,6 +85,18 @@ struct EngineIdJsonRequest {
     engine_id: u64,
 }
 
+/// One JSON request that targets one engine with host-injected query authority.
+/// 携带宿主注入查询权限并定位单个引擎的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+struct EngineAuthorityJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    engine_id: u64,
+    /// Host-injected authority required by query JSON entrypoints.
+    /// 查询 JSON 入口必填的宿主注入权限等级。
+    authority: Option<SkillManagementAuthority>,
+}
+
 /// One JSON request that targets one engine together with an ordered root chain.
 /// 同时携带单个引擎与一条有序根链的 JSON 请求。
 #[derive(Debug, Serialize, Deserialize)]
@@ -134,6 +146,10 @@ struct DisableSkillDirsJsonRequest {
     /// 持久化到技能状态中的可选停用原因。
     #[serde(default)]
     reason: Option<String>,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON request used to render help detail for one skill flow.
@@ -153,6 +169,9 @@ struct RenderHelpJsonRequest {
     /// 在帮助渲染时一并注入的可选请求上下文。
     #[serde(default)]
     request_context: Option<RuntimeRequestContext>,
+    /// Host-injected authority required by query JSON entrypoints.
+    /// 查询 JSON 入口必填的宿主注入权限等级。
+    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON request used to query prompt argument completions.
@@ -162,6 +181,9 @@ struct PromptCompletionJsonRequest {
     /// Stable numeric FFI handle id of the target engine.
     /// 目标引擎的稳定数值 FFI 句柄标识。
     engine_id: u64,
+    /// Host-injected authority required by prompt completion JSON entrypoints.
+    /// 提示词补全 JSON 入口必填的宿主注入权限等级。
+    authority: Option<SkillManagementAuthority>,
     /// Stable prompt name supplied by the host.
     /// 由宿主提供的稳定提示词名称。
     prompt_name: String,
@@ -180,6 +202,9 @@ struct IsSkillJsonRequest {
     /// Tool name to resolve against the runtime entry registry.
     /// 需要在运行时入口注册表中解析的工具名称。
     tool_name: String,
+    /// Host-injected authority required by query JSON entrypoints.
+    /// 查询 JSON 入口必填的宿主注入权限等级。
+    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON result that answers one boolean runtime query.
@@ -201,6 +226,9 @@ struct SkillNameForToolJsonRequest {
     /// Tool name to resolve against the runtime entry registry.
     /// 需要在运行时入口注册表中解析的工具名称。
     tool_name: String,
+    /// Host-injected authority required by query JSON entrypoints.
+    /// 查询 JSON 入口必填的宿主注入权限等级。
+    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON result containing the optional owning skill id of one tool.
@@ -358,6 +386,10 @@ struct DisableSkillJsonRequest {
     /// 持久化到技能状态中的可选停用原因。
     #[serde(default)]
     reason: Option<String>,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON request used to enable one skill in one ordered root chain.
@@ -373,6 +405,10 @@ struct EnableSkillJsonRequest {
     /// Stable target skill identifier.
     /// 稳定的目标技能标识符。
     skill_id: String,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON request used to uninstall one skill in one ordered root chain.
@@ -392,6 +428,10 @@ struct UninstallSkillJsonRequest {
     /// 在卸载提交成功后应用的可选数据库清理开关。
     #[serde(default)]
     options: SkillUninstallOptions,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON request used to install or update one managed skill in one ordered root chain.
@@ -407,6 +447,10 @@ struct ApplySkillJsonRequest {
     /// Managed install or update request forwarded to the Rust runtime.
     /// 直接转发给 Rust 运行时的受管安装或更新请求。
     request: SkillInstallRequest,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON result that lists the currently exported FFI entrypoints.
@@ -473,6 +517,20 @@ impl Drop for ActiveFfiEngineGuard {
 /// 返回默认的空 JSON 对象载荷。
 fn default_json_object() -> Value {
     Value::Object(serde_json::Map::new())
+}
+
+/// Require one host-injected authority value for an authority-gated JSON FFI entrypoint.
+/// 为单个受权限保护的 JSON FFI 入口要求宿主注入权限值。
+fn require_json_authority(
+    authority: Option<SkillManagementAuthority>,
+    function_name: &str,
+) -> Result<SkillManagementAuthority, String> {
+    authority.ok_or_else(|| {
+        format!(
+            "{} requires host-injected authority: use 'system' or 'delegated_tool'",
+            function_name
+        )
+    })
 }
 
 /// Return the global engine registry used by the FFI layer.
@@ -856,46 +914,60 @@ pub unsafe extern "C" fn luaskills_ffi_reload_from_roots_json(
     }
 }
 
-/// List runtime entry descriptors through the JSON FFI surface.
-/// 通过 JSON FFI 入口列出运行时入口描述。
+/// List runtime entry descriptors visible to one host-injected authority through the JSON FFI surface.
+/// 通过 JSON FFI 入口列出单个宿主注入权限可见的运行时入口描述。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_list_entries_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
-    let request = match decode_json_request::<EngineIdJsonRequest>(
+    let request = match decode_json_request::<EngineAuthorityJsonRequest>(
         input_json,
         "luaskills_ffi_list_entries_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
-    match with_engine(request.engine_id, |engine| Ok(engine.list_entries())) {
+    let authority =
+        match require_json_authority(request.authority, "luaskills_ffi_list_entries_json") {
+            Ok(authority) => authority,
+            Err(error) => return ffi_error(error),
+        };
+    match with_engine(request.engine_id, |engine| {
+        Ok(engine.list_entries_for_authority(authority))
+    }) {
         Ok(result) => ffi_ok::<Vec<RuntimeEntryDescriptor>>(result),
         Err(error) => ffi_error(error),
     }
 }
 
-/// List structured help trees through the JSON FFI surface.
-/// 通过 JSON FFI 入口列出结构化帮助树。
+/// List structured help trees visible to one host-injected authority through the JSON FFI surface.
+/// 通过 JSON FFI 入口列出单个宿主注入权限可见的结构化帮助树。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_list_skill_help_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
-    let request = match decode_json_request::<EngineIdJsonRequest>(
+    let request = match decode_json_request::<EngineAuthorityJsonRequest>(
         input_json,
         "luaskills_ffi_list_skill_help_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
-    match with_engine(request.engine_id, |engine| Ok(engine.list_skill_help())) {
+    let authority =
+        match require_json_authority(request.authority, "luaskills_ffi_list_skill_help_json") {
+            Ok(authority) => authority,
+            Err(error) => return ffi_error(error),
+        };
+    match with_engine(request.engine_id, |engine| {
+        Ok(engine.list_skill_help_for_authority(authority))
+    }) {
         Ok(result) => ffi_ok::<Vec<RuntimeSkillHelpDescriptor>>(result),
         Err(error) => ffi_error(error),
     }
 }
 
-/// Render one structured help detail payload through the JSON FFI surface.
-/// 通过 JSON FFI 入口渲染单个结构化帮助详情载荷。
+/// Render one structured help detail payload visible to one host-injected authority through the JSON FFI surface.
+/// 通过 JSON FFI 入口渲染单个宿主注入权限可见的结构化帮助详情载荷。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_render_skill_help_detail_json(
     input_json: FfiBorrowedBuffer,
@@ -907,8 +979,16 @@ pub unsafe extern "C" fn luaskills_ffi_render_skill_help_detail_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_render_skill_help_detail_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
     match with_engine(request.engine_id, |engine| {
-        engine.render_skill_help_detail(
+        engine.render_skill_help_detail_for_authority(
+            authority,
             &request.skill_id,
             &request.flow_name,
             request.request_context.as_ref(),
@@ -932,16 +1012,27 @@ pub unsafe extern "C" fn luaskills_ffi_prompt_argument_completions_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_prompt_argument_completions_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
     match with_engine(request.engine_id, |engine| {
-        Ok(engine.prompt_argument_completions(&request.prompt_name, &request.argument_name))
+        Ok(engine.prompt_argument_completions_for_authority(
+            authority,
+            &request.prompt_name,
+            &request.argument_name,
+        ))
     }) {
         Ok(result) => ffi_ok::<Option<Vec<String>>>(result),
         Err(error) => ffi_error(error),
     }
 }
 
-/// Check whether one canonical tool name belongs to one Lua skill entry.
-/// 检查某个 canonical 工具名是否属于 Lua 技能入口。
+/// Check whether one canonical tool name belongs to one visible Lua skill entry.
+/// 检查某个 canonical 工具名是否属于一个可见 Lua 技能入口。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_is_skill_json(
     input_json: FfiBorrowedBuffer,
@@ -953,16 +1044,20 @@ pub unsafe extern "C" fn luaskills_ffi_is_skill_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority = match require_json_authority(request.authority, "luaskills_ffi_is_skill_json") {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
     match with_engine(request.engine_id, |engine| {
-        Ok(engine.is_skill(&request.tool_name))
+        Ok(engine.is_skill_for_authority(authority, &request.tool_name))
     }) {
         Ok(value) => ffi_ok(BoolJsonResult { value }),
         Err(error) => ffi_error(error),
     }
 }
 
-/// Resolve the owning skill id of one canonical tool name through the JSON FFI surface.
-/// 通过 JSON FFI 入口解析某个 canonical 工具名所属的技能标识符。
+/// Resolve the visible owning skill id of one canonical tool name through the JSON FFI surface.
+/// 通过 JSON FFI 入口解析某个 canonical 工具名可见的所属技能标识符。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_skill_name_for_tool_json(
     input_json: FfiBorrowedBuffer,
@@ -974,8 +1069,13 @@ pub unsafe extern "C" fn luaskills_ffi_skill_name_for_tool_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority =
+        match require_json_authority(request.authority, "luaskills_ffi_skill_name_for_tool_json") {
+            Ok(authority) => authority,
+            Err(error) => return ffi_error(error),
+        };
     match with_engine(request.engine_id, |engine| {
-        Ok(engine.skill_name_for_tool(&request.tool_name))
+        Ok(engine.skill_name_for_tool_for_authority(authority, &request.tool_name))
     }) {
         Ok(skill_id) => ffi_ok(OptionalSkillNameJsonResult { skill_id }),
         Err(error) => ffi_error(error),
@@ -1199,11 +1299,19 @@ pub unsafe extern "C" fn luaskills_ffi_system_disable_skill_in_dirs_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_disable_skill_in_dirs_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
     match with_engine_mut(request.engine_id, |engine| {
         engine
             .system_disable_skill(
                 &request.base_dir,
                 request.override_dir.as_deref(),
+                authority,
                 &request.skill_id,
                 request.reason.as_deref(),
             )
@@ -1227,10 +1335,18 @@ pub unsafe extern "C" fn luaskills_ffi_system_disable_skill_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_disable_skill_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
     match with_engine_mut(request.engine_id, |engine| {
         engine
             .system_disable_skill_in_roots(
                 &request.skill_roots,
+                authority,
                 &request.skill_id,
                 request.reason.as_deref(),
             )
@@ -1277,9 +1393,14 @@ pub unsafe extern "C" fn luaskills_ffi_system_enable_skill_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority =
+        match require_json_authority(request.authority, "luaskills_ffi_system_enable_skill_json") {
+            Ok(authority) => authority,
+            Err(error) => return ffi_error(error),
+        };
     match with_engine_mut(request.engine_id, |engine| {
         engine
-            .system_enable_skill(&request.skill_roots, &request.skill_id)
+            .system_enable_skill(&request.skill_roots, authority, &request.skill_id)
             .map_err(|error| error.to_string())
     }) {
         Ok(()) => ffi_ok(json!({ "enabled": true })),
@@ -1323,9 +1444,21 @@ pub unsafe extern "C" fn luaskills_ffi_system_uninstall_skill_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_uninstall_skill_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
     match with_engine_mut(request.engine_id, |engine| {
         engine
-            .system_uninstall_skill(&request.skill_roots, &request.skill_id, &request.options)
+            .system_uninstall_skill(
+                &request.skill_roots,
+                authority,
+                &request.skill_id,
+                &request.options,
+            )
             .map_err(|error| error.to_string())
     }) {
         Ok(result) => ffi_ok::<SkillUninstallResult>(result),
@@ -1369,9 +1502,16 @@ pub unsafe extern "C" fn luaskills_ffi_system_install_skill_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_install_skill_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
     match with_engine_mut(request.engine_id, |engine| {
         engine
-            .system_install_skill(&request.skill_roots, &request.request)
+            .system_install_skill(&request.skill_roots, authority, &request.request)
             .map_err(|error| error.to_string())
     }) {
         Ok(result) => ffi_ok::<SkillApplyResult>(result),
@@ -1415,9 +1555,14 @@ pub unsafe extern "C" fn luaskills_ffi_system_update_skill_json(
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
+    let authority =
+        match require_json_authority(request.authority, "luaskills_ffi_system_update_skill_json") {
+            Ok(authority) => authority,
+            Err(error) => return ffi_error(error),
+        };
     match with_engine_mut(request.engine_id, |engine| {
         engine
-            .system_update_skill(&request.skill_roots, &request.request)
+            .system_update_skill(&request.skill_roots, authority, &request.request)
             .map_err(|error| error.to_string())
     }) {
         Ok(result) => ffi_ok::<SkillApplyResult>(result),
@@ -1430,14 +1575,21 @@ mod tests {
     use super::{
         EngineHandleJsonResult, EngineIdJsonRequest, EngineNewJsonRequest, FFI_ENGINE_COUNTER,
         FfiEngineSlot, SkillConfigGetJsonRequest, SkillConfigListJsonRequest,
-        SkillConfigSetJsonRequest, ffi_engine_registry, luaskills_ffi_engine_free_json,
-        luaskills_ffi_engine_new_json, luaskills_ffi_skill_config_delete_json,
-        luaskills_ffi_skill_config_get_json, luaskills_ffi_skill_config_list_json,
-        luaskills_ffi_skill_config_set_json, with_engine,
+        SkillConfigSetJsonRequest, ffi_engine_registry, luaskills_ffi_call_skill_json,
+        luaskills_ffi_engine_free_json, luaskills_ffi_engine_new_json, luaskills_ffi_is_skill_json,
+        luaskills_ffi_list_entries_json, luaskills_ffi_list_skill_help_json,
+        luaskills_ffi_prompt_argument_completions_json,
+        luaskills_ffi_render_skill_help_detail_json, luaskills_ffi_run_lua_json,
+        luaskills_ffi_skill_config_delete_json, luaskills_ffi_skill_config_get_json,
+        luaskills_ffi_skill_config_list_json, luaskills_ffi_skill_config_set_json,
+        luaskills_ffi_skill_name_for_tool_json, with_engine,
     };
     use crate::ffi_standard::{FfiBorrowedBuffer, FfiOwnedBuffer, luaskills_ffi_buffer_free};
-    use crate::{LuaEngine, LuaEngineOptions, LuaVmPoolConfig};
+    use crate::{
+        LuaEngine, LuaEngineOptions, LuaVmPoolConfig, RuntimeSkillRoot, SkillManagementAuthority,
+    };
     use std::ffi::CString;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -1510,6 +1662,277 @@ mod tests {
         TestFfiEngineHandle { engine_id }
     }
 
+    /// Write one enabled skill fixture with entry and help metadata for FFI query tests.
+    /// 为 FFI 查询测试写入带入口与帮助元数据的启用技能夹具。
+    fn write_query_test_skill(skill_root: &Path, skill_id: &str) -> PathBuf {
+        let skill_dir = skill_root.join(skill_id);
+        std::fs::create_dir_all(skill_dir.join("runtime")).expect("create query runtime dir");
+        std::fs::create_dir_all(skill_dir.join("help")).expect("create query help dir");
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            format!(
+                "name: {skill_id}\nversion: 0.1.0\nenable: true\ndebug: false\nhelp:\n  main:\n    description: Main help.\n    file: help/main.md\nentries:\n  - name: ping\n    description: Query ping entry.\n    lua_entry: runtime/ping.lua\n    lua_module: {skill_id}.ping\n"
+            ),
+        )
+        .expect("write query skill yaml");
+        std::fs::write(
+            skill_dir.join("runtime").join("ping.lua"),
+            "return function(args)\n  return 'query-ok'\nend\n",
+        )
+        .expect("write query runtime entry");
+        std::fs::write(
+            skill_dir.join("help").join("main.md"),
+            format!("# {skill_id}\n\nQuery help.\n"),
+        )
+        .expect("write query help file");
+        skill_dir
+    }
+
+    /// Verify JSON FFI query entrypoints enforce authority-based ROOT visibility.
+    /// 验证 JSON FFI 查询入口会执行基于权限的 ROOT 可见性控制。
+    #[test]
+    fn ffi_query_json_filters_root_for_delegated_authority() {
+        let _guard = ffi_test_guard();
+        let temp_root = std::env::temp_dir().join(format!(
+            "luaskills_ffi_query_authority_test_{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            let _ = std::fs::remove_dir_all(&temp_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: " ROOT ".to_string(),
+            skills_dir: temp_root.join("root_skills"),
+        };
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: temp_root.join("user_skills"),
+        };
+        write_query_test_skill(&root_root.skills_dir, "vulcan-root-skill");
+        write_query_test_skill(&user_root.skills_dir, "vulcan-user-skill");
+        let mut engine = LuaEngine::new(LuaEngineOptions::new(
+            LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 30,
+            },
+            crate::LuaRuntimeHostOptions::default(),
+        ))
+        .expect("create ffi query test engine");
+        engine
+            .load_from_roots(&[root_root, user_root])
+            .expect("load query test roots");
+        let engine_id = FFI_ENGINE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        ffi_engine_registry()
+            .lock()
+            .expect("lock ffi engine registry")
+            .insert(engine_id, FfiEngineSlot::new(engine));
+        let _handle = TestFfiEngineHandle { engine_id };
+
+        let system_entries_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id,
+                "authority": SkillManagementAuthority::System
+            })
+            .to_string(),
+        )
+        .expect("system entries request");
+        let system_entries = unsafe {
+            decode_response_json(luaskills_ffi_list_entries_json(borrowed_json_buffer(
+                &system_entries_request,
+            )))
+        };
+        assert_eq!(system_entries["ok"], true);
+        assert!(
+            system_entries["result"]
+                .as_array()
+                .expect("system entries array")
+                .iter()
+                .any(|entry| entry["root_name"] == " ROOT ")
+        );
+
+        let delegated_entries_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id,
+                "authority": SkillManagementAuthority::DelegatedTool
+            })
+            .to_string(),
+        )
+        .expect("delegated entries request");
+        let delegated_entries = unsafe {
+            decode_response_json(luaskills_ffi_list_entries_json(borrowed_json_buffer(
+                &delegated_entries_request,
+            )))
+        };
+        assert_eq!(delegated_entries["ok"], true);
+        assert!(
+            delegated_entries["result"]
+                .as_array()
+                .expect("delegated entries array")
+                .iter()
+                .all(|entry| entry["root_name"]
+                    .as_str()
+                    .map(|root_name| root_name.trim().to_ascii_uppercase() != "ROOT")
+                    .unwrap_or(false))
+        );
+
+        let delegated_help = unsafe {
+            decode_response_json(luaskills_ffi_list_skill_help_json(borrowed_json_buffer(
+                &delegated_entries_request,
+            )))
+        };
+        assert_eq!(delegated_help["ok"], true);
+        assert!(
+            delegated_help["result"]
+                .as_array()
+                .expect("delegated help array")
+                .iter()
+                .all(|help| help["root_name"]
+                    .as_str()
+                    .map(|root_name| root_name.trim().to_ascii_uppercase() != "ROOT")
+                    .unwrap_or(false))
+        );
+
+        let delegated_detail_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id,
+                "authority": SkillManagementAuthority::DelegatedTool,
+                "skill_id": "vulcan-root-skill",
+                "flow_name": "main"
+            })
+            .to_string(),
+        )
+        .expect("delegated detail request");
+        let delegated_detail = unsafe {
+            decode_response_json(luaskills_ffi_render_skill_help_detail_json(
+                borrowed_json_buffer(&delegated_detail_request),
+            ))
+        };
+        assert_eq!(delegated_detail["ok"], true);
+        assert!(delegated_detail["result"].is_null());
+
+        let delegated_is_skill_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id,
+                "authority": SkillManagementAuthority::DelegatedTool,
+                "tool_name": "vulcan-root-skill-ping"
+            })
+            .to_string(),
+        )
+        .expect("delegated is_skill request");
+        let delegated_is_skill = unsafe {
+            decode_response_json(luaskills_ffi_is_skill_json(borrowed_json_buffer(
+                &delegated_is_skill_request,
+            )))
+        };
+        assert_eq!(delegated_is_skill["ok"], true);
+        assert_eq!(delegated_is_skill["result"]["value"], false);
+
+        let delegated_skill_name = unsafe {
+            decode_response_json(luaskills_ffi_skill_name_for_tool_json(
+                borrowed_json_buffer(&delegated_is_skill_request),
+            ))
+        };
+        assert_eq!(delegated_skill_name["ok"], true);
+        assert!(delegated_skill_name["result"]["skill_id"].is_null());
+
+        let root_call_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id,
+                "tool_name": "vulcan-root-skill-ping",
+                "args": {}
+            })
+            .to_string(),
+        )
+        .expect("root call request");
+        let root_call = unsafe {
+            decode_response_json(luaskills_ffi_call_skill_json(borrowed_json_buffer(
+                &root_call_request,
+            )))
+        };
+        assert_eq!(root_call["ok"], true);
+        assert_eq!(root_call["result"]["content"], "query-ok");
+
+        let root_run_lua_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id,
+                "code": "return vulcan.call('vulcan-root-skill-ping', {})",
+                "args": {}
+            })
+            .to_string(),
+        )
+        .expect("root run_lua request");
+        let root_run_lua = unsafe {
+            decode_response_json(luaskills_ffi_run_lua_json(borrowed_json_buffer(
+                &root_run_lua_request,
+            )))
+        };
+        assert_eq!(root_run_lua["ok"], true);
+        assert_eq!(root_run_lua["result"], "query-ok");
+
+        let delegated_prompt_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id,
+                "authority": SkillManagementAuthority::DelegatedTool,
+                "prompt_name": "demo",
+                "argument_name": "target"
+            })
+            .to_string(),
+        )
+        .expect("delegated prompt request");
+        let delegated_prompt = unsafe {
+            decode_response_json(luaskills_ffi_prompt_argument_completions_json(
+                borrowed_json_buffer(&delegated_prompt_request),
+            ))
+        };
+        assert_eq!(delegated_prompt["ok"], true);
+        assert!(delegated_prompt["result"].is_null());
+
+        let missing_prompt_authority_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id,
+                "prompt_name": "demo",
+                "argument_name": "target"
+            })
+            .to_string(),
+        )
+        .expect("missing prompt authority request");
+        let missing_prompt_authority = unsafe {
+            decode_response_json(luaskills_ffi_prompt_argument_completions_json(
+                borrowed_json_buffer(&missing_prompt_authority_request),
+            ))
+        };
+        assert_eq!(missing_prompt_authority["ok"], false);
+        assert!(
+            missing_prompt_authority["error"]
+                .as_str()
+                .expect("missing prompt authority error")
+                .contains("requires host-injected authority")
+        );
+
+        let missing_authority_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine_id
+            })
+            .to_string(),
+        )
+        .expect("missing authority request");
+        let missing_authority = unsafe {
+            decode_response_json(luaskills_ffi_list_entries_json(borrowed_json_buffer(
+                &missing_authority_request,
+            )))
+        };
+        assert_eq!(missing_authority["ok"], false);
+        assert!(
+            missing_authority["error"]
+                .as_str()
+                .expect("missing authority error")
+                .contains("requires host-injected authority")
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
     /// Verify that one engine can be created and freed through the JSON FFI surface.
     /// 验证可以通过 JSON FFI 入口创建并释放单个引擎。
     #[test]
@@ -1536,7 +1959,6 @@ mod tests {
                     state_dir_name: "state".to_string(),
                     database_dir_name: "databases".to_string(),
                     skill_config_file_path: None,
-                    protection: Default::default(),
                     allow_network_download: false,
                     github_base_url: None,
                     github_api_base_url: None,
@@ -1609,7 +2031,6 @@ mod tests {
                     skill_config_file_path: Some(
                         temp_root.join("config").join("skill_config.json"),
                     ),
-                    protection: Default::default(),
                     allow_network_download: false,
                     github_base_url: None,
                     github_api_base_url: None,

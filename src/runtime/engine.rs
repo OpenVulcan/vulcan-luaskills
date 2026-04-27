@@ -32,10 +32,11 @@ use crate::runtime_result::{
 };
 use crate::skill::dependencies::SkillDependencyManifest;
 use crate::skill::manager::{
-    PreparedSkillApply, SkillApplyResult, SkillInstallRequest, SkillManager, SkillManagerConfig,
-    SkillOperationPlane, SkillUninstallOptions, SkillUninstallResult,
-    collect_effective_skill_instances_from_roots, resolve_declared_skill_instance_from_roots,
-    resolve_effective_skill_instance_from_roots, resolve_requested_skill_id,
+    PreparedSkillApply, ResolvedSkillInstance, SkillApplyResult, SkillInstallRequest,
+    SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillOperationPlane,
+    SkillUninstallOptions, SkillUninstallResult, collect_effective_skill_instances_from_roots,
+    resolve_declared_skill_instance_from_roots, resolve_effective_skill_instance_from_roots,
+    resolve_requested_skill_id,
 };
 use crate::sqlite_host::{
     SqliteSkillBinding, SqliteSkillHost,
@@ -278,6 +279,7 @@ fn create_runtime_skill_management_bridge_fn(
         }
         let result = dispatch_skill_management_request(&RuntimeSkillManagementRequest {
             action: action.clone(),
+            authority: SkillManagementAuthority::DelegatedTool,
             input: payload,
         })
         .map_err(|error| {
@@ -2165,10 +2167,16 @@ impl LuaEngine {
         skill_roots
     }
 
+    /// Return the normalized formal label for one raw runtime skill root name.
+    /// 返回单个原始运行时技能根名称的规范化正式标签。
+    fn normalized_skill_root_name(root_name: &str) -> String {
+        root_name.trim().to_ascii_uppercase()
+    }
+
     /// Return the normalized formal label for one runtime skill root.
     /// 返回单个运行时技能根的规范化正式标签。
     fn normalized_skill_root_label(root: &RuntimeSkillRoot) -> String {
-        root.name.trim().to_ascii_uppercase()
+        Self::normalized_skill_root_name(&root.name)
     }
 
     /// Return the fixed load-priority rank for one formal root label.
@@ -2278,6 +2286,15 @@ impl LuaEngine {
                     )
                 }
             }
+        }
+    }
+
+    /// Convert one host-injected authority into the lifecycle operation plane it may use.
+    /// 将单个宿主注入权限转换为可使用的生命周期操作平面。
+    fn operation_plane_for_authority(authority: SkillManagementAuthority) -> SkillOperationPlane {
+        match authority {
+            SkillManagementAuthority::System => SkillOperationPlane::System,
+            SkillManagementAuthority::DelegatedTool => SkillOperationPlane::Skills,
         }
     }
 
@@ -2520,7 +2537,6 @@ impl LuaEngine {
         Ok(SkillManager::new(SkillManagerConfig {
             skill_root: skill_root.clone(),
             lifecycle_root: state_root,
-            protection: self.host_options.protection.clone(),
             download_cache_root: dependency_config.download_cache_root,
             allow_network_download: dependency_config.allow_network_download,
             github_base_url: dependency_config.github_base_url,
@@ -2588,6 +2604,89 @@ impl LuaEngine {
                     target_root.skills_dir.display()
                 )
             })
+    }
+
+    /// Ensure one delegated ordinary target is a configured PROJECT or USER root.
+    /// 确保单个委托普通目标是已配置的 PROJECT 或 USER 根。
+    fn validate_ordinary_target_root(
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+        action: crate::skill::manager::SkillLifecycleAction,
+    ) -> Result<(), String> {
+        Self::runtime_skill_root_index(skill_roots, target_root)?;
+        if Self::is_root_skill_root(target_root) {
+            return Err(format!(
+                "ordinary skills plane cannot {:?} the system-controlled ROOT skill root",
+                action
+            ));
+        }
+        if !Self::is_user_mutable_skill_root(target_root) {
+            return Err(format!(
+                "ordinary skills plane can only {:?} PROJECT or USER skill roots; got '{}'",
+                action, target_root.name
+            ));
+        }
+        Ok(())
+    }
+
+    /// Ensure one authority may write the requested target root.
+    /// 确保单个权限等级可以写入请求的目标根。
+    fn validate_authority_for_target_root(
+        authority: SkillManagementAuthority,
+        target_root: &RuntimeSkillRoot,
+        action: crate::skill::manager::SkillLifecycleAction,
+    ) -> Result<(), String> {
+        if authority == SkillManagementAuthority::DelegatedTool
+            && Self::is_root_skill_root(target_root)
+        {
+            return Err(format!(
+                "DelegatedTool authority cannot {:?} the system-controlled ROOT skill root",
+                action
+            ));
+        }
+        Ok(())
+    }
+
+    /// Return the ROOT-owned declaration for one skill id when the root exists.
+    /// 当 ROOT 存在时返回单个 skill id 的 ROOT 层声明。
+    fn resolve_root_declared_skill_instance(
+        skill_roots: &[RuntimeSkillRoot],
+        skill_id: &str,
+    ) -> Result<Option<ResolvedSkillInstance>, String> {
+        let Some(root) = Self::find_skill_root_by_label(skill_roots, "ROOT") else {
+            return Ok(None);
+        };
+        resolve_declared_skill_instance_from_roots(&[root.clone()], skill_id)
+    }
+
+    /// Reject PROJECT or USER install/update when ROOT already owns the same skill id.
+    /// 当 ROOT 已拥有同名 skill id 时拒绝 PROJECT 或 USER 的安装与更新。
+    fn ensure_root_skill_id_is_not_system_occupied(
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+        skill_id: &str,
+        action: crate::skill::manager::SkillLifecycleAction,
+    ) -> Result<(), String> {
+        if !matches!(
+            action,
+            crate::skill::manager::SkillLifecycleAction::Install
+                | crate::skill::manager::SkillLifecycleAction::Update
+        ) || !Self::is_user_mutable_skill_root(target_root)
+        {
+            return Ok(());
+        }
+        if let Some(root_instance) =
+            Self::resolve_root_declared_skill_instance(skill_roots, skill_id)?
+        {
+            return Err(format!(
+                "skill '{}' is managed by the ROOT system layer at {}; {:?} in '{}' is not allowed until the ROOT skill is removed",
+                skill_id,
+                root_instance.actual_dir.display(),
+                action,
+                target_root.name
+            ));
+        }
+        Ok(())
     }
 
     /// Ensure one explicit target root will be effective after the staged apply operation.
@@ -3315,6 +3414,13 @@ impl LuaEngine {
             }
             _ => unreachable!("unsupported apply action should have returned early"),
         };
+        Self::ensure_root_skill_id_is_not_system_occupied(
+            skill_roots,
+            &target_root,
+            &requested_skill_id,
+            action,
+        )
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         if explicit_target_root.is_some() {
             Self::ensure_explicit_apply_target_will_be_effective(
                 skill_roots,
@@ -3488,11 +3594,12 @@ impl LuaEngine {
         &mut self,
         base_dir: &Path,
         override_dir: Option<&Path>,
+        authority: SkillManagementAuthority,
         skill_id: &str,
         reason: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
-        self.system_disable_skill_in_roots(&skill_roots, skill_id, reason)
+        self.system_disable_skill_in_roots(&skill_roots, authority, skill_id, reason)
     }
 
     /// Mark one skill disabled through the host-controlled system plane using an ordered root chain and immediately reload the runtime view.
@@ -3500,11 +3607,12 @@ impl LuaEngine {
     pub fn system_disable_skill_in_roots(
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
+        authority: SkillManagementAuthority,
         skill_id: &str,
         reason: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.mutate_skill_state_and_reload(
-            SkillOperationPlane::System,
+            Self::operation_plane_for_authority(authority),
             crate::skill::manager::SkillLifecycleAction::Disable,
             skill_roots,
             skill_id,
@@ -3533,10 +3641,11 @@ impl LuaEngine {
     pub fn system_enable_skill(
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
+        authority: SkillManagementAuthority,
         skill_id: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.mutate_skill_state_and_reload(
-            SkillOperationPlane::System,
+            Self::operation_plane_for_authority(authority),
             crate::skill::manager::SkillLifecycleAction::Enable,
             skill_roots,
             skill_id,
@@ -3555,15 +3664,47 @@ impl LuaEngine {
         self.uninstall_skill_and_reload(SkillOperationPlane::Skills, skill_roots, skill_id, options)
     }
 
+    /// Uninstall one skill through the ordinary skills plane from an explicit PROJECT or USER root.
+    /// 通过普通 skills 平面从显式 PROJECT 或 USER 根卸载单个技能。
+    pub fn uninstall_skill_in_root(
+        &mut self,
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+        skill_id: &str,
+        options: &SkillUninstallOptions,
+    ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::validate_ordinary_target_root(
+            skill_roots,
+            target_root,
+            crate::skill::manager::SkillLifecycleAction::Uninstall,
+        )
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        self.uninstall_skill_and_reload_in_root(
+            SkillOperationPlane::Skills,
+            skill_roots,
+            Some(target_root),
+            skill_id,
+            options,
+        )
+    }
+
     /// Uninstall one skill directory through the host-controlled system plane and immediately reload the runtime view.
     /// 通过宿主控制的 system 平面卸载单个技能目录，并立即重载运行时视图。
     pub fn system_uninstall_skill(
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
+        authority: SkillManagementAuthority,
         skill_id: &str,
         options: &SkillUninstallOptions,
     ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
-        self.uninstall_skill_and_reload(SkillOperationPlane::System, skill_roots, skill_id, options)
+        self.uninstall_skill_and_reload(
+            Self::operation_plane_for_authority(authority),
+            skill_roots,
+            skill_id,
+            options,
+        )
     }
 
     /// Uninstall one skill through the host-controlled system plane from an explicit target root.
@@ -3572,11 +3713,23 @@ impl LuaEngine {
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
         target_root: &RuntimeSkillRoot,
+        authority: SkillManagementAuthority,
         skill_id: &str,
         options: &SkillUninstallOptions,
     ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::runtime_skill_root_index(skill_roots, target_root)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::validate_authority_for_target_root(
+            authority,
+            target_root,
+            crate::skill::manager::SkillLifecycleAction::Uninstall,
+        )
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let plane = Self::operation_plane_for_authority(authority);
         self.uninstall_skill_and_reload_in_root(
-            SkillOperationPlane::System,
+            plane,
             skill_roots,
             Some(target_root),
             skill_id,
@@ -3599,15 +3752,41 @@ impl LuaEngine {
         )
     }
 
+    /// Preflight one install request through the ordinary skills plane into an explicit PROJECT or USER root.
+    /// 通过普通 skills 平面将一次安装请求预检查并写入显式 PROJECT 或 USER 根。
+    pub fn install_skill_in_root(
+        &mut self,
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::validate_ordinary_target_root(
+            skill_roots,
+            target_root,
+            crate::skill::manager::SkillLifecycleAction::Install,
+        )
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        self.apply_skill_request_in_root(
+            SkillOperationPlane::Skills,
+            crate::skill::manager::SkillLifecycleAction::Install,
+            skill_roots,
+            Some(target_root),
+            request,
+        )
+    }
+
     /// Preflight one install request through the host-controlled system plane and return a structured result.
     /// 通过宿主控制的 system 平面对一次安装请求执行预检查，并返回结构化结果。
     pub fn system_install_skill(
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
+        authority: SkillManagementAuthority,
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
         self.apply_skill_request(
-            SkillOperationPlane::System,
+            Self::operation_plane_for_authority(authority),
             crate::skill::manager::SkillLifecycleAction::Install,
             skill_roots,
             request,
@@ -3620,10 +3799,22 @@ impl LuaEngine {
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
         target_root: &RuntimeSkillRoot,
+        authority: SkillManagementAuthority,
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::runtime_skill_root_index(skill_roots, target_root)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::validate_authority_for_target_root(
+            authority,
+            target_root,
+            crate::skill::manager::SkillLifecycleAction::Install,
+        )
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let plane = Self::operation_plane_for_authority(authority);
         self.apply_skill_request_in_root(
-            SkillOperationPlane::System,
+            plane,
             crate::skill::manager::SkillLifecycleAction::Install,
             skill_roots,
             Some(target_root),
@@ -3646,15 +3837,41 @@ impl LuaEngine {
         )
     }
 
+    /// Preflight one update request through the ordinary skills plane against an explicit PROJECT or USER root.
+    /// 通过普通 skills 平面对显式 PROJECT 或 USER 根执行一次更新预检查。
+    pub fn update_skill_in_root(
+        &mut self,
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::validate_ordinary_target_root(
+            skill_roots,
+            target_root,
+            crate::skill::manager::SkillLifecycleAction::Update,
+        )
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        self.apply_skill_request_in_root(
+            SkillOperationPlane::Skills,
+            crate::skill::manager::SkillLifecycleAction::Update,
+            skill_roots,
+            Some(target_root),
+            request,
+        )
+    }
+
     /// Preflight one update request through the host-controlled system plane and return a structured result.
     /// 通过宿主控制的 system 平面对一次更新请求执行预检查，并返回结构化结果。
     pub fn system_update_skill(
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
+        authority: SkillManagementAuthority,
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
         self.apply_skill_request(
-            SkillOperationPlane::System,
+            Self::operation_plane_for_authority(authority),
             crate::skill::manager::SkillLifecycleAction::Update,
             skill_roots,
             request,
@@ -3667,10 +3884,22 @@ impl LuaEngine {
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
         target_root: &RuntimeSkillRoot,
+        authority: SkillManagementAuthority,
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::runtime_skill_root_index(skill_roots, target_root)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        Self::validate_authority_for_target_root(
+            authority,
+            target_root,
+            crate::skill::manager::SkillLifecycleAction::Update,
+        )
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let plane = Self::operation_plane_for_authority(authority);
         self.apply_skill_request_in_root(
-            SkillOperationPlane::System,
+            plane,
             crate::skill::manager::SkillLifecycleAction::Update,
             skill_roots,
             Some(target_root),
@@ -3918,11 +4147,15 @@ impl LuaEngine {
         Ok(())
     }
 
-    /// Build a fresh Lua VM instance with all loaded skills registered.
-    /// 创建一个全新的 Lua 虚拟机实例，并注册当前已加载的全部技能。
-    fn create_vm(&self) -> Result<LuaVm, String> {
-        let skills = Arc::new(self.skills.clone());
-        let entry_registry = Arc::new(self.entry_registry.clone());
+    /// Build a fresh Lua VM instance from one explicit runtime state snapshot.
+    /// 基于一份显式运行时状态快照创建全新的 Lua 虚拟机实例。
+    fn create_vm_with_runtime_state(
+        &self,
+        skills: HashMap<String, LoadedSkill>,
+        entry_registry: BTreeMap<String, ResolvedEntryTarget>,
+    ) -> Result<LuaVm, String> {
+        let skills = Arc::new(skills);
+        let entry_registry = Arc::new(entry_registry);
         let lua = unsafe { Lua::unsafe_new() };
         Self::setup_package_paths(&lua, self.host_options.as_ref())
             .map_err(|error| error.to_string())?;
@@ -3957,6 +4190,12 @@ impl LuaEngine {
             lua,
             last_used_at: Instant::now(),
         })
+    }
+
+    /// Build a fresh Lua VM instance with all loaded skills registered.
+    /// 创建一个全新的 Lua 虚拟机实例，并注册当前已加载的全部技能。
+    fn create_vm(&self) -> Result<LuaVm, String> {
+        self.create_vm_with_runtime_state(self.skills.clone(), self.entry_registry.clone())
     }
 
     /// Borrow a Lua VM from the pool for one operation.
@@ -4142,6 +4381,21 @@ impl LuaEngine {
             .collect()
     }
 
+    /// Return runtime entry descriptors visible to one host-injected skill-management authority.
+    /// 返回单个宿主注入技能管理权限可见的运行时入口描述。
+    pub fn list_entries_for_authority(
+        &self,
+        authority: SkillManagementAuthority,
+    ) -> Vec<RuntimeEntryDescriptor> {
+        self.list_entries()
+            .into_iter()
+            .filter(|entry| {
+                authority == SkillManagementAuthority::System
+                    || Self::normalized_skill_root_name(&entry.root_name) != "ROOT"
+            })
+            .collect()
+    }
+
     /// List all structured help trees currently registered in the runtime.
     /// 列出当前运行时中已注册的全部结构化帮助树。
     pub fn list_skill_help(&self) -> Vec<RuntimeSkillHelpDescriptor> {
@@ -4165,6 +4419,21 @@ impl LuaEngine {
 
         descriptors.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
         descriptors
+    }
+
+    /// List structured help trees visible to one host-injected skill-management authority.
+    /// 列出单个宿主注入技能管理权限可见的结构化帮助树。
+    pub fn list_skill_help_for_authority(
+        &self,
+        authority: SkillManagementAuthority,
+    ) -> Vec<RuntimeSkillHelpDescriptor> {
+        self.list_skill_help()
+            .into_iter()
+            .filter(|help| {
+                authority == SkillManagementAuthority::System
+                    || Self::normalized_skill_root_name(&help.root_name) != "ROOT"
+            })
+            .collect()
     }
 
     /// Render one structured help detail payload for one skill flow node.
@@ -4224,6 +4493,28 @@ impl LuaEngine {
         }))
     }
 
+    /// Render help detail only when visible to one host-injected skill-management authority.
+    /// 仅在单个宿主注入技能管理权限可见时渲染帮助详情。
+    pub fn render_skill_help_detail_for_authority(
+        &self,
+        authority: SkillManagementAuthority,
+        skill_id: &str,
+        flow_name: &str,
+        request_context: Option<&RuntimeRequestContext>,
+    ) -> Result<Option<RuntimeHelpDetail>, String> {
+        if authority == SkillManagementAuthority::DelegatedTool
+            && self
+                .skills
+                .values()
+                .find(|skill| skill.meta.effective_skill_id() == skill_id)
+                .map(|skill| Self::normalized_skill_root_name(&skill.root_name) == "ROOT")
+                .unwrap_or(false)
+        {
+            return Ok(None);
+        }
+        self.render_skill_help_detail(skill_id, flow_name, request_context)
+    }
+
     /// Build one structured help node descriptor with related canonical entries.
     /// 构建单个结构化帮助节点描述及其关联 canonical 入口列表。
     fn build_help_node_descriptor(
@@ -4279,9 +4570,47 @@ impl LuaEngine {
         None
     }
 
+    /// Return configured completion candidates visible to one host-injected authority.
+    /// 返回单个宿主注入权限可见的提示词参数补全候选项。
+    pub fn prompt_argument_completions_for_authority(
+        &self,
+        authority: SkillManagementAuthority,
+        prompt_name: &str,
+        argument_name: &str,
+    ) -> Option<Vec<String>> {
+        let _ = authority;
+        self.prompt_argument_completions(prompt_name, argument_name)
+    }
+
+    /// Return whether one resolved entry target is visible to one host-injected authority.
+    /// 返回单个已解析入口目标是否对某个宿主注入权限可见。
+    fn entry_target_visible_to_authority(
+        &self,
+        authority: SkillManagementAuthority,
+        target: &ResolvedEntryTarget,
+    ) -> bool {
+        if authority == SkillManagementAuthority::System {
+            return true;
+        }
+        self.skills
+            .get(&target.skill_storage_key)
+            .map(|skill| Self::normalized_skill_root_name(&skill.root_name) != "ROOT")
+            .unwrap_or(false)
+    }
+
     /// Check if a tool_name is a Lua skill.
+    /// 检查单个工具名是否为 Lua skill 入口。
     pub fn is_skill(&self, name: &str) -> bool {
         self.entry_registry.contains_key(name)
+    }
+
+    /// Check if a tool_name is visible as a Lua skill under one host-injected authority.
+    /// 检查单个工具名在某个宿主注入权限下是否可见为 Lua skill 入口。
+    pub fn is_skill_for_authority(&self, authority: SkillManagementAuthority, name: &str) -> bool {
+        self.entry_registry
+            .get(name)
+            .map(|target| self.entry_target_visible_to_authority(authority, target))
+            .unwrap_or(false)
     }
 
     /// Return the owning skill name for an MCP tool name; return `None` when the tool is not provided by a Lua skill.
@@ -4290,6 +4619,19 @@ impl LuaEngine {
         self.entry_registry
             .get(tool_name)
             .map(|target| target.skill_id.clone())
+    }
+
+    /// Return the visible owning skill name for one tool under one host-injected authority.
+    /// 返回某个工具在单个宿主注入权限下可见的所属 skill 名称。
+    pub fn skill_name_for_tool_for_authority(
+        &self,
+        authority: SkillManagementAuthority,
+        tool_name: &str,
+    ) -> Option<String> {
+        self.entry_registry.get(tool_name).and_then(|target| {
+            self.entry_target_visible_to_authority(authority, target)
+                .then(|| target.skill_id.clone())
+        })
     }
 
     /// List flattened skill config records for one optional skill namespace.
@@ -5127,8 +5469,10 @@ impl LuaEngine {
         Ok(())
     }
 
-    /// Call a loaded Lua skill with the given JSON arguments.
-    /// This is synchronous — wrap in spawn_blocking for async contexts.
+    /// Call one active loaded Lua skill with the given JSON arguments.
+    /// 使用给定 JSON 参数调用单个已激活的已加载 Lua skill。
+    /// Calls are runtime execution, not skill-management authority checks.
+    /// 调用属于运行时执行，不属于技能管理权限校验。
     pub fn call_skill(
         &self,
         tool_name: &str,
@@ -5222,15 +5566,16 @@ impl LuaEngine {
         }
     }
 
-    /// Execute arbitrary Lua code and return the result.
-    pub fn run_lua(
+    /// Execute arbitrary Lua code inside one already selected VM lease.
+    /// 在一个已经选定的虚拟机租约中执行任意 Lua 代码。
+    fn run_lua_with_lease(
         &self,
+        lease: &mut LuaVmLease,
         code: &str,
         args: &Value,
         invocation_context: Option<&LuaInvocationContext>,
     ) -> Result<Value, String> {
-        let mut lease = self.acquire_vm()?;
-        let scope_guard = LuaVmRequestScopeGuard::new(&mut lease, self.host_options.as_ref())?;
+        let scope_guard = LuaVmRequestScopeGuard::new(lease, self.host_options.as_ref())?;
         let lua = scope_guard.lua();
         Self::populate_vulcan_request_context(lua, invocation_context)?;
         populate_vulcan_internal_execution_context(
@@ -5242,7 +5587,8 @@ impl LuaEngine {
         Self::populate_vulcan_lancedb_context(lua, None, None)?;
         Self::populate_vulcan_sqlite_context(lua, None, None)?;
 
-        // Build a wrapper that passes args as a local variable
+        // Build a wrapper that passes args as a local variable.
+        // 构造包装代码，将 args 作为局部变量传入 Lua 片段。
         let args_table = json_to_lua_table(lua, args)?;
         lua.globals()
             .set("__runlua_args", args_table)
@@ -5272,6 +5618,18 @@ impl LuaEngine {
                 run_error, cleanup_error
             )),
         }
+    }
+
+    /// Execute arbitrary Lua code against the current active runtime view and return the result.
+    /// 针对当前已激活运行时视图执行任意 Lua 代码并返回结果。
+    pub fn run_lua(
+        &self,
+        code: &str,
+        args: &Value,
+        invocation_context: Option<&LuaInvocationContext>,
+    ) -> Result<Value, String> {
+        let mut lease = self.acquire_vm()?;
+        self.run_lua_with_lease(&mut lease, code, args, invocation_context)
     }
 
     /// Acquire one isolated runlua VM from the dedicated pool.
@@ -6640,7 +6998,7 @@ mod tests {
     use crate::runtime_options::LuaRuntimeRunLuaPoolConfig;
     use crate::{
         LuaEngineOptions, LuaRuntimeHostOptions, RuntimeSkillRoot, SkillInstallRequest,
-        SkillInstallSourceType, SkillUninstallOptions,
+        SkillInstallSourceType, SkillManagementAuthority, SkillUninstallOptions,
     };
     use mlua::{Table, Value as LuaValue};
     use serde_json::json;
@@ -6854,6 +7212,80 @@ mod tests {
         let _ = fs::remove_dir_all(&runtime_root);
     }
 
+    /// Verify delegated query helpers hide ROOT-owned metadata while runtime calls still use active skills.
+    /// 验证委托查询辅助函数会隐藏 ROOT 元数据，同时运行时调用仍使用已激活技能。
+    #[test]
+    fn delegated_authority_query_helpers_hide_root_skills() {
+        let runtime_root = make_temp_runtime_root("delegated-query-hides-root");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: " root ".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        write_minimal_skill_to_root(&root_root.skills_dir, "vulcan-root-skill");
+        write_minimal_skill_to_root(&user_root.skills_dir, "vulcan-user-skill");
+        let mut engine = make_runtime_test_engine();
+        engine
+            .load_from_roots(&[root_root, user_root])
+            .expect("root and user runtime should load");
+
+        let system_entries = engine.list_entries_for_authority(SkillManagementAuthority::System);
+        let delegated_entries =
+            engine.list_entries_for_authority(SkillManagementAuthority::DelegatedTool);
+        assert!(
+            system_entries
+                .iter()
+                .any(|entry| entry.root_name == " root ")
+        );
+        assert!(
+            delegated_entries
+                .iter()
+                .all(|entry| entry.root_name.trim().to_ascii_uppercase() != "ROOT")
+        );
+
+        let system_help = engine.list_skill_help_for_authority(SkillManagementAuthority::System);
+        let delegated_help =
+            engine.list_skill_help_for_authority(SkillManagementAuthority::DelegatedTool);
+        assert!(system_help.iter().any(|help| help.root_name == " root "));
+        assert!(
+            delegated_help
+                .iter()
+                .all(|help| help.root_name.trim().to_ascii_uppercase() != "ROOT")
+        );
+
+        let delegated_detail = engine
+            .render_skill_help_detail_for_authority(
+                SkillManagementAuthority::DelegatedTool,
+                "vulcan-root-skill",
+                "main",
+                None,
+            )
+            .expect("delegated detail should be filtered");
+        assert!(delegated_detail.is_none());
+
+        let root_call = engine
+            .call_skill("vulcan-root-skill-ping", &json!({}), None)
+            .expect("runtime call should reach any active skill");
+        assert_eq!(root_call.content, "ok");
+
+        let root_run_lua = engine
+            .run_lua(
+                "return vulcan.call('vulcan-root-skill-ping', {})",
+                &json!({}),
+                None,
+            )
+            .expect("runtime Lua execution should use the active runtime view");
+        assert_eq!(root_run_lua, json!("ok"));
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
     /// Verify formal root chains reject unknown labels and reversed priority order.
     /// 验证正式根链会拒绝未知标签和反向优先级顺序。
     #[test]
@@ -6956,6 +7388,7 @@ mod tests {
         let error = engine
             .system_install_skill(
                 &[user_root],
+                SkillManagementAuthority::System,
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-codekit".to_string()),
                     source: None,
@@ -7114,6 +7547,207 @@ mod tests {
         assert!(!object_error.contains("no host callback"));
     }
 
+    /// Verify ordinary explicit-root APIs reject ROOT write targets before lifecycle work starts.
+    /// 验证普通显式根 API 会在生命周期工作开始前拒绝 ROOT 写入目标。
+    #[test]
+    fn ordinary_explicit_root_apis_reject_root_target() {
+        let runtime_root = make_temp_runtime_root("ordinary-explicit-root-rejects-root");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        fs::create_dir_all(&user_root.skills_dir).expect("create user skills root");
+        let skill_roots = vec![root_root.clone(), user_root];
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .install_skill_in_root(
+                &skill_roots,
+                &root_root,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("ordinary explicit root install should reject ROOT");
+        assert!(error.to_string().contains("ordinary skills plane cannot"));
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify ROOT-owned skill ids cannot be installed or updated in ordinary layers by any authority.
+    /// 验证 ROOT 拥有的 skill id 不能被任何权限安装或更新到普通层。
+    #[test]
+    fn root_owned_skill_id_blocks_project_user_install_update_for_all_authorities() {
+        let runtime_root = make_temp_runtime_root("root-owned-skill-id-blocks-ordinary");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let project_root = RuntimeSkillRoot {
+            name: "PROJECT".to_string(),
+            skills_dir: runtime_root.join("project_skills"),
+        };
+        write_minimal_skill_to_root(&root_root.skills_dir, "vulcan-codekit");
+        write_minimal_skill_to_root(&project_root.skills_dir, "vulcan-codekit");
+        let skill_roots = vec![root_root, project_root.clone()];
+        let mut engine = make_runtime_test_engine();
+
+        let ordinary_install_error = engine
+            .install_skill_in_root(
+                &skill_roots,
+                &project_root,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("ordinary install must reject ROOT-owned skill id");
+        assert!(
+            ordinary_install_error
+                .to_string()
+                .contains("ROOT system layer")
+        );
+
+        let system_install_error = engine
+            .system_install_skill_in_root(
+                &skill_roots,
+                &project_root,
+                SkillManagementAuthority::System,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("system install must reject ROOT-owned skill id in PROJECT");
+        assert!(
+            system_install_error
+                .to_string()
+                .contains("ROOT system layer")
+        );
+
+        let system_update_error = engine
+            .system_update_skill_in_root(
+                &skill_roots,
+                &project_root,
+                SkillManagementAuthority::System,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("system update must also reject ROOT-owned skill id in PROJECT");
+        assert!(
+            system_update_error
+                .to_string()
+                .contains("ROOT system layer")
+        );
+
+        let delegated_update_error = engine
+            .system_update_skill_in_root(
+                &skill_roots,
+                &project_root,
+                SkillManagementAuthority::DelegatedTool,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("delegated update must reject ROOT-owned skill id in PROJECT");
+        assert!(
+            delegated_update_error
+                .to_string()
+                .contains("ROOT system layer")
+        );
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify ordinary explicit-root uninstall may clean a USER residual shadowed by ROOT.
+    /// 验证普通显式根卸载可以清理被 ROOT 遮蔽的 USER 残留。
+    #[test]
+    fn ordinary_uninstall_in_root_cleans_user_residual_when_root_owns_same_skill_id() {
+        let runtime_root = make_temp_runtime_root("ordinary-uninstall-cleans-root-shadow");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        let root_skill_dir = write_minimal_skill_to_root(&root_root.skills_dir, "vulcan-codekit");
+        let user_skill_dir = write_minimal_skill_to_root(&user_root.skills_dir, "vulcan-codekit");
+        let skill_roots = vec![root_root, user_root.clone()];
+        let mut engine = make_runtime_test_engine();
+
+        let result = engine
+            .uninstall_skill_in_root(
+                &skill_roots,
+                &user_root,
+                "vulcan-codekit",
+                &SkillUninstallOptions::default(),
+            )
+            .expect("ordinary uninstall should clean USER residual");
+        assert_eq!(result.skill_id, "vulcan-codekit");
+        assert!(!user_skill_dir.exists());
+        assert!(root_skill_dir.exists());
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify delegated authority cannot use a system explicit-root API to write ROOT.
+    /// 验证委托权限不能借助 system 显式根 API 写入 ROOT。
+    #[test]
+    fn delegated_authority_rejects_system_root_write() {
+        let runtime_root = make_temp_runtime_root("delegated-system-root-write-reject");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        let skill_roots = vec![root_root.clone()];
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .system_install_skill_in_root(
+                &skill_roots,
+                &root_root,
+                SkillManagementAuthority::DelegatedTool,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("delegated authority must reject ROOT writes");
+        assert!(error.to_string().contains("DelegatedTool authority"));
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
     /// Verify explicit-root system updates fail instead of returning a successful missing-skill result.
     /// 验证显式根 system 更新在缺少目标技能时会失败，而不是返回成功的 missing-skill 结果。
     #[test]
@@ -7139,6 +7773,7 @@ mod tests {
             .system_update_skill_in_root(
                 &skill_roots,
                 &user_root,
+                SkillManagementAuthority::System,
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-codekit".to_string()),
                     source: None,
@@ -7177,6 +7812,7 @@ mod tests {
             .system_update_skill_in_root(
                 &skill_roots,
                 &project_root,
+                SkillManagementAuthority::System,
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-codekit".to_string()),
                     source: None,
@@ -7186,7 +7822,7 @@ mod tests {
             .expect_err("shadowed fallback target should fail before update");
         let rendered = error.to_string();
 
-        assert!(rendered.contains("shadowed by higher-priority root 'ROOT'"));
+        assert!(rendered.contains("ROOT system layer"));
         let _ = fs::remove_dir_all(&runtime_root);
     }
 
@@ -7215,6 +7851,7 @@ mod tests {
             .system_install_skill_in_root(
                 &skill_roots,
                 &root_root,
+                SkillManagementAuthority::System,
                 &SkillInstallRequest {
                     skill_id: None,
                     source: Some("https://github.com/LuaSkills/vulcan-codekit/".to_string()),
@@ -7258,6 +7895,7 @@ mod tests {
             .system_update_skill_in_root(
                 &skill_roots,
                 &rogue_root,
+                SkillManagementAuthority::System,
                 &SkillInstallRequest {
                     skill_id: Some("vulcan-codekit".to_string()),
                     source: None,
@@ -7302,6 +7940,7 @@ mod tests {
             .system_uninstall_skill_in_root(
                 &skill_roots,
                 &rogue_root,
+                SkillManagementAuthority::System,
                 "vulcan-codekit",
                 &SkillUninstallOptions::default(),
             )
