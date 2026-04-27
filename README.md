@@ -224,18 +224,26 @@ runtime-config(action, skill_id?, key?, value?)
 
 ### 3. System 与 Skill 分层
 
-当前模型分为两层：
+当前正式 skill root 层级固定为三层：
 
-- `system tools`
-  - 给宿主直接对接
-  - 宿主可自由改名、封装、决定是否公开
-- `skills`
-  - 统一能力面
-  - 由库统一加载与暴露 entry 真相
+```text
+ROOT -> PROJECT -> USER
+```
+
+这里的箭头表示加载优先级从高到低：
+
+- `ROOT` 是系统控制级，只放宿主托管的核心工具和内置 skill。
+- `PROJECT` 是当前项目级用户可写层。
+- `USER` 是用户全局可写层。
+- `ROOT` 中存在同名 `skill_id` 时，`PROJECT` 与 `USER` 中的同名 skill 不应被加载。
+- `PROJECT` 在 `ROOT` 无同名 skill 时覆盖 `USER`。
+- 启动或加载 root 链时必须传入 `ROOT` root；缺失时直接报错，不回退到普通层。
 
 也就是说：
 
-**宿主使用 system，最终用户使用 skills。**
+**宿主使用 system 管理 ROOT，最终用户使用 skills 管理 PROJECT / USER。**
+
+普通 `vulcan.runtime.skills.*` 桥接只允许请求宿主操作实际存在的 `PROJECT` / `USER`，不提供 `ROOT` 目标选项。system tools 可以操作 `ROOT`，未显式指定目标时也只默认写入 `ROOT`；如果缺少 `ROOT`，system install 会失败，不会写入 `PROJECT` 或 `USER`。不建议向普通用户开放 ROOT 级 skill 的调整能力。完整策略见 [docs/SKILL_ROOT_LAYER_POLICY.md](docs/SKILL_ROOT_LAYER_POLICY.md)。
 
 ## 当前能力
 
@@ -317,12 +325,15 @@ skill **不应该**：
 - 默认关闭
 - 由宿主通过 `LuaRuntimeHostOptions.capabilities.enable_skill_management_bridge` 决定是否开放
 - 即使开放，也必须由宿主注册技能管理回调后才会真正执行安装、更新、启停、卸载
+- 普通桥接只应暴露 `PROJECT` / `USER` 层管理能力，不允许操作 `ROOT`
+- 普通桥接应提供层级列表能力，例如 `vulcan.runtime.skills.layers()`，用于返回当前 root 链中实际存在的 `PROJECT` / `USER` 标签；bridge 关闭时这些层级必须标记为不可写
 
 这意味着：
 
 - 拥有自己 TUI、GUI 或专用管理面的宿主，可以保持关闭
 - 愿意允许 skill 调起管理动作的宿主，可以显式打开
 - 未注册回调时，Lua 侧会收到明确错误，而不是静默成功
+- 若宿主要向用户开放技能管理，建议组合成单个 `luaskills-manager` 工具，通过参数控制增删改查；默认安装到 `USER` 还是 `PROJECT` 由宿主策略决定
 
 ## 当前代码结构
 

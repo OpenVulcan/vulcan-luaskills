@@ -100,6 +100,8 @@ runtime_root/host_managed/sqlite/<binding_tag>.db
 runtime_root/host_managed/sqlite/ROOT-host-provider-sqlite-demo.db
 ```
 
+这里的 `ROOT` 是演示夹具使用的系统控制级空间标签。正式宿主的 skill root 对外语义应固定为 `ROOT -> PROJECT -> USER`，启动或加载时必须传入 `ROOT` root；普通用户管理面只应操作实际存在的 `PROJECT` / `USER`。
+
 这说明：
 
 - lib 负责提供稳定 `binding_tag`

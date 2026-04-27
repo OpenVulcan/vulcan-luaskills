@@ -271,8 +271,8 @@ pub struct FfiLuaEngineOptions {
 /// 标准非 JSON 生命周期与加载调用使用的原生 C ABI 技能根结构。
 #[repr(C)]
 pub struct FfiRuntimeSkillRoot {
-    /// Stable root name such as ROOT or USER.
-    /// 稳定根名称，例如 ROOT 或 USER。
+    /// Stable root name, limited to ROOT, PROJECT, or USER.
+    /// 稳定根名称，仅限 ROOT、PROJECT 或 USER。
     pub name: *const c_char,
     /// Physical skills directory path.
     /// 物理 skills 目录路径。
@@ -325,8 +325,8 @@ pub struct FfiSkillUninstallOptions {
 /// 转发给宿主管理数据库 provider 的原生 C ABI 数据库绑定上下文。
 #[repr(C)]
 pub struct FfiRuntimeDatabaseBindingContext {
-    /// Stable host-provided space label such as ROOT, USER, or PROJECT_A.
-    /// 由宿主提供的稳定空间标签，例如 ROOT、USER 或 PROJECT_A。
+    /// Stable host-provided space label such as ROOT, PROJECT, or USER.
+    /// 由宿主提供的稳定空间标签，例如 ROOT、PROJECT 或 USER。
     pub space_label: *const c_char,
     /// Stable skill identifier owning the current binding.
     /// 拥有当前绑定的稳定技能标识符。
@@ -3379,8 +3379,10 @@ mod tests {
             let _ = std::fs::remove_dir_all(&temp_root);
         }
 
+        let root_skills_root = temp_root.join("root_skills");
         let skills_root = temp_root.join("skills");
         let skill_dir = skills_root.join("demo-skill");
+        std::fs::create_dir_all(&root_skills_root).expect("create root skills root");
         std::fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime directory");
         std::fs::create_dir_all(temp_root.join("temp")).expect("create temp directory");
         std::fs::create_dir_all(temp_root.join("resources")).expect("create resources directory");
@@ -3552,8 +3554,10 @@ mod tests {
             let _ = std::fs::remove_dir_all(&temp_root);
         }
 
+        let root_skills_root = temp_root.join("root_skills");
         let skills_root = temp_root.join("skills");
         let skill_dir = skills_root.join("demo-skill");
+        std::fs::create_dir_all(&root_skills_root).expect("create root skills root");
         std::fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime directory");
         std::fs::create_dir_all(temp_root.join("temp")).expect("create temp directory");
         std::fs::create_dir_all(temp_root.join("resources")).expect("create resources directory");
@@ -4111,8 +4115,10 @@ mod tests {
             let _ = std::fs::remove_dir_all(&temp_root);
         }
 
+        let root_skills_root = temp_root.join("root_skills");
         let skills_root = temp_root.join("skills");
         let skill_dir = skills_root.join("demo-skill");
+        std::fs::create_dir_all(&root_skills_root).expect("create root skills root");
         std::fs::create_dir_all(skill_dir.join("runtime")).expect("create runtime directory");
         std::fs::create_dir_all(temp_root.join("temp")).expect("create temp directory");
         std::fs::create_dir_all(temp_root.join("resources")).expect("create resources directory");
@@ -4148,6 +4154,9 @@ mod tests {
         let state_dir_name = CString::new("state").expect("state cstring");
         let database_dir_name = CString::new("databases").expect("databases cstring");
         let root_name = CString::new("ROOT").expect("root name cstring");
+        let user_name = CString::new("USER").expect("user name cstring");
+        let root_skills_root_text =
+            CString::new(root_skills_root.display().to_string()).expect("root skills cstring");
         let skills_root_text =
             CString::new(skills_root.display().to_string()).expect("skills root cstring");
         let skill_id = CString::new("demo-skill").expect("skill_id cstring");
@@ -4208,10 +4217,16 @@ mod tests {
         assert_eq!(engine_status, FFI_STATUS_OK);
         assert!(error_out.ptr.is_null());
 
-        let ffi_skill_roots = [FfiRuntimeSkillRoot {
-            name: root_name.as_ptr(),
-            skills_dir: skills_root_text.as_ptr(),
-        }];
+        let ffi_skill_roots = [
+            FfiRuntimeSkillRoot {
+                name: root_name.as_ptr(),
+                skills_dir: root_skills_root_text.as_ptr(),
+            },
+            FfiRuntimeSkillRoot {
+                name: user_name.as_ptr(),
+                skills_dir: skills_root_text.as_ptr(),
+            },
+        ];
 
         let mut load_error = FfiOwnedBuffer {
             ptr: ptr::null_mut(),

@@ -521,6 +521,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 - 先 `engine_new` 再注册 callback，不应被视为可靠初始化顺序
 - 正式宿主接入应把“注册 callback -> 创建 engine -> load/reload -> call”作为固定启动流程
+- `load_from_roots` / `reload_from_roots` 的 root 链必须包含 `ROOT`；如果没有传入 `ROOT`，运行时会明确报错并拒绝加载。
 
 ### 7.2 生命周期接口的前置要求
 
@@ -536,7 +537,9 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 - 引擎已创建
 - 已提供有效的 skill roots
+- skill roots 必须包含 `ROOT`
 - roots 对应空间满足 sibling 目录协议
+- 正式宿主应按 `ROOT -> PROJECT -> USER` 构造三层逻辑，且普通用户管理面只操作 `PROJECT` / `USER`
 - 若是 GitHub 受管安装/更新，还需要允许网络下载
 
 ### 7.3 skill 调用前置要求
@@ -996,6 +999,8 @@ runtime-config(action, skill_id?, key?, value?)
 推荐：
 
 - 优先使用 `roots`
+- `roots` 必须至少包含 `ROOT`；`ROOT` 可以暂时为空，但不能缺失
+- `dirs` 旧接口会把 `base_dir` 映射为 `ROOT`，把可选 `override_dir` 映射为 `PROJECT`
 
 ### 10.5 `reload_*`
 
@@ -1140,9 +1145,10 @@ runtime-config(action, skill_id?, key?, value?)
 
 - 允许宿主把安装、更新、启停、卸载桥接为 Lua 可调用能力
 
-当前公开方法：
+正式桥接方法建议包含：
 
 - `vulcan.runtime.skills.status()`
+- `vulcan.runtime.skills.layers()`
 - `vulcan.runtime.skills.install(input)`
 - `vulcan.runtime.skills.update(input)`
 - `vulcan.runtime.skills.uninstall(input)`
@@ -1162,6 +1168,31 @@ runtime-config(action, skill_id?, key?, value?)
 - skill 不直接操控底层安装器
 - 最终是否允许执行，由宿主策略决定
 - 适合拥有自己 TUI、GUI 或专用管理界面的宿主
+- 普通桥接只应操作 `PROJECT` / `USER` 层，不应暴露 `ROOT` 目标选项
+
+`layers()` 用于发现宿主当前开放给普通桥接的可操作层级标签。推荐返回：
+
+```json
+{
+  "default": "USER",
+  "writable": true,
+  "labels": ["PROJECT", "USER"],
+  "layers": [
+    {
+      "label": "PROJECT",
+      "writable": true,
+      "description": "当前项目级 skill 层"
+    },
+    {
+      "label": "USER",
+      "writable": true,
+      "description": "用户全局 skill 层"
+    }
+  ]
+}
+```
+
+`ROOT` 不应出现在普通桥接的可操作层级列表中。`layers()` 基于当前已加载 root 链生成，只返回实际存在的 `PROJECT` / `USER`；若当前没有项目上下文，则不会返回 `PROJECT`；若只有 `ROOT`，则返回空 `labels` / `layers`、没有 `default`，且顶层 `writable=false`。当 bridge 关闭时，顶层 `writable` 与每个 layer 的 `writable` 都必须为 `false`。`layers()` 只是能力发现接口，install / update / uninstall 等请求仍必须由宿主回调做最终校验。
 
 ### 10.13 `run_lua`
 
@@ -1225,6 +1256,10 @@ runtime-config(action, skill_id?, key?, value?)
 - 已做事务化
 - staging 失败会自动清理
 - checksum 失败会自愈重下一次
+- 普通用户管理面安装目标只能是实际存在的 `PROJECT` 或 `USER`
+- 未指定目标时，普通 install 优先写入 `USER`，没有 `USER` 时写入 `PROJECT`；只有 `ROOT` 时失败
+- `ROOT` 级安装应走 system tools 或受控 system updater
+- system install 未指定目标时只默认写入 `ROOT`；缺少 `ROOT` 时明确失败，不回退到普通层
 
 ### 11.4 update
 
@@ -1250,6 +1285,9 @@ runtime-config(action, skill_id?, key?, value?)
 - reload 失败会回滚到旧版本
 - install record 提交失败也会回滚
 - 旧依赖清理失败只产生 warning，不会把更新误报成失败
+- 普通用户管理面更新目标只能是 `PROJECT` 或 `USER`
+- `ROOT` 级更新应走 system tools 或受控 system updater
+- 显式目标 root 必须属于当前 root 链，否则在解析目标 skill 前直接拒绝
 
 ### 11.5 uninstall
 
@@ -1270,6 +1308,9 @@ runtime-config(action, skill_id?, key?, value?)
 
 - reload 失败会回滚 skill 目录与 install record
 - 数据库清理失败只记 warning，不会把已成功卸载误报成失败
+- 普通用户管理面卸载目标只能是 `PROJECT` 或 `USER`
+- `ROOT` 级卸载应走 system tools 或受控 system updater
+- 显式目标 root 必须属于当前 root 链，否则直接拒绝
 
 ## 12. install / update 的来源模型
 
@@ -1300,6 +1341,9 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 要求：
 
+- 正式产品语义固定为 `ROOT`、`PROJECT`、`USER`
+- 加载顺序固定为 `ROOT -> PROJECT -> USER`
+- root 链必须包含 `ROOT`；缺少 `ROOT` 时启动或加载失败
 - name 唯一
 - 物理路径唯一
 - 空间父目录不能冲突
@@ -1308,6 +1352,15 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 当前根链是有序覆盖链：
 
 - 前面的优先级更高
+- `ROOT` 是系统控制级
+- `ROOT` 中存在同名 `skill_id` 时，`PROJECT` 与 `USER` 中的同名 skill 不应加载
+- `PROJECT` 在 `ROOT` 无同名 skill 时覆盖 `USER`
+- 普通 `vulcan.runtime.skills.*` 管理面只能操作 `PROJECT` / `USER`
+- system tools 可以操作 `ROOT`，但不建议把 ROOT 调整能力暴露给普通用户
+
+如果宿主内部存在组织、工作区、模板等更复杂来源，建议在宿主侧折叠成单个对外 `PROJECT` 标签，而不是向用户暴露任意多层 root 链。
+
+完整策略见 [SKILL_ROOT_LAYER_POLICY.md](SKILL_ROOT_LAYER_POLICY.md)。
 
 ## 14. 标准 C ABI 与公共 `_json` FFI 的选择建议
 

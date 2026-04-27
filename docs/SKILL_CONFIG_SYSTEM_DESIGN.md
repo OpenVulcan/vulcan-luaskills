@@ -7,6 +7,7 @@
 - 宿主请求级 `vulcan.context.tool_config`
 - 宿主强制忽略 `ignored_skill_ids`
 - 宿主可选的 `vulcan.runtime.skills.*` 管理桥接
+- 固定三层 skill root 语义：`ROOT -> PROJECT -> USER`
 
 但还没有一套**统一的、可持久化的、面向 skill 自身配置**的正式协议。
 
@@ -18,6 +19,8 @@
 4. Skill 若自行读写配置文件，会引入路径、权限与生态不一致问题。
 
 因此需要由 `luaskills` 本身定义统一配置协议，并由宿主消费这套协议。
+
+Skill root 的正式对外层级为 `ROOT -> PROJECT -> USER`，启动或加载时必须传入 `ROOT` root，但配置系统仍保持单一主配置文件，不按层级拆分。`ROOT` 是系统控制级，普通 `vulcan.runtime.skills.*` 管理面只应操作实际存在的 `PROJECT` / `USER`。
 
 ## 2. 设计目标
 
@@ -91,6 +94,7 @@
 
 这里的 `runtime_root` 指当前主运行时目录。  
 当前设计不按多 skill root 拆分配置，也不为每个 root 单独派生配置文件。
+即使宿主使用 `ROOT -> PROJECT -> USER` 三层 skill root，配置文件也仍然只有一份主文件。
 
 ### 5.3 文件创建策略
 

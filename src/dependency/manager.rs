@@ -584,17 +584,16 @@ impl DependencyManager {
         removed_skill_id: &str,
         removed_manifest: Option<&SkillDependencyManifest>,
     ) -> Result<(), String> {
-        let mut roots = Vec::new();
+        let mut roots = vec![RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: base_dir.to_path_buf(),
+        }];
         if let Some(override_dir) = override_dir {
             roots.push(RuntimeSkillRoot {
-                name: "OVERRIDE".to_string(),
+                name: "PROJECT".to_string(),
                 skills_dir: override_dir.to_path_buf(),
             });
         }
-        roots.push(RuntimeSkillRoot {
-            name: "ROOT".to_string(),
-            skills_dir: base_dir.to_path_buf(),
-        });
         self.cleanup_uninstalled_skill_dependencies_from_roots(
             &roots,
             removed_skill_id,

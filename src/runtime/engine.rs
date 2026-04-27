@@ -1,7 +1,7 @@
 use mlua::{Function, HookTriggers, Lua, MultiValue, Table, Value as LuaValue, VmState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -35,7 +35,7 @@ use crate::skill::manager::{
     PreparedSkillApply, SkillApplyResult, SkillInstallRequest, SkillManager, SkillManagerConfig,
     SkillOperationPlane, SkillUninstallOptions, SkillUninstallResult,
     collect_effective_skill_instances_from_roots, resolve_declared_skill_instance_from_roots,
-    resolve_effective_skill_instance_from_roots,
+    resolve_effective_skill_instance_from_roots, resolve_requested_skill_id,
 };
 use crate::sqlite_host::{
     SqliteSkillBinding, SqliteSkillHost,
@@ -189,6 +189,7 @@ struct LuaVmPool {
 pub struct LuaEngine {
     skills: HashMap<String, LoadedSkill>,
     entry_registry: BTreeMap<String, ResolvedEntryTarget>,
+    runtime_skill_roots: Vec<RuntimeSkillRoot>,
     pool: Arc<LuaVmPool>,
     runlua_pool: Arc<LuaVmPool>,
     skill_config_store: Arc<SkillConfigStore>,
@@ -269,6 +270,12 @@ fn create_runtime_skill_management_bridge_fn(
         let payload = lua_value_to_json(&input).map_err(|error| {
             mlua::Error::runtime(format!("vulcan.runtime.skills.{}: {}", action_name, error))
         })?;
+        if management_payload_targets_root_layer(&payload) {
+            return Err(mlua::Error::runtime(format!(
+                "vulcan.runtime.skills.{} cannot target the system-controlled ROOT layer",
+                action_name
+            )));
+        }
         let result = dispatch_skill_management_request(&RuntimeSkillManagementRequest {
             action: action.clone(),
             input: payload,
@@ -277,6 +284,112 @@ fn create_runtime_skill_management_bridge_fn(
             mlua::Error::runtime(format!("vulcan.runtime.skills.{}: {}", action_name, error))
         })?;
         json_value_to_lua(lua, &result)
+    })
+}
+
+/// Return whether one JSON value is exactly the ROOT layer label.
+/// 返回单个 JSON 值是否正好是 ROOT 层标签。
+fn payload_string_is_root_layer(value: &Value) -> bool {
+    value
+        .as_str()
+        .map(|value| value.trim().eq_ignore_ascii_case("ROOT"))
+        .unwrap_or(false)
+}
+
+/// Return whether one target-root payload value identifies the ROOT layer.
+/// 返回单个目标根载荷值是否指向 ROOT 层。
+fn root_target_payload_value_targets_root(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            let normalized_key = key.replace(['_', '-'], "").to_ascii_lowercase();
+            let is_identity_key = matches!(
+                normalized_key.as_str(),
+                "name" | "label" | "rootname" | "layer" | "targetlayer"
+            );
+            (is_identity_key && payload_string_is_root_layer(value))
+                || root_target_payload_value_targets_root(value)
+        }),
+        Value::Array(items) => items.iter().any(root_target_payload_value_targets_root),
+        _ => payload_string_is_root_layer(value),
+    }
+}
+
+/// Return whether one Lua skill-management payload explicitly requests the ROOT layer.
+/// 返回单个 Lua 技能管理载荷是否显式请求 ROOT 层。
+fn management_payload_targets_root_layer(payload: &Value) -> bool {
+    match payload {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            let normalized_key = key.replace(['_', '-'], "").to_ascii_lowercase();
+            let is_layer_key = matches!(
+                normalized_key.as_str(),
+                "layer" | "targetlayer" | "root" | "rootname" | "targetroot" | "targetrootname"
+            );
+            let targets_root = is_layer_key && root_target_payload_value_targets_root(value);
+            targets_root || management_payload_targets_root_layer(value)
+        }),
+        Value::Array(items) => items.iter().any(management_payload_targets_root_layer),
+        _ => false,
+    }
+}
+
+/// Return whether a root chain contains one formal layer label.
+/// 返回根链中是否包含指定正式层级标签。
+fn runtime_skill_roots_contain_label(skill_roots: &[RuntimeSkillRoot], label: &str) -> bool {
+    skill_roots
+        .iter()
+        .any(|root| root.name.trim().eq_ignore_ascii_case(label))
+}
+
+/// Build the Lua-visible layer discovery response for ordinary skill management.
+/// 构造普通技能管理在 Lua 侧可见的层级发现响应。
+fn create_runtime_skill_layers_fn(
+    lua: &Lua,
+    skill_roots: &[RuntimeSkillRoot],
+    skill_management_enabled: bool,
+) -> mlua::Result<Function> {
+    let mut available_layers = Vec::new();
+    for label in ["PROJECT", "USER"] {
+        if runtime_skill_roots_contain_label(skill_roots, label) {
+            available_layers.push(label.to_string());
+        }
+    }
+    let default_layer = if available_layers.iter().any(|label| label == "USER") {
+        Some("USER".to_string())
+    } else if available_layers.iter().any(|label| label == "PROJECT") {
+        Some("PROJECT".to_string())
+    } else {
+        None
+    };
+    let any_layer_writable = skill_management_enabled && !available_layers.is_empty();
+    lua.create_function(move |lua, ()| {
+        let result = lua.create_table()?;
+        if let Some(default_layer) = default_layer.as_deref() {
+            result.set("default", default_layer)?;
+        }
+        result.set("writable", any_layer_writable)?;
+
+        let labels = lua.create_table()?;
+        for (index, label) in available_layers.iter().enumerate() {
+            labels.set(index + 1, label.as_str())?;
+        }
+        result.set("labels", labels)?;
+
+        let layers = lua.create_table()?;
+        for (index, label) in available_layers.iter().enumerate() {
+            let layer = lua.create_table()?;
+            layer.set("label", label.as_str())?;
+            layer.set("writable", skill_management_enabled)?;
+            let description = match label.as_str() {
+                "PROJECT" => "Project skill layer",
+                "USER" => "User skill layer",
+                _ => "Skill layer",
+            };
+            layer.set("description", description)?;
+            layers.set(index + 1, layer)?;
+        }
+        result.set("layers", layers)?;
+
+        Ok(result)
     })
 }
 
@@ -2033,17 +2146,139 @@ fn parse_tool_call_output(
 }
 
 impl LuaEngine {
-    /// Return the reference root used for host-managed fallback directories when no explicit host path is provided.
-    /// 在未显式提供宿主管理路径时返回用于回退目录计算的参考根目录。
-    fn reference_skill_root<'a>(
-        &self,
+    /// Build the formal root chain used by legacy base/override directory APIs.
+    /// 为旧版 base/override 目录 API 构造正式 root 链。
+    fn skill_roots_from_dirs(
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+    ) -> Vec<RuntimeSkillRoot> {
+        let mut skill_roots = vec![RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: base_dir.to_path_buf(),
+        }];
+        if let Some(override_dir) = override_dir {
+            skill_roots.push(RuntimeSkillRoot {
+                name: "PROJECT".to_string(),
+                skills_dir: override_dir.to_path_buf(),
+            });
+        }
+        skill_roots
+    }
+
+    /// Return the normalized formal label for one runtime skill root.
+    /// 返回单个运行时技能根的规范化正式标签。
+    fn normalized_skill_root_label(root: &RuntimeSkillRoot) -> String {
+        root.name.trim().to_ascii_uppercase()
+    }
+
+    /// Return the fixed load-priority rank for one formal root label.
+    /// 返回单个正式根标签的固定加载优先级排序值。
+    fn formal_skill_root_rank(label: &str) -> Option<usize> {
+        match label {
+            "ROOT" => Some(0),
+            "PROJECT" => Some(1),
+            "USER" => Some(2),
+            _ => None,
+        }
+    }
+
+    /// Return whether one runtime skill root is the system-controlled ROOT layer.
+    /// 返回单个运行时技能根是否为系统控制的 ROOT 层。
+    fn is_root_skill_root(root: &RuntimeSkillRoot) -> bool {
+        Self::normalized_skill_root_label(root) == "ROOT"
+    }
+
+    /// Return whether one runtime skill root is writable through the ordinary skills plane.
+    /// 返回单个运行时技能根是否可通过普通 skills 平面写入。
+    fn is_user_mutable_skill_root(root: &RuntimeSkillRoot) -> bool {
+        matches!(
+            Self::normalized_skill_root_label(root).as_str(),
+            "PROJECT" | "USER"
+        )
+    }
+
+    /// Validate that the configured skill root chain uses only ROOT, PROJECT, and USER in fixed order.
+    /// 校验已配置技能根链仅使用 ROOT、PROJECT、USER 且顺序固定。
+    fn validate_formal_skill_root_chain(skill_roots: &[RuntimeSkillRoot]) -> Result<(), String> {
+        if skill_roots.is_empty() {
+            return Err(
+                "ROOT skill root is required; pass a ROOT layer before starting LuaSkills"
+                    .to_string(),
+            );
+        }
+        let mut previous_rank = None;
+        let mut seen_labels = BTreeSet::new();
+        for root in skill_roots {
+            let label = Self::normalized_skill_root_label(root);
+            let rank = Self::formal_skill_root_rank(&label).ok_or_else(|| {
+                format!(
+                    "unsupported skill root label '{}'; expected one of ROOT, PROJECT, USER",
+                    root.name
+                )
+            })?;
+            if !seen_labels.insert(label.clone()) {
+                return Err(format!(
+                    "duplicate skill root label '{}'; only one ROOT, PROJECT, and USER root is supported",
+                    label
+                ));
+            }
+            if previous_rank
+                .map(|previous_rank| rank < previous_rank)
+                .unwrap_or(false)
+            {
+                return Err(
+                    "skill roots must be ordered by fixed priority ROOT -> PROJECT -> USER"
+                        .to_string(),
+                );
+            }
+            previous_rank = Some(rank);
+        }
+        if !seen_labels.contains("ROOT") {
+            return Err(
+                "ROOT skill root is required; pass a ROOT layer before starting LuaSkills"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Find one configured skill root by its formal label.
+    /// 按正式标签查找单个已配置技能根。
+    fn find_skill_root_by_label<'a>(
         skill_roots: &'a [RuntimeSkillRoot],
-    ) -> Result<&'a RuntimeSkillRoot, String> {
+        label: &str,
+    ) -> Option<&'a RuntimeSkillRoot> {
         skill_roots
             .iter()
-            .rev()
-            .find(|root| root.skills_dir.exists() && root.skills_dir.is_dir())
-            .ok_or_else(|| "at least one skill root is required".to_string())
+            .find(|root| Self::normalized_skill_root_label(root) == label)
+    }
+
+    /// Resolve the default install target for one operation plane.
+    /// 解析单个操作平面的默认安装目标根。
+    fn default_install_skill_root<'a>(
+        &self,
+        plane: SkillOperationPlane,
+        skill_roots: &'a [RuntimeSkillRoot],
+    ) -> Result<&'a RuntimeSkillRoot, String> {
+        match plane {
+            SkillOperationPlane::Skills => Self::find_skill_root_by_label(skill_roots, "USER")
+                .or_else(|| Self::find_skill_root_by_label(skill_roots, "PROJECT"))
+                .filter(|root| Self::is_user_mutable_skill_root(root))
+                .ok_or_else(|| {
+                    "ordinary skills plane requires a PROJECT or USER skill root; ROOT is system-controlled"
+                        .to_string()
+                }),
+            SkillOperationPlane::System => {
+                if let Some(root) = Self::find_skill_root_by_label(skill_roots, "ROOT") {
+                    Ok(root)
+                } else {
+                    Err(
+                        "system install requires a configured ROOT skill root; ordinary PROJECT/USER layers must be managed through the skills plane"
+                            .to_string(),
+                    )
+                }
+            }
+        }
     }
 
     /// Resolve the canonical runtime root used by the unified skill-config file.
@@ -2093,6 +2328,7 @@ impl LuaEngine {
         Ok(Self {
             skills: HashMap::new(),
             entry_registry: BTreeMap::new(),
+            runtime_skill_roots: Vec::new(),
             pool: Arc::new(LuaVmPool::new(options.pool_config)),
             runlua_pool: Arc::new(LuaVmPool::new(runlua_pool_config)),
             skill_config_store: Arc::new(
@@ -2158,6 +2394,50 @@ impl LuaEngine {
         let runtime_root = self.canonical_skill_config_runtime_root(skill_roots)?;
         self.skill_config_store
             .set_default_runtime_root(&runtime_root)
+    }
+
+    /// Create an empty reload candidate that preserves immutable host policy and callback snapshots.
+    /// 创建一个空的重载候选引擎，并保留不可变宿主策略与回调快照。
+    fn empty_reload_candidate(&self) -> Result<Self, Box<dyn std::error::Error>> {
+        let explicit_skill_config_file_path = if self.skill_config_store.has_explicit_file_path() {
+            Some(
+                self.skill_config_store
+                    .file_path()
+                    .map_err(std::io::Error::other)?,
+            )
+        } else {
+            None
+        };
+        Ok(Self {
+            skills: HashMap::new(),
+            entry_registry: BTreeMap::new(),
+            runtime_skill_roots: Vec::new(),
+            pool: Arc::new(LuaVmPool::new(self.pool.config)),
+            runlua_pool: Arc::new(LuaVmPool::new(self.runlua_pool.config)),
+            skill_config_store: Arc::new(
+                SkillConfigStore::new(explicit_skill_config_file_path)
+                    .map_err(std::io::Error::other)?,
+            ),
+            lancedb_host: None,
+            sqlite_host: None,
+            database_provider_callbacks: self.database_provider_callbacks.clone(),
+            host_options: self.host_options.clone(),
+        })
+    }
+
+    /// Replace the active runtime state with one fully loaded reload candidate.
+    /// 使用一个已完整加载的重载候选引擎替换当前活动运行时状态。
+    fn replace_runtime_state_from(&mut self, next: LuaEngine) {
+        self.skills = next.skills;
+        self.entry_registry = next.entry_registry;
+        self.runtime_skill_roots = next.runtime_skill_roots;
+        self.pool = next.pool;
+        self.runlua_pool = next.runlua_pool;
+        self.skill_config_store = next.skill_config_store;
+        self.lancedb_host = next.lancedb_host;
+        self.sqlite_host = next.sqlite_host;
+        self.database_provider_callbacks = next.database_provider_callbacks;
+        self.host_options = next.host_options;
     }
 
     /// Build the dependency-manager configuration for one named skill root.
@@ -2284,6 +2564,60 @@ impl LuaEngine {
             return Ok(None);
         }
         SkillDependencyManifest::load_from_path(&dependencies_path).map(Some)
+    }
+
+    /// Return whether two runtime skill roots refer to the same configured root entry.
+    /// 返回两个运行时技能根是否指向同一个已配置根条目。
+    fn runtime_skill_roots_match(left: &RuntimeSkillRoot, right: &RuntimeSkillRoot) -> bool {
+        left.name == right.name && left.skills_dir == right.skills_dir
+    }
+
+    /// Return the ordered-chain index of one configured root.
+    /// 返回单个已配置根在有序根链中的索引。
+    fn runtime_skill_root_index(
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+    ) -> Result<usize, String> {
+        skill_roots
+            .iter()
+            .position(|root| Self::runtime_skill_roots_match(root, target_root))
+            .ok_or_else(|| {
+                format!(
+                    "target root '{}' at {} is not part of the full runtime root chain",
+                    target_root.name,
+                    target_root.skills_dir.display()
+                )
+            })
+    }
+
+    /// Ensure one explicit target root will be effective after the staged apply operation.
+    /// 确保单个显式目标根在暂存应用操作完成后会成为生效根。
+    fn ensure_explicit_apply_target_will_be_effective(
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: Option<&RuntimeSkillRoot>,
+        skill_id: &str,
+    ) -> Result<(), String> {
+        let Some(target_root) = target_root else {
+            return Ok(());
+        };
+        let target_index = Self::runtime_skill_root_index(skill_roots, target_root)?;
+        let Some(effective_instance) =
+            resolve_declared_skill_instance_from_roots(skill_roots, skill_id)?
+        else {
+            return Ok(());
+        };
+        let effective_root = RuntimeSkillRoot {
+            name: effective_instance.root_name.clone(),
+            skills_dir: effective_instance.skills_root.clone(),
+        };
+        let effective_index = Self::runtime_skill_root_index(skill_roots, &effective_root)?;
+        if effective_index < target_index {
+            return Err(format!(
+                "skill '{}' in target root '{}' is shadowed by higher-priority root '{}'; update the higher-priority layer or remove that override before changing this fallback root",
+                skill_id, target_root.name, effective_instance.root_name
+            ));
+        }
+        Ok(())
     }
 
     /// Resolve final canonical entry names for all loaded skills with stable collision indexing.
@@ -2415,24 +2749,14 @@ impl LuaEngine {
         Ok(())
     }
 
-    /// Load skills from directories. `base_dir` is the system skill directory,
-    /// `override_dir` is the user override directory (if any).
+    /// Load skills from legacy directories, mapping base to ROOT and override to PROJECT.
+    /// 从旧目录接口加载技能，将 base 映射为 ROOT，将 override 映射为 PROJECT。
     pub fn load_from_dirs(
         &mut self,
         base_dir: &Path,
         override_dir: Option<&Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut skill_roots = Vec::new();
-        if let Some(override_dir) = override_dir {
-            skill_roots.push(RuntimeSkillRoot {
-                name: "OVERRIDE".to_string(),
-                skills_dir: override_dir.to_path_buf(),
-            });
-        }
-        skill_roots.push(RuntimeSkillRoot {
-            name: "ROOT".to_string(),
-            skills_dir: base_dir.to_path_buf(),
-        });
+        let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
         self.load_from_roots(&skill_roots)
     }
 
@@ -2442,6 +2766,9 @@ impl LuaEngine {
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
     ) -> Result<(), Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        self.runtime_skill_roots = skill_roots.to_vec();
         if !skill_roots.is_empty() {
             self.refresh_skill_config_runtime_root(skill_roots)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
@@ -2507,6 +2834,7 @@ impl LuaEngine {
                     &self.entry_registry,
                     self.host_options.clone(),
                     self.skill_config_store.clone(),
+                    self.runtime_skill_roots.clone(),
                     self.lancedb_host.clone(),
                     self.sqlite_host.clone(),
                 )
@@ -2524,17 +2852,7 @@ impl LuaEngine {
         base_dir: &Path,
         override_dir: Option<&Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut skill_roots = Vec::new();
-        if let Some(override_dir) = override_dir {
-            skill_roots.push(RuntimeSkillRoot {
-                name: "OVERRIDE".to_string(),
-                skills_dir: override_dir.to_path_buf(),
-            });
-        }
-        skill_roots.push(RuntimeSkillRoot {
-            name: "ROOT".to_string(),
-            skills_dir: base_dir.to_path_buf(),
-        });
+        let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
         self.reload_from_roots(&skill_roots)
     }
 
@@ -2544,9 +2862,12 @@ impl LuaEngine {
         &mut self,
         skill_roots: &[RuntimeSkillRoot],
     ) -> Result<(), Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         let previous_entries = self.list_entries();
-        self.reset_runtime_state();
-        self.load_from_roots(skill_roots)?;
+        let mut next = self.empty_reload_candidate()?;
+        next.load_from_roots(skill_roots)?;
+        self.replace_runtime_state_from(next);
         self.emit_entry_registry_delta(previous_entries);
         Ok(())
     }
@@ -2561,6 +2882,8 @@ impl LuaEngine {
         skill_id: &str,
         reason: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         validate_luaskills_identifier(skill_id, "skill_id")
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         let resolved_instance = resolve_declared_skill_instance_from_roots(skill_roots, skill_id)
@@ -2690,13 +3013,45 @@ impl LuaEngine {
         skill_id: &str,
         options: &SkillUninstallOptions,
     ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
+        self.uninstall_skill_and_reload_in_root(plane, skill_roots, None, skill_id, options)
+    }
+
+    /// Execute one uninstall action against an optional explicit target root and then reload the full runtime view.
+    /// 针对可选的显式目标根执行一次卸载动作，并随后重载完整运行时视图。
+    fn uninstall_skill_and_reload_in_root(
+        &mut self,
+        plane: SkillOperationPlane,
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: Option<&RuntimeSkillRoot>,
+        skill_id: &str,
+        options: &SkillUninstallOptions,
+    ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         validate_luaskills_identifier(skill_id, "skill_id")
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-        let resolved_instance = resolve_effective_skill_instance_from_roots(skill_roots, skill_id)
-            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
-            .ok_or_else(|| -> Box<dyn std::error::Error> {
-                format!("effective skill instance '{}' not found", skill_id).into()
-            })?;
+        if let Some(target_root) = target_root {
+            Self::runtime_skill_root_index(skill_roots, target_root)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        }
+        let target_roots = target_root.map(|root| vec![root.clone()]);
+        let resolution_roots = target_roots.as_deref().unwrap_or(skill_roots);
+        let resolved_instance = if target_root.is_some() {
+            resolve_declared_skill_instance_from_roots(resolution_roots, skill_id)
+        } else {
+            resolve_effective_skill_instance_from_roots(resolution_roots, skill_id)
+        }
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+        .ok_or_else(|| -> Box<dyn std::error::Error> {
+            match target_root {
+                Some(root) => format!(
+                    "skill instance '{}' not found in target root '{}'",
+                    skill_id, root.name
+                )
+                .into(),
+                None => format!("effective skill instance '{}' not found", skill_id).into(),
+            }
+        })?;
         let resolved_root = RuntimeSkillRoot {
             name: resolved_instance.root_name.clone(),
             skills_dir: resolved_instance.skills_root.clone(),
@@ -2898,6 +3253,19 @@ impl LuaEngine {
         skill_roots: &[RuntimeSkillRoot],
         request: &SkillInstallRequest,
     ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        self.apply_skill_request_in_root(plane, action, skill_roots, None, request)
+    }
+
+    /// Execute one install or update request against an optional explicit target root.
+    /// 针对可选的显式目标根执行一次安装或更新请求。
+    fn apply_skill_request_in_root(
+        &mut self,
+        plane: SkillOperationPlane,
+        action: crate::skill::manager::SkillLifecycleAction,
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: Option<&RuntimeSkillRoot>,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
         if !matches!(
             action,
             crate::skill::manager::SkillLifecycleAction::Install
@@ -2905,35 +3273,41 @@ impl LuaEngine {
         ) {
             return Err(format!("unsupported apply action {:?}", action).into());
         }
+        Self::validate_formal_skill_root_chain(skill_roots)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let explicit_target_root = target_root;
+        if let Some(target_root) = explicit_target_root {
+            Self::runtime_skill_root_index(skill_roots, target_root)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        }
+        let requested_skill_id = resolve_requested_skill_id(request)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let explicit_target_roots = explicit_target_root.map(|root| vec![root.clone()]);
+        let update_resolution_roots = explicit_target_roots.as_deref().unwrap_or(skill_roots);
         let target_root = match action {
             crate::skill::manager::SkillLifecycleAction::Install => {
-                self.reference_skill_root(skill_roots)?.clone()
+                if let Some(target_root) = explicit_target_root {
+                    target_root.clone()
+                } else {
+                    self.default_install_skill_root(plane, skill_roots)?.clone()
+                }
             }
             crate::skill::manager::SkillLifecycleAction::Update => {
-                let target_skill_id = request
-                    .skill_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-                    .or_else(|| {
-                        request
-                            .source
-                            .as_deref()
-                            .and_then(|value| value.trim().rsplit('/').next())
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToOwned::to_owned)
-                    })
-                    .ok_or_else(|| -> Box<dyn std::error::Error> {
-                        "update request requires skill_id or one derivable source".into()
-                    })?;
-                let resolved_instance =
-                    resolve_declared_skill_instance_from_roots(skill_roots, &target_skill_id)
-                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
-                        .ok_or_else(|| -> Box<dyn std::error::Error> {
-                            format!("skill '{}' is not installed", target_skill_id).into()
-                        })?;
+                let resolved_instance = resolve_declared_skill_instance_from_roots(
+                    update_resolution_roots,
+                    &requested_skill_id,
+                )
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                .ok_or_else(|| -> Box<dyn std::error::Error> {
+                    match explicit_target_root {
+                        Some(root) => format!(
+                            "skill '{}' is not installed in target root '{}'",
+                            requested_skill_id, root.name
+                        )
+                        .into(),
+                        None => format!("skill '{}' is not installed", requested_skill_id).into(),
+                    }
+                })?;
                 RuntimeSkillRoot {
                     name: resolved_instance.root_name,
                     skills_dir: resolved_instance.skills_root,
@@ -2941,35 +3315,35 @@ impl LuaEngine {
             }
             _ => unreachable!("unsupported apply action should have returned early"),
         };
+        if explicit_target_root.is_some() {
+            Self::ensure_explicit_apply_target_will_be_effective(
+                skill_roots,
+                explicit_target_root,
+                &requested_skill_id,
+            )
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        }
+        let operation_roots_owned = if let Some(target_root) = explicit_target_root {
+            Some(vec![target_root.clone()])
+        } else if action == crate::skill::manager::SkillLifecycleAction::Install
+            && plane == SkillOperationPlane::System
+            && Self::is_root_skill_root(&target_root)
+        {
+            Some(vec![target_root.clone()])
+        } else {
+            None
+        };
+        let operation_roots = operation_roots_owned.as_deref().unwrap_or(skill_roots);
         let previous_dependency_manifest =
             if action == crate::skill::manager::SkillLifecycleAction::Update {
-                let target_skill_id = request
-                    .skill_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-                    .or_else(|| {
-                        request
-                            .source
-                            .as_deref()
-                            .and_then(|value| value.trim().rsplit('/').next())
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToOwned::to_owned)
-                    });
-                if let Some(target_skill_id) = target_skill_id {
-                    resolve_declared_skill_instance_from_roots(skill_roots, &target_skill_id)
-                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
-                        .and_then(|resolved| {
-                            self.load_skill_dependency_manifest(&resolved.actual_dir)
-                                .transpose()
-                        })
-                        .transpose()
-                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
-                } else {
-                    None
-                }
+                resolve_declared_skill_instance_from_roots(operation_roots, &requested_skill_id)
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                    .and_then(|resolved| {
+                        self.load_skill_dependency_manifest(&resolved.actual_dir)
+                            .transpose()
+                    })
+                    .transpose()
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
             } else {
                 None
             };
@@ -2978,10 +3352,10 @@ impl LuaEngine {
             .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         let prepared = match action {
             crate::skill::manager::SkillLifecycleAction::Install => manager
-                .prepare_install_skill(plane, skill_roots, request)
+                .prepare_install_skill(plane, operation_roots, request)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
             crate::skill::manager::SkillLifecycleAction::Update => manager
-                .prepare_update_skill(plane, skill_roots, request)
+                .prepare_update_skill(plane, operation_roots, request)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
             _ => unreachable!("unsupported apply action should have returned early"),
         };
@@ -3032,7 +3406,7 @@ impl LuaEngine {
             && result.status == "updated"
         {
             let current_dependency_manifest =
-                resolve_declared_skill_instance_from_roots(skill_roots, &result.skill_id)
+                resolve_declared_skill_instance_from_roots(operation_roots, &result.skill_id)
                     .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
                     .and_then(|resolved| {
                         self.load_skill_dependency_manifest(&resolved.actual_dir)
@@ -3060,7 +3434,7 @@ impl LuaEngine {
             }
         }
         let resolved_instance =
-            resolve_declared_skill_instance_from_roots(skill_roots, &result.skill_id)
+            resolve_declared_skill_instance_from_roots(operation_roots, &result.skill_id)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         self.emit_skill_lifecycle_event(
             plane,
@@ -3087,17 +3461,7 @@ impl LuaEngine {
         skill_id: &str,
         reason: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut skill_roots = Vec::new();
-        if let Some(override_dir) = override_dir {
-            skill_roots.push(RuntimeSkillRoot {
-                name: "OVERRIDE".to_string(),
-                skills_dir: override_dir.to_path_buf(),
-            });
-        }
-        skill_roots.push(RuntimeSkillRoot {
-            name: "ROOT".to_string(),
-            skills_dir: base_dir.to_path_buf(),
-        });
+        let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
         self.disable_skill_in_roots(&skill_roots, skill_id, reason)
     }
 
@@ -3127,17 +3491,7 @@ impl LuaEngine {
         skill_id: &str,
         reason: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut skill_roots = Vec::new();
-        if let Some(override_dir) = override_dir {
-            skill_roots.push(RuntimeSkillRoot {
-                name: "OVERRIDE".to_string(),
-                skills_dir: override_dir.to_path_buf(),
-            });
-        }
-        skill_roots.push(RuntimeSkillRoot {
-            name: "ROOT".to_string(),
-            skills_dir: base_dir.to_path_buf(),
-        });
+        let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
         self.system_disable_skill_in_roots(&skill_roots, skill_id, reason)
     }
 
@@ -3212,6 +3566,24 @@ impl LuaEngine {
         self.uninstall_skill_and_reload(SkillOperationPlane::System, skill_roots, skill_id, options)
     }
 
+    /// Uninstall one skill through the host-controlled system plane from an explicit target root.
+    /// 通过宿主控制的 system 平面从显式目标根卸载单个技能。
+    pub fn system_uninstall_skill_in_root(
+        &mut self,
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+        skill_id: &str,
+        options: &SkillUninstallOptions,
+    ) -> Result<SkillUninstallResult, Box<dyn std::error::Error>> {
+        self.uninstall_skill_and_reload_in_root(
+            SkillOperationPlane::System,
+            skill_roots,
+            Some(target_root),
+            skill_id,
+            options,
+        )
+    }
+
     /// Preflight one install request through the ordinary skills plane and return a structured result.
     /// 通过普通 skills 平面对一次安装请求执行预检查，并返回结构化结果。
     pub fn install_skill(
@@ -3238,6 +3610,23 @@ impl LuaEngine {
             SkillOperationPlane::System,
             crate::skill::manager::SkillLifecycleAction::Install,
             skill_roots,
+            request,
+        )
+    }
+
+    /// Preflight one install request through the host-controlled system plane into an explicit target root.
+    /// 通过宿主控制的 system 平面将一次安装请求预检查并写入显式目标根。
+    pub fn system_install_skill_in_root(
+        &mut self,
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        self.apply_skill_request_in_root(
+            SkillOperationPlane::System,
+            crate::skill::manager::SkillLifecycleAction::Install,
+            skill_roots,
+            Some(target_root),
             request,
         )
     }
@@ -3272,17 +3661,21 @@ impl LuaEngine {
         )
     }
 
-    /// Reset all loaded skills, providers, and pooled VMs before one full reload.
-    /// 在执行一次完整重载前重置全部已加载技能、provider 与虚拟机池。
-    fn reset_runtime_state(&mut self) {
-        let pool_config = self.pool.config;
-        let runlua_pool_config = self.runlua_pool.config;
-        self.skills.clear();
-        self.entry_registry.clear();
-        self.lancedb_host = None;
-        self.sqlite_host = None;
-        self.pool = Arc::new(LuaVmPool::new(pool_config));
-        self.runlua_pool = Arc::new(LuaVmPool::new(runlua_pool_config));
+    /// Preflight one update request through the host-controlled system plane against an explicit target root.
+    /// 通过宿主控制的 system 平面对显式目标根执行一次更新预检查。
+    pub fn system_update_skill_in_root(
+        &mut self,
+        skill_roots: &[RuntimeSkillRoot],
+        target_root: &RuntimeSkillRoot,
+        request: &SkillInstallRequest,
+    ) -> Result<SkillApplyResult, Box<dyn std::error::Error>> {
+        self.apply_skill_request_in_root(
+            SkillOperationPlane::System,
+            crate::skill::manager::SkillLifecycleAction::Update,
+            skill_roots,
+            Some(target_root),
+            request,
+        )
     }
 
     /// Emit one structured lifecycle event through the host callback bridge.
@@ -3537,6 +3930,7 @@ impl LuaEngine {
             &lua,
             self.host_options.as_ref(),
             self.skill_config_store.clone(),
+            &self.runtime_skill_roots,
         )
         .map_err(|error| error.to_string())?;
         Self::populate_vulcan_luaexec_bridge(
@@ -3546,6 +3940,7 @@ impl LuaEngine {
             self.skill_config_store.clone(),
             skills.clone(),
             entry_registry.clone(),
+            self.runtime_skill_roots.clone(),
             self.lancedb_host.clone(),
             self.sqlite_host.clone(),
         )?;
@@ -3577,14 +3972,20 @@ impl LuaEngine {
         entry_registry: &BTreeMap<String, ResolvedEntryTarget>,
         host_options: Arc<LuaRuntimeHostOptions>,
         skill_config_store: Arc<SkillConfigStore>,
+        runtime_skill_roots: Vec<RuntimeSkillRoot>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
         sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<LuaVm, String> {
         let lua = unsafe { Lua::unsafe_new() };
         Self::setup_package_paths(&lua, host_options.as_ref())
             .map_err(|error| error.to_string())?;
-        Self::register_vulcan_module(&lua, host_options.as_ref(), skill_config_store)
-            .map_err(|error| error.to_string())?;
+        Self::register_vulcan_module(
+            &lua,
+            host_options.as_ref(),
+            skill_config_store,
+            &runtime_skill_roots,
+        )
+        .map_err(|error| error.to_string())?;
         Self::register_skill_functions(&lua, skills)?;
         Self::populate_vulcan_call_for_lua(
             &lua,
@@ -3609,6 +4010,7 @@ impl LuaEngine {
         skill_config_store: Arc<SkillConfigStore>,
         skills: Arc<HashMap<String, LoadedSkill>>,
         entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
+        runtime_skill_roots: Vec<RuntimeSkillRoot>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
         sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<(), String> {
@@ -3637,6 +4039,7 @@ impl LuaEngine {
                     entry_registry.clone(),
                     host_options.clone(),
                     skill_config_store.clone(),
+                    runtime_skill_roots.clone(),
                     lancedb_host.clone(),
                     sqlite_host.clone(),
                 )
@@ -4879,6 +5282,7 @@ impl LuaEngine {
         entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
         host_options: Arc<LuaRuntimeHostOptions>,
         skill_config_store: Arc<SkillConfigStore>,
+        runtime_skill_roots: Vec<RuntimeSkillRoot>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
         sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<LuaVmLease, String> {
@@ -4888,6 +5292,7 @@ impl LuaEngine {
                 entry_registry.as_ref(),
                 host_options.clone(),
                 skill_config_store.clone(),
+                runtime_skill_roots.clone(),
                 lancedb_host.clone(),
                 sqlite_host.clone(),
             )
@@ -4903,6 +5308,7 @@ impl LuaEngine {
         entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
         host_options: Arc<LuaRuntimeHostOptions>,
         skill_config_store: Arc<SkillConfigStore>,
+        runtime_skill_roots: Vec<RuntimeSkillRoot>,
         lancedb_host: Option<Arc<LanceDbSkillHost>>,
         sqlite_host: Option<Arc<SqliteSkillHost>>,
     ) -> Result<String, String> {
@@ -4916,6 +5322,7 @@ impl LuaEngine {
             entry_registry,
             host_options.clone(),
             skill_config_store,
+            runtime_skill_roots,
             lancedb_host,
             sqlite_host,
         )?;
@@ -5000,6 +5407,7 @@ impl LuaEngine {
             Arc::new(self.entry_registry.clone()),
             self.host_options.clone(),
             self.skill_config_store.clone(),
+            self.runtime_skill_roots.clone(),
             self.lancedb_host.clone(),
             self.sqlite_host.clone(),
         )
@@ -5709,6 +6117,7 @@ end
         lua: &Lua,
         host_options: &LuaRuntimeHostOptions,
         skill_config_store: Arc<SkillConfigStore>,
+        runtime_skill_roots: &[RuntimeSkillRoot],
     ) -> Result<(), Box<dyn std::error::Error>> {
         let vulcan = lua.create_table()?;
         let runtime = lua.create_table()?;
@@ -6034,6 +6443,10 @@ end
         })?;
         runtime_skills.set("status", runtime_skills_status_fn)?;
         runtime_skills.set(
+            "layers",
+            create_runtime_skill_layers_fn(lua, runtime_skill_roots, skill_management_enabled)?,
+        )?;
+        runtime_skills.set(
             "install",
             create_runtime_skill_management_bridge_fn(
                 lua,
@@ -6220,12 +6633,15 @@ mod tests {
         get_vulcan_context_table, get_vulcan_deps_table, get_vulcan_runtime_internal_table,
         get_vulcan_table, json_to_lua_table, normalize_host_visible_path_text,
         populate_vulcan_dependency_context, populate_vulcan_file_context,
-        populate_vulcan_internal_execution_context,
+        populate_vulcan_internal_execution_context, runlua_cwd_guard,
     };
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
     use crate::lua_skill::SkillMeta;
     use crate::runtime_options::LuaRuntimeRunLuaPoolConfig;
-    use crate::{LuaEngineOptions, LuaRuntimeHostOptions};
+    use crate::{
+        LuaEngineOptions, LuaRuntimeHostOptions, RuntimeSkillRoot, SkillInstallRequest,
+        SkillInstallSourceType, SkillUninstallOptions,
+    };
     use mlua::{Table, Value as LuaValue};
     use serde_json::json;
     use std::collections::HashMap;
@@ -6283,6 +6699,7 @@ mod tests {
         LuaEngine {
             skills,
             entry_registry: Default::default(),
+            runtime_skill_roots: Vec::new(),
             pool: Arc::new(LuaVmPool {
                 config: LuaVmPoolConfig {
                     min_size: 1,
@@ -6365,6 +6782,538 @@ mod tests {
         )
         .expect("write config test runtime entry");
         skill_dir
+    }
+
+    /// Write one minimal enabled skill fixture into a specific skills root.
+    /// 将一个最小启用技能夹具写入指定 skills 根目录。
+    fn write_minimal_skill_to_root(skill_root: &Path, skill_id: &str) -> PathBuf {
+        write_minimal_skill_to_root_with_response(skill_root, skill_id, "ok")
+    }
+
+    /// Write one minimal enabled skill fixture with a deterministic response into a specific skills root.
+    /// 将带有确定响应的最小启用技能夹具写入指定 skills 根目录。
+    fn write_minimal_skill_to_root_with_response(
+        skill_root: &Path,
+        skill_id: &str,
+        response: &str,
+    ) -> PathBuf {
+        let skill_dir = skill_root.join(skill_id);
+        fs::create_dir_all(skill_dir.join("runtime")).expect("create minimal skill runtime dir");
+        fs::write(
+            skill_dir.join("skill.yaml"),
+            format!(
+                "name: {skill_id}\nversion: 0.1.0\nenable: true\ndebug: false\nentries:\n  - name: ping\n    description: Minimal ping entry.\n    lua_entry: runtime/ping.lua\n    lua_module: {skill_id}.ping\n"
+            ),
+        )
+        .expect("write minimal skill yaml");
+        fs::write(
+            skill_dir.join("runtime").join("ping.lua"),
+            format!("return function(args)\n  return '{response}'\nend\n"),
+        )
+        .expect("write minimal skill runtime entry");
+        skill_dir
+    }
+
+    /// Verify ROOT keeps priority over PROJECT and USER for identical skill ids.
+    /// 验证 ROOT 对同名 skill 始终高于 PROJECT 与 USER。
+    #[test]
+    fn load_from_roots_keeps_root_priority_over_project_and_user() {
+        let runtime_root = make_temp_runtime_root("formal-root-load-priority");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let project_root = RuntimeSkillRoot {
+            name: "PROJECT".to_string(),
+            skills_dir: runtime_root.join("project_skills"),
+        };
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        write_minimal_skill_to_root_with_response(&root_root.skills_dir, "vulcan-codekit", "root");
+        write_minimal_skill_to_root_with_response(
+            &project_root.skills_dir,
+            "vulcan-codekit",
+            "project",
+        );
+        write_minimal_skill_to_root_with_response(&user_root.skills_dir, "vulcan-codekit", "user");
+        let mut engine = make_runtime_test_engine();
+        engine
+            .load_from_roots(&[root_root, project_root, user_root])
+            .expect("formal root chain should load");
+
+        let result = engine
+            .call_skill("vulcan-codekit-ping", &json!({}), None)
+            .expect("call root-priority skill");
+        assert_eq!(result.content, "root");
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify formal root chains reject unknown labels and reversed priority order.
+    /// 验证正式根链会拒绝未知标签和反向优先级顺序。
+    #[test]
+    fn load_from_roots_rejects_unknown_or_reversed_formal_layers() {
+        let runtime_root = make_temp_runtime_root("formal-root-chain-validation");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let mut engine = make_runtime_test_engine();
+        let reversed_error = engine
+            .load_from_roots(&[
+                RuntimeSkillRoot {
+                    name: "USER".to_string(),
+                    skills_dir: runtime_root.join("user_skills"),
+                },
+                RuntimeSkillRoot {
+                    name: "ROOT".to_string(),
+                    skills_dir: runtime_root.join("root_skills"),
+                },
+            ])
+            .expect_err("reversed formal root order should fail");
+        assert!(
+            reversed_error
+                .to_string()
+                .contains("ROOT -> PROJECT -> USER")
+        );
+
+        let unknown_error = engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: "WORKSPACE".to_string(),
+                skills_dir: runtime_root.join("workspace_skills"),
+            }])
+            .expect_err("unknown formal root label should fail");
+        assert!(
+            unknown_error
+                .to_string()
+                .contains("unsupported skill root label")
+        );
+
+        let missing_root_error = engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: "USER".to_string(),
+                skills_dir: runtime_root.join("user_skills"),
+            }])
+            .expect_err("missing ROOT layer should fail");
+        assert!(
+            missing_root_error
+                .to_string()
+                .contains("ROOT skill root is required")
+        );
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify ordinary skills installs do not fall back to the system-controlled ROOT layer.
+    /// 验证普通 skills 安装不会回落到系统控制的 ROOT 层。
+    #[test]
+    fn install_skill_rejects_root_only_runtime() {
+        let runtime_root = make_temp_runtime_root("ordinary-install-root-only");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .install_skill(
+                &[root_root],
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("ordinary install must reject root-only runtime");
+        assert!(error.to_string().contains("ROOT is system-controlled"));
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify system installs do not fall back to ordinary layers when ROOT is absent.
+    /// 验证 system 安装在缺少 ROOT 时不会回退到普通层。
+    #[test]
+    fn system_install_skill_rejects_runtime_without_root() {
+        let runtime_root = make_temp_runtime_root("system-install-without-root");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        fs::create_dir_all(&user_root.skills_dir).expect("create user skills root");
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .system_install_skill(
+                &[user_root],
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("system install without ROOT should fail");
+        assert!(error.to_string().contains("ROOT skill root is required"));
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify the Lua-visible ordinary skill-management layer list excludes ROOT.
+    /// 验证 Lua 可见的普通技能管理层级列表不包含 ROOT。
+    #[test]
+    fn runtime_skills_layers_excludes_root() {
+        let runtime_root = make_temp_runtime_root("runtime-skills-layers-root-only");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.capabilities.enable_skill_management_bridge = true;
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options,
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create root-only layer test engine");
+        engine
+            .load_from_roots(&[root_root])
+            .expect("root-only runtime should load");
+        let result = engine
+            .run_lua("return vulcan.runtime.skills.layers()", &json!({}), None)
+            .expect("layers function should run");
+
+        assert_eq!(result["labels"], json!([]));
+        assert_eq!(result["layers"], json!([]));
+        assert_eq!(result["writable"], json!(false));
+        assert!(result["default"].is_null());
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify layers reflects loaded PROJECT and USER roots and the bridge writable policy.
+    /// 验证 layers 会反映已加载 PROJECT/USER 根以及桥接写入策略。
+    #[test]
+    fn runtime_skills_layers_reflects_loaded_roots_and_bridge_policy() {
+        let runtime_root = make_temp_runtime_root("runtime-skills-layers-dynamic");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        let mut engine = make_runtime_test_engine();
+        engine
+            .load_from_roots(&[root_root.clone(), user_root])
+            .expect("root and user runtime should load");
+        let disabled_result = engine
+            .run_lua("return vulcan.runtime.skills.layers()", &json!({}), None)
+            .expect("layers function should run when bridge is disabled");
+        assert_eq!(disabled_result["default"], json!("USER"));
+        assert_eq!(disabled_result["labels"], json!(["USER"]));
+        assert_eq!(disabled_result["writable"], json!(false));
+        assert_eq!(disabled_result["layers"][0]["writable"], json!(false));
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.capabilities.enable_skill_management_bridge = true;
+        let mut enabled_engine = LuaEngine::new(LuaEngineOptions {
+            host_options,
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create enabled layer test engine");
+        let project_root = RuntimeSkillRoot {
+            name: "PROJECT".to_string(),
+            skills_dir: runtime_root.join("project_skills"),
+        };
+        enabled_engine
+            .load_from_roots(&[
+                root_root,
+                project_root,
+                RuntimeSkillRoot {
+                    name: "USER".to_string(),
+                    skills_dir: runtime_root.join("enabled_user_skills"),
+                },
+            ])
+            .expect("root, project, user runtime should load");
+        let enabled_result = enabled_engine
+            .run_lua("return vulcan.runtime.skills.layers()", &json!({}), None)
+            .expect("layers function should run when bridge is enabled");
+        assert_eq!(enabled_result["default"], json!("USER"));
+        assert_eq!(enabled_result["labels"], json!(["PROJECT", "USER"]));
+        assert_eq!(enabled_result["writable"], json!(true));
+        assert_eq!(enabled_result["layers"][0]["writable"], json!(true));
+        assert!(
+            enabled_result["labels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|value| value != "ROOT")
+        );
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify the ordinary Lua bridge rejects ROOT targets before dispatching to the host callback.
+    /// 验证普通 Lua 桥接会在分发到宿主回调前拒绝 ROOT 目标。
+    #[test]
+    fn runtime_skills_bridge_rejects_root_payload_before_callback() {
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.capabilities.enable_skill_management_bridge = true;
+        let engine = LuaEngine::new(LuaEngineOptions {
+            host_options,
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create bridge test engine");
+
+        let error = engine
+            .run_lua(
+                "return vulcan.runtime.skills.install({ layer = 'ROOT', skill_id = 'vulcan-codekit' })",
+                &json!({}),
+                None,
+            )
+            .expect_err("root target should be rejected by bridge");
+        assert!(error.contains("cannot target the system-controlled ROOT layer"));
+        assert!(!error.contains("no host callback"));
+
+        let object_error = engine
+            .run_lua(
+                "return vulcan.runtime.skills.install({ target_root = { name = 'ROOT', skills_dir = 'C:/tmp/root-skills' }, skill_id = 'vulcan-codekit' })",
+                &json!({}),
+                None,
+            )
+            .expect_err("root target object should be rejected by bridge");
+        assert!(object_error.contains("cannot target the system-controlled ROOT layer"));
+        assert!(!object_error.contains("no host callback"));
+    }
+
+    /// Verify explicit-root system updates fail instead of returning a successful missing-skill result.
+    /// 验证显式根 system 更新在缺少目标技能时会失败，而不是返回成功的 missing-skill 结果。
+    #[test]
+    fn system_update_skill_in_root_missing_target_returns_error() {
+        let runtime_root = make_temp_runtime_root("system-update-target-missing");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user").join("skills"),
+        };
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root").join("skills"),
+        };
+        fs::create_dir_all(&user_root.skills_dir).expect("create user skills root");
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        let skill_roots = vec![root_root, user_root.clone()];
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .system_update_skill_in_root(
+                &skill_roots,
+                &user_root,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("missing explicit-root update target should fail");
+        let rendered = error.to_string();
+
+        assert!(rendered.contains("not installed in target root 'USER'"));
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify explicit-root apply rejects PROJECT changes when ROOT owns the same skill id.
+    /// 验证明确定根应用会在 ROOT 拥有同名 skill 时拒绝 PROJECT 变更。
+    #[test]
+    fn system_update_skill_in_root_rejects_shadowed_fallback_target() {
+        let runtime_root = make_temp_runtime_root("system-update-shadowed-root");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let project_root = RuntimeSkillRoot {
+            name: "PROJECT".to_string(),
+            skills_dir: runtime_root.join("project_skills"),
+        };
+        write_minimal_skill_to_root(&root_root.skills_dir, "vulcan-codekit");
+        write_minimal_skill_to_root(&project_root.skills_dir, "vulcan-codekit");
+        let skill_roots = vec![root_root, project_root.clone()];
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .system_update_skill_in_root(
+                &skill_roots,
+                &project_root,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("shadowed fallback target should fail before update");
+        let rendered = error.to_string();
+
+        assert!(rendered.contains("shadowed by higher-priority root 'ROOT'"));
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify explicit-root install derives skill ids with the same GitHub locator rules as the manager.
+    /// 验证明确定根安装使用与管理器一致的 GitHub 定位规则推导技能标识。
+    #[test]
+    fn system_install_skill_in_root_accepts_trailing_slash_github_url_for_shadow_check() {
+        let runtime_root = make_temp_runtime_root("system-install-trailing-slash-source");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        write_minimal_skill_to_root(&user_root.skills_dir, "vulcan-codekit");
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        let skill_roots = vec![root_root.clone(), user_root];
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .system_install_skill_in_root(
+                &skill_roots,
+                &root_root,
+                &SkillInstallRequest {
+                    skill_id: None,
+                    source: Some("https://github.com/LuaSkills/vulcan-codekit/".to_string()),
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("root install should derive source skill id before managed download");
+        let rendered = error.to_string();
+
+        assert!(!rendered.contains("shadowed by higher-priority root"));
+        assert!(!rendered.contains("requires skill_id"));
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify explicit-root system updates reject unlisted targets before probing target contents.
+    /// 验证明确定根 system 更新会在探测目标内容前拒绝链外目标。
+    #[test]
+    fn system_update_skill_in_root_rejects_unlisted_target_before_missing_target() {
+        let runtime_root = make_temp_runtime_root("system-update-unlisted-root");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let rogue_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("rogue_skills"),
+        };
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        fs::create_dir_all(&user_root.skills_dir).expect("create user skills root");
+        let skill_roots = vec![root_root, user_root];
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .system_update_skill_in_root(
+                &skill_roots,
+                &rogue_root,
+                &SkillInstallRequest {
+                    skill_id: Some("vulcan-codekit".to_string()),
+                    source: None,
+                    source_type: SkillInstallSourceType::Github,
+                },
+            )
+            .expect_err("unlisted explicit update target root should be rejected");
+        let rendered = error.to_string();
+
+        assert!(rendered.contains("not part of the full runtime root chain"));
+        assert!(!rendered.contains("not installed in target root"));
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify explicit-root uninstall rejects target roots outside the active runtime chain.
+    /// 验证明确定根卸载会拒绝当前运行时根链之外的目标根。
+    #[test]
+    fn system_uninstall_skill_in_root_rejects_unlisted_target_root() {
+        let runtime_root = make_temp_runtime_root("system-uninstall-unlisted-root");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user").join("skills"),
+        };
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root").join("skills"),
+        };
+        let rogue_root = RuntimeSkillRoot {
+            name: "ROGUE".to_string(),
+            skills_dir: runtime_root.join("rogue").join("skills"),
+        };
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        fs::create_dir_all(&user_root.skills_dir).expect("create user skills root");
+        let rogue_skill_dir = write_minimal_skill_to_root(&rogue_root.skills_dir, "vulcan-codekit");
+        let skill_roots = vec![root_root, user_root];
+        let mut engine = make_runtime_test_engine();
+
+        let error = engine
+            .system_uninstall_skill_in_root(
+                &skill_roots,
+                &rogue_root,
+                "vulcan-codekit",
+                &SkillUninstallOptions::default(),
+            )
+            .expect_err("unlisted explicit target root should be rejected");
+        let rendered = error.to_string();
+
+        assert!(rendered.contains("not part of the full runtime root chain"));
+        assert!(
+            rogue_skill_dir.exists(),
+            "unlisted target skill directory should not be removed"
+        );
+        let _ = fs::remove_dir_all(&runtime_root);
     }
 
     /// Verify the isolated runlua pool uses the documented default sizing when the host does not override it.
@@ -6545,6 +7494,124 @@ mod tests {
         let _ = fs::remove_dir_all(&runtime_root);
     }
 
+    /// Verify invalid reload requests fail before clearing the active runtime view.
+    /// 验证无效重载请求会在清空当前运行时视图前失败。
+    #[test]
+    fn reload_from_roots_rejects_invalid_chain_before_resetting_runtime_state() {
+        let runtime_root = make_temp_runtime_root("reload-invalid-chain-preserves-state");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        write_minimal_skill_to_root_with_response(&user_root.skills_dir, "vulcan-codekit", "user");
+        let mut engine = make_runtime_test_engine();
+        engine
+            .load_from_roots(&[root_root, user_root.clone()])
+            .expect("initial root and user runtime should load");
+
+        let invalid_reload_error = engine
+            .reload_from_roots(&[user_root])
+            .expect_err("missing ROOT reload should fail");
+        assert!(
+            invalid_reload_error
+                .to_string()
+                .contains("ROOT skill root is required")
+        );
+
+        let result = engine
+            .call_skill("vulcan-codekit-ping", &json!({}), None)
+            .expect("old entry should remain callable after failed reload");
+        assert_eq!(result.content, "user");
+
+        let layers = engine
+            .run_lua("return vulcan.runtime.skills.layers()", &json!({}), None)
+            .expect("layers should still use the previously loaded root chain");
+        assert_eq!(layers["labels"], json!(["USER"]));
+        assert_eq!(layers["default"], json!("USER"));
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify reload failures after formal validation still preserve the active runtime view.
+    /// 验证 formal 校验之后发生的重载失败仍会保留当前活动运行时视图。
+    #[test]
+    fn reload_from_roots_preserves_state_after_ambiguous_config_root_error() {
+        let runtime_root = make_temp_runtime_root("reload-ambiguous-preserves-state");
+        let first_ambiguous_root = make_temp_runtime_root("reload-ambiguous-first");
+        let second_ambiguous_root = make_temp_runtime_root("reload-ambiguous-second");
+        for path in [&runtime_root, &first_ambiguous_root, &second_ambiguous_root] {
+            if path.exists() {
+                let _ = fs::remove_dir_all(path);
+            }
+        }
+        let root_root = RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("root_skills"),
+        };
+        let user_root = RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: runtime_root.join("user_skills"),
+        };
+        fs::create_dir_all(&root_root.skills_dir).expect("create root skills root");
+        write_minimal_skill_to_root_with_response(&user_root.skills_dir, "vulcan-codekit", "user");
+        let mut engine = make_runtime_test_engine();
+        engine
+            .load_from_roots(&[root_root, user_root])
+            .expect("initial root and user runtime should load");
+        let previous_config_path = engine
+            .skill_config_store
+            .file_path()
+            .expect("resolve previous skill config path");
+
+        let ambiguous_reload_error = engine
+            .reload_from_roots(&[
+                RuntimeSkillRoot {
+                    name: "ROOT".to_string(),
+                    skills_dir: first_ambiguous_root.join("skills"),
+                },
+                RuntimeSkillRoot {
+                    name: "PROJECT".to_string(),
+                    skills_dir: second_ambiguous_root.join("skills"),
+                },
+            ])
+            .expect_err("ambiguous config root reload should fail");
+        assert!(
+            ambiguous_reload_error
+                .to_string()
+                .contains("multiple runtime roots map to different parents")
+        );
+
+        let result = engine
+            .call_skill("vulcan-codekit-ping", &json!({}), None)
+            .expect("old entry should remain callable after ambiguous reload failure");
+        assert_eq!(result.content, "user");
+        assert_eq!(
+            engine
+                .skill_config_store
+                .file_path()
+                .expect("resolve config path after failed reload"),
+            previous_config_path
+        );
+
+        let layers = engine
+            .run_lua("return vulcan.runtime.skills.layers()", &json!({}), None)
+            .expect("layers should still use the previous root chain");
+        assert_eq!(layers["labels"], json!(["USER"]));
+        assert_eq!(layers["default"], json!("USER"));
+
+        let _ = fs::remove_dir_all(&runtime_root);
+        let _ = fs::remove_dir_all(&first_ambiguous_root);
+        let _ = fs::remove_dir_all(&second_ambiguous_root);
+    }
+
     /// Verify reloading a different runtime root updates the default unified skill-config path.
     /// 验证重新加载另一套运行时根目录时会同步更新默认统一技能配置路径。
     #[test]
@@ -6572,7 +7639,7 @@ mod tests {
 
         engine
             .load_from_roots(&[crate::host::options::RuntimeSkillRoot {
-                name: "ROOT_FIRST".to_string(),
+                name: "ROOT".to_string(),
                 skills_dir: first_runtime_root.join("skills"),
             }])
             .expect("load first runtime root");
@@ -6586,7 +7653,7 @@ mod tests {
 
         engine
             .reload_from_roots(&[crate::host::options::RuntimeSkillRoot {
-                name: "ROOT_SECOND".to_string(),
+                name: "ROOT".to_string(),
                 skills_dir: second_runtime_root.join("skills"),
             }])
             .expect("reload second runtime root");
@@ -6600,6 +7667,81 @@ mod tests {
 
         let _ = fs::remove_dir_all(&first_runtime_root);
         let _ = fs::remove_dir_all(&second_runtime_root);
+    }
+
+    /// Verify reload keeps the initially resolved explicit relative skill-config path.
+    /// 验证重载会保持初始解析后的显式相对技能配置路径。
+    #[test]
+    fn reload_from_roots_keeps_frozen_relative_explicit_skill_config_path() {
+        let _cwd_guard = runlua_cwd_guard()
+            .lock()
+            .expect("lock cwd guard for explicit config reload test");
+        let original_cwd = std::env::current_dir().expect("resolve original cwd");
+        /// Restore the process current directory when the test exits.
+        /// 在测试退出时恢复进程当前工作目录。
+        struct CwdRestoreGuard(PathBuf);
+        impl Drop for CwdRestoreGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _cwd_restore = CwdRestoreGuard(original_cwd);
+        let first_cwd = make_temp_runtime_root("skill_config_reload_relative_cwd_first");
+        let second_cwd = make_temp_runtime_root("skill_config_reload_relative_cwd_second");
+        let runtime_root = make_temp_runtime_root("skill_config_reload_relative_runtime");
+        for path in [&first_cwd, &second_cwd, &runtime_root] {
+            if path.exists() {
+                let _ = fs::remove_dir_all(path);
+            }
+            fs::create_dir_all(path).expect("create explicit config reload test directory");
+        }
+        let relative_config_path = PathBuf::from("config").join("skill_config.json");
+        std::env::set_current_dir(&first_cwd).expect("switch to first cwd");
+        let expected_config_path = first_cwd.join(&relative_config_path);
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.skill_config_file_path = Some(relative_config_path);
+        let mut engine = LuaEngine::new(LuaEngineOptions {
+            host_options,
+            pool_config: LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+        })
+        .expect("create explicit relative config reload test engine");
+        engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("root_skills"),
+            }])
+            .expect("load initial root for explicit relative config reload test");
+        assert_eq!(
+            engine
+                .skill_config_store
+                .file_path()
+                .expect("resolve explicit config path before reload"),
+            expected_config_path
+        );
+
+        std::env::set_current_dir(&second_cwd).expect("switch to second cwd before reload");
+        engine
+            .reload_from_roots(&[RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("other_root_skills"),
+            }])
+            .expect("reload should preserve frozen explicit config path");
+        assert_eq!(
+            engine
+                .skill_config_store
+                .file_path()
+                .expect("resolve explicit config path after reload"),
+            expected_config_path
+        );
+
+        let _ = fs::remove_dir_all(&first_cwd);
+        let _ = fs::remove_dir_all(&second_cwd);
+        let _ = fs::remove_dir_all(&runtime_root);
     }
 
     /// Verify explicit unified config file paths bypass ambiguous runtime-root inference.
@@ -6635,11 +7777,11 @@ mod tests {
         engine
             .load_from_roots(&[
                 crate::host::options::RuntimeSkillRoot {
-                    name: "ROOT_A".to_string(),
+                    name: "ROOT".to_string(),
                     skills_dir: first_runtime_root.join("skills"),
                 },
                 crate::host::options::RuntimeSkillRoot {
-                    name: "ROOT_B".to_string(),
+                    name: "PROJECT".to_string(),
                     skills_dir: second_runtime_root.join("skills"),
                 },
             ])
@@ -6685,11 +7827,11 @@ mod tests {
         let error = engine
             .load_from_roots(&[
                 crate::host::options::RuntimeSkillRoot {
-                    name: "ROOT_A".to_string(),
+                    name: "ROOT".to_string(),
                     skills_dir: first_runtime_root.join("skills"),
                 },
                 crate::host::options::RuntimeSkillRoot {
-                    name: "ROOT_B".to_string(),
+                    name: "PROJECT".to_string(),
                     skills_dir: second_runtime_root.join("skills"),
                 },
             ])
@@ -6729,11 +7871,11 @@ mod tests {
         let resolved_runtime_root = engine
             .canonical_skill_config_runtime_root(&[
                 crate::host::options::RuntimeSkillRoot {
-                    name: "ROOT_CANONICAL".to_string(),
+                    name: "ROOT".to_string(),
                     skills_dir: runtime_root.join("skills"),
                 },
                 crate::host::options::RuntimeSkillRoot {
-                    name: "ROOT_EQUIVALENT".to_string(),
+                    name: "PROJECT".to_string(),
                     skills_dir: equivalent_root,
                 },
             ])

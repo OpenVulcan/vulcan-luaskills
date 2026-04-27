@@ -73,6 +73,18 @@
 - 数据库 provider callback
 - `space_controller`
 
+正式宿主构造 skill roots 时，建议先固定三层语义：
+
+```text
+ROOT -> PROJECT -> USER
+```
+
+- `ROOT` 是系统控制级，只通过 system tools 或受控 system updater 调整。
+- `PROJECT` / `USER` 是普通用户管理面可操作层。
+- `ROOT` root 必须出现在启动或加载 root 链中；缺失时应直接报错。
+- 普通 `vulcan.runtime.skills.*` 不应暴露 `ROOT` 目标选项。
+- 若开放普通技能管理桥接，应同时提供层级列表能力，例如 `vulcan.runtime.skills.layers()`，让调用方获取当前实际存在的 `PROJECT` / `USER` 标签；bridge 关闭时不要把层级标记为可写。
+
 ## 5. 生命周期与查询辅助的第二阶段顺序
 
 基础调用链打通后，再按这个顺序往下补：
@@ -178,5 +190,7 @@
 - 所有结构化结果都通过专用 free 回收
 - callback 场景下没有跨 ABI 异常
 - callback 场景下没有同线程重入
+- 普通技能管理工具不会把 `ROOT` 暴露给用户安装、更新或卸载
+- 若存在 ROOT 级系统 skill，已确认 PROJECT / USER 同名 skill 不会被加载
 
 只要这组检查全部通过，宿主接入通常就已经具备 beta 联调基础。

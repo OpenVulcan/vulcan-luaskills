@@ -163,11 +163,13 @@ lib 会一并提供稳定绑定上下文：
 由宿主提供的稳定空间标签，例如：
 
 - `ROOT`
+- `PROJECT`
 - `USER`
-- `PROJECT_A`
 
 对于项目级接管，**宿主必须保证这个标签稳定**。  
 这是前置条件，不由 lib 自动推导。
+
+正式 skill root 层级语义固定为 `ROOT -> PROJECT -> USER`，启动或加载时必须传入 `ROOT` root。`ROOT` 是系统控制级，`PROJECT` 与 `USER` 是普通用户管理面可操作层。数据库 provider 可以继续根据 `space_label` 做隔离，但不建议把更多项目子层级暴露给用户。
 
 ### `binding_tag`
 
@@ -180,7 +182,7 @@ lib 会一并提供稳定绑定上下文：
 例如：
 
 - `ROOT-vulcan-work-memory`
-- `PROJECT_A-vulcan-ai-memory`
+- `PROJECT-vulcan-ai-memory`
 
 这个字段用于：
 
@@ -433,7 +435,7 @@ C:/HostManagedData/sqlite/ROOT-vulcan-work-memory.db
 或者：
 
 ```text
-D:/project-a/.host-dbs/sqlite/PROJECT_A-vulcan-ai-memory.db
+D:/project-a/.host-dbs/sqlite/PROJECT-vulcan-ai-memory.db
 ```
 
 或者：

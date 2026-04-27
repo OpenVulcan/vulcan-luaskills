@@ -52,8 +52,8 @@ pub enum RuntimeDatabaseKind {
 /// 面向宿主的稳定 skill 级数据库后端绑定上下文。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeDatabaseBindingContext {
-    /// Stable root label supplied by the host such as ROOT, USER, or one project label.
-    /// 由宿主提供的稳定根标签，例如 ROOT、USER 或某个项目标签。
+    /// Stable root label supplied by the host such as ROOT, PROJECT, or USER.
+    /// 由宿主提供的稳定根标签，例如 ROOT、PROJECT 或 USER。
     pub space_label: String,
     /// Stable skill identifier currently owning the database binding.
     /// 当前拥有数据库绑定的稳定技能标识符。

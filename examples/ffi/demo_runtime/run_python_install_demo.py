@@ -352,7 +352,7 @@ def main() -> None:
 
         install_result = call_json_ffi(
             library,
-            "luaskills_ffi_install_skill_json",
+            "luaskills_ffi_system_install_skill_json",
             {
                 "engine_id": engine_id.value,
                 "skill_roots": roots_payload["skill_roots"],

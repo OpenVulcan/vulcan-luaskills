@@ -11,7 +11,7 @@ param(
     [string]$LuaRuntimeRepo = "LuaSkills/luaskills",
     # Lua runtime release tag.
     # Lua runtime 发布标签。
-    [string]$LuaRuntimeVersion = "v0.2.0",
+    [string]$LuaRuntimeVersion = "v0.2.1",
     # vldb-controller release repository.
     # vldb-controller 发布仓库。
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",

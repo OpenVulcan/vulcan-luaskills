@@ -102,8 +102,8 @@ impl Default for LuaRuntimeCapabilityOptions {
 /// 由宿主注入的单个命名技能根，用于构建有序覆盖环境。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct RuntimeSkillRoot {
-    /// Stable root name such as ROOT, USER, or one project identifier.
-    /// 稳定根名称，例如 ROOT、USER 或某个项目标识符。
+    /// Stable root name, limited to ROOT, PROJECT, or USER.
+    /// 稳定根名称，仅限 ROOT、PROJECT 或 USER。
     pub name: String,
     /// Physical skills directory represented by the current named root.
     /// 当前命名根所代表的物理 skills 目录。

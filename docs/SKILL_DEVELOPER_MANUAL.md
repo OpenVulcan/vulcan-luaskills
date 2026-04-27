@@ -226,10 +226,19 @@ return rendered
 
 这组能力用于让 skill 请求宿主执行安装、更新、启停、卸载等动作。
 
-当前提供：
+正式层级模型为：
+
+```text
+ROOT -> PROJECT -> USER
+```
+
+其中 `ROOT` 是系统控制级，运行时启动或加载时必须存在该层。普通 skill 不能通过 `vulcan.runtime.skills.*` 请求安装、更新、卸载、启用或停用 `ROOT` 级 skill。普通桥接只面向宿主开放且当前实际存在的 `PROJECT` / `USER` 层级。
+
+正式桥接建议包含：
 
 - `vulcan.runtime.skills.enabled`
 - `vulcan.runtime.skills.status()`
+- `vulcan.runtime.skills.layers()`
 - `vulcan.runtime.skills.install(input)`
 - `vulcan.runtime.skills.update(input)`
 - `vulcan.runtime.skills.uninstall(input)`
@@ -242,6 +251,17 @@ return rendered
 - `callback_registered`
 - `mode`
 - `message`
+
+`layers()` 用于返回当前宿主允许普通桥接操作的层级标签。推荐返回内容包含：
+
+- `default`
+- `writable`
+- `labels`
+- `layers`
+
+其中 `labels` 只应包含 `PROJECT` / `USER` 中当前实际存在的层级，不应包含 `ROOT`。如果当前没有项目上下文，运行时只返回 `USER`；如果只有 `ROOT`，则返回空列表且顶层 `writable=false`。bridge 关闭时仍可发现层级，但顶层 `writable` 与每个 layer 的 `writable` 都必须为 `false`。如果后续安装、更新、卸载输入允许指定层级，也只能使用 `layers()` 返回的标签。
+
+完整层级与管理边界见 [SKILL_ROOT_LAYER_POLICY.md](SKILL_ROOT_LAYER_POLICY.md)。
 
 注意事项：
 

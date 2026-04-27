@@ -40,6 +40,8 @@
 
 因此标准 ABI 示例在默认情况下应至少能读到一条 entry。
 
+标准 ABI 示例会把该夹具的 `skills` 目录作为 `ROOT` root 传给 `load_from_roots`。这是为了满足运行时必须传入 `ROOT` 的启动规则；这些示例只演示调用链，不演示普通用户层安装。
+
 同时它的 `ping` 入口会稳定返回：
 
 - `standard-ffi-demo:ok`

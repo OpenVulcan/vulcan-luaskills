@@ -342,6 +342,12 @@ impl SkillManager {
         skill_id: &str,
     ) -> Result<(), String> {
         validate_luaskills_identifier(skill_id, "skill_id")?;
+        if plane == SkillOperationPlane::Skills && is_root_skill_layer(&self.config.skill_root) {
+            return Err(format!(
+                "ROOT skill root is system-controlled and cannot be processed through the skills plane for action {:?}",
+                action
+            ));
+        }
         if self.is_protected_skill(skill_id) && plane == SkillOperationPlane::Skills {
             return Err(format!(
                 "protected skill '{}' cannot be processed through the skills plane for action {:?}",
@@ -1216,9 +1222,15 @@ impl SkillManager {
     }
 }
 
+/// Return whether one runtime skill root represents the system-controlled ROOT layer.
+/// 返回单个运行时技能根是否代表系统控制的 ROOT 层。
+fn is_root_skill_layer(root: &RuntimeSkillRoot) -> bool {
+    root.name.trim().eq_ignore_ascii_case("ROOT")
+}
+
 /// Resolve the effective request skill id, deriving it from the source locator when needed.
 /// 解析当前请求的生效技能标识符，并在需要时从来源定位值派生。
-fn resolve_requested_skill_id(request: &SkillInstallRequest) -> Result<String, String> {
+pub(crate) fn resolve_requested_skill_id(request: &SkillInstallRequest) -> Result<String, String> {
     let explicit_skill_id = request
         .skill_id
         .as_deref()
@@ -1342,17 +1354,16 @@ pub fn collect_effective_skill_instances(
     base_dir: &Path,
     override_dir: Option<&Path>,
 ) -> Result<Vec<ResolvedSkillInstance>, String> {
-    let mut roots = Vec::new();
+    let mut roots = vec![RuntimeSkillRoot {
+        name: "ROOT".to_string(),
+        skills_dir: base_dir.to_path_buf(),
+    }];
     if let Some(override_dir) = override_dir {
         roots.push(RuntimeSkillRoot {
-            name: "OVERRIDE".to_string(),
+            name: "PROJECT".to_string(),
             skills_dir: override_dir.to_path_buf(),
         });
     }
-    roots.push(RuntimeSkillRoot {
-        name: "ROOT".to_string(),
-        skills_dir: base_dir.to_path_buf(),
-    });
     collect_effective_skill_instances_from_roots(&roots)
 }
 
@@ -1582,7 +1593,7 @@ mod tests {
             ..test_manager_config(
                 &temp_root,
                 RuntimeSkillRoot {
-                    name: "ROOT".to_string(),
+                    name: "USER".to_string(),
                     skills_dir: skill_root,
                 },
             )
@@ -1625,7 +1636,7 @@ mod tests {
             ..test_manager_config(
                 &temp_root,
                 RuntimeSkillRoot {
-                    name: "ROOT".to_string(),
+                    name: "USER".to_string(),
                     skills_dir: skill_root,
                 },
             )
@@ -1661,7 +1672,7 @@ mod tests {
         ));
         let skill_root = temp_root.join("skills");
         let skill_roots = vec![RuntimeSkillRoot {
-            name: "ROOT".to_string(),
+            name: "USER".to_string(),
             skills_dir: skill_root.clone(),
         }];
         let _ = std::fs::create_dir_all(&skill_root);
@@ -1733,7 +1744,7 @@ mod tests {
             ..test_manager_config(
                 &temp_root,
                 RuntimeSkillRoot {
-                    name: "ROOT".to_string(),
+                    name: "USER".to_string(),
                     skills_dir: skill_root.clone(),
                 },
             )
@@ -1751,10 +1762,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_root);
     }
 
-    /// Verify that override roots can contribute standalone skills and shadow lower-priority roots.
-    /// 验证 override 根目录既可以独立提供技能，也可以覆盖更低优先级根目录。
+    /// Verify that PROJECT roots can contribute standalone skills without shadowing ROOT skills.
+    /// 验证 PROJECT 根目录可以独立提供技能，但不能覆盖 ROOT 技能。
     #[test]
-    fn collect_effective_skill_instances_supports_override_add_and_shadow() {
+    fn collect_effective_skill_instances_keeps_root_priority_over_project() {
         let temp_root = std::env::temp_dir().join(format!(
             "luaskills_collect_effective_instances_test_{}",
             std::process::id()
@@ -1787,20 +1798,20 @@ mod tests {
             .iter()
             .find(|value| value.skill_id == "vulcan-codekit")
             .expect("vulcan-codekit should exist");
-        assert!(codekit.actual_dir.starts_with(&override_dir));
+        assert!(codekit.actual_dir.starts_with(&base_dir));
         let runtime = resolved
             .iter()
             .find(|value| value.skill_id == "vulcan-runtime")
-            .expect("override-only vulcan-runtime should exist");
+            .expect("project-only vulcan-runtime should exist");
         assert!(runtime.actual_dir.starts_with(&override_dir));
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }
 
-    /// Verify that resolving one effective skill instance returns the highest-priority existing directory.
-    /// 验证解析单个生效技能实例时会返回最高优先级的现有目录。
+    /// Verify that resolving one effective skill instance keeps ROOT ahead of PROJECT.
+    /// 验证解析单个生效技能实例时会保持 ROOT 高于 PROJECT。
     #[test]
-    fn resolve_effective_skill_instance_prefers_override_directory() {
+    fn resolve_effective_skill_instance_prefers_root_directory() {
         let temp_root = std::env::temp_dir().join(format!(
             "luaskills_resolve_effective_instance_test_{}",
             std::process::id()
@@ -1825,7 +1836,7 @@ mod tests {
             resolve_effective_skill_instance(&base_dir, Some(&override_dir), "vulcan-codekit")
                 .expect("resolution should succeed")
                 .expect("instance should exist");
-        assert!(resolved.actual_dir.starts_with(&override_dir));
+        assert!(resolved.actual_dir.starts_with(&base_dir));
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }
