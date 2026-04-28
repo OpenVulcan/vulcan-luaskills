@@ -159,6 +159,11 @@ Product hosts should decide:
 ## Repository Layout
 
 ```text
+README.md        English product homepage.
+README.zh-CN.md  Chinese product homepage.
+README.{locale}.md
+                 Localized product homepages for ja, ko, es, fr, de, and pt-BR.
+
 src/
   dependency/    Skill dependency parsing, installation, and cleanup.
   download/      GitHub, URL, and archive download support.
@@ -171,8 +176,24 @@ src/
 
 docs/
   index.md       English documentation hub.
+  skill-development.md
+                 English skill author overview.
+  architecture/  English runtime architecture overview.
+  ffi/           English FFI and SDK overview.
   product/       English product-level documents.
-  zh-CN/         Chinese technical documentation.
+  providers/     English database provider overview.
+  zh-CN/         Chinese product and deep technical documentation.
+  ja/            Japanese product documentation.
+  ko/            Korean product documentation.
+  es/            Spanish product documentation.
+  fr/            French product documentation.
+  de/            German product documentation.
+  pt-BR/         Brazilian Portuguese product documentation.
+
+examples/
+  demo-rust/     Rust host demo.
+  demo-ffi/      Packaged FFI demo entry.
+  ffi/           C, Python, Go, TypeScript, runtime fixture, and provider demos.
 ```
 
 ## License
