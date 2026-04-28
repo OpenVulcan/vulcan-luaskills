@@ -9,6 +9,10 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Target 选择需要安装的依赖分组。
 TARGET="${1:-all}"
 
+# Database selects the optional VLDB integration mode for all or vldb targets.
+# Database 选择 all 或 vldb 目标使用的可选 VLDB 集成模式。
+DATABASE="${2:-${DATABASE:-vldb-controller}}"
+
 # RuntimeRoot receives installed runtime files.
 # RuntimeRoot 接收安装后的运行期文件。
 RUNTIME_ROOT="${RUNTIME_ROOT:-output}"
@@ -28,6 +32,22 @@ VLDB_CONTROLLER_REPO="${VLDB_CONTROLLER_REPO:-OpenVulcan/vldb-controller}"
 # VldbControllerVersion stores the GitHub Release tag for vldb-controller assets.
 # VldbControllerVersion 保存 vldb-controller 资产的 GitHub Release 标签。
 VLDB_CONTROLLER_VERSION="${VLDB_CONTROLLER_VERSION:-v0.2.1}"
+
+# VldbSQLiteRepo stores the GitHub repository for vldb-sqlite assets.
+# VldbSQLiteRepo 保存 vldb-sqlite 资产所在的 GitHub 仓库。
+VLDB_SQLITE_REPO="${VLDB_SQLITE_REPO:-OpenVulcan/vldb-sqlite}"
+
+# VldbSQLiteVersion stores the GitHub Release tag for vldb-sqlite assets.
+# VldbSQLiteVersion 保存 vldb-sqlite 资产的 GitHub Release 标签。
+VLDB_SQLITE_VERSION="${VLDB_SQLITE_VERSION:-v0.1.5}"
+
+# VldbLanceDBRepo stores the GitHub repository for vldb-lancedb assets.
+# VldbLanceDBRepo 保存 vldb-lancedb 资产所在的 GitHub 仓库。
+VLDB_LANCEDB_REPO="${VLDB_LANCEDB_REPO:-OpenVulcan/vldb-lancedb}"
+
+# VldbLanceDBVersion stores the GitHub Release tag for vldb-lancedb assets.
+# VldbLanceDBVersion 保存 vldb-lancedb 资产的 GitHub Release 标签。
+VLDB_LANCEDB_VERSION="${VLDB_LANCEDB_VERSION:-v0.1.5}"
 
 ensure_dir() {
   # Create one directory when it does not exist.
@@ -52,16 +72,16 @@ platform_key() {
 }
 
 vldb_asset_info() {
-  # Resolve vldb-controller target, extension, and binary name.
-  # 解析 vldb-controller 的目标三元组、扩展名与二进制文件名。
+  # Resolve VLDB target, extension, binary name, and dynamic library names.
+  # 解析 VLDB 的目标三元组、扩展名、二进制文件名与动态库名称。
   case "$(uname -m)" in
     x86_64|amd64) arch_key="x86_64" ;;
     aarch64|arm64) arch_key="aarch64" ;;
     *) echo "Unsupported architecture for vldb-controller: $(uname -m)" >&2; return 1 ;;
   esac
   case "$(uname -s)" in
-    Linux) printf '%s-unknown-linux-gnu|.tar.gz|vldb-controller\n' "$arch_key" ;;
-    Darwin) printf '%s-apple-darwin|.tar.gz|vldb-controller\n' "$arch_key" ;;
+    Linux) printf '%s-unknown-linux-gnu|.tar.gz|vldb-controller|.so|libvldb_sqlite.so|libvldb_lancedb.so\n' "$arch_key" ;;
+    Darwin) printf '%s-apple-darwin|.tar.gz|vldb-controller|.dylib|libvldb_sqlite.dylib|libvldb_lancedb.dylib\n' "$arch_key" ;;
     *) echo "Unsupported operating system for vldb-controller: $(uname -s)" >&2; return 1 ;;
   esac
 }
@@ -86,6 +106,33 @@ raise SystemExit(f"asset not found: {asset_name}")
 ' "$asset_name"
 }
 
+save_release_asset_with_sha256() {
+  # Download one GitHub Release asset and verify its .sha256 sidecar.
+  # 下载单个 GitHub Release 资产并校验其 .sha256 旁路文件。
+  local repo="$1"
+  local tag="$2"
+  local asset_name="$3"
+  local destination="$4"
+  curl -fSL "$(release_asset_url "$repo" "$tag" "$asset_name")" -o "$destination"
+  curl -fSL "$(release_asset_url "$repo" "$tag" "$asset_name.sha256")" -o "$destination.sha256"
+  local expected actual
+  expected="$(awk '{print tolower($1)}' "$destination.sha256")"
+  actual="$(python3 - "$destination" <<'PY'
+import hashlib
+import sys
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+)"
+  if [ "$expected" != "$actual" ]; then
+    echo "SHA-256 mismatch for $asset_name. Expected $expected, got $actual" >&2
+    return 1
+  fi
+}
+
 install_lua_runtime() {
   # Download and install one luaskills Lua runtime package.
   # 下载并安装一个 luaskills Lua runtime 包。
@@ -98,15 +145,13 @@ install_lua_runtime() {
   local archive="$temp_dir/$asset_name"
   local extract_dir="$temp_dir/extract"
   ensure_dir "$extract_dir"
-  local asset_url
-  if ! asset_url="$(release_asset_url "$LUA_RUNTIME_REPO" "$LUA_RUNTIME_VERSION" "$asset_name")"; then
+  if ! save_release_asset_with_sha256 "$LUA_RUNTIME_REPO" "$LUA_RUNTIME_VERSION" "$asset_name" "$archive"; then
     if [ -d "$RUNTIME_ROOT/skills" ] || [ -d "$RUNTIME_ROOT/lua_packages" ]; then
       echo "WARNING: Lua runtime asset '$asset_name' was not found in $LUA_RUNTIME_REPO@$LUA_RUNTIME_VERSION. Existing packaged runtime content will be used." >&2
       return 0
     fi
     return 1
   fi
-  curl -fSL "$asset_url" -o "$archive"
   tar -xzf "$archive" -C "$extract_dir"
   ensure_dir "$RUNTIME_ROOT"
   for dir_name in lua_packages libs resources; do
@@ -124,9 +169,9 @@ install_lua_runtime() {
 install_vldb_controller() {
   # Download and install vldb-controller into runtime bin.
   # 下载 vldb-controller 并安装到运行期 bin 目录。
-  local info target archive_ext binary_name
+  local info target archive_ext binary_name dynamic_ext sqlite_library lancedb_library
   info="$(vldb_asset_info)"
-  IFS='|' read -r target archive_ext binary_name <<< "$info"
+  IFS='|' read -r target archive_ext binary_name dynamic_ext sqlite_library lancedb_library <<< "$info"
   local asset_name="vldb-controller-${VLDB_CONTROLLER_VERSION}-${target}${archive_ext}"
   local temp_dir
   temp_dir="$(mktemp -d)"
@@ -134,7 +179,7 @@ install_vldb_controller() {
   local archive="$temp_dir/$asset_name"
   local extract_dir="$temp_dir/extract"
   ensure_dir "$extract_dir"
-  curl -fSL "$(release_asset_url "$VLDB_CONTROLLER_REPO" "$VLDB_CONTROLLER_VERSION" "$asset_name")" -o "$archive"
+  save_release_asset_with_sha256 "$VLDB_CONTROLLER_REPO" "$VLDB_CONTROLLER_VERSION" "$asset_name" "$archive"
   tar -xzf "$archive" -C "$extract_dir"
   local binary
   binary="$(find "$extract_dir" -type f -name "$binary_name" | head -1)"
@@ -154,24 +199,98 @@ install_vldb_controller() {
 JSON
 }
 
+install_vldb_library_asset() {
+  # Download and install one VLDB dynamic library asset.
+  # 下载并安装单个 VLDB 动态库资产。
+  local repo="$1"
+  local version="$2"
+  local prefix="$3"
+  local name_hint="$4"
+  local info target archive_ext binary_name dynamic_ext sqlite_library lancedb_library
+  info="$(vldb_asset_info)"
+  IFS='|' read -r target archive_ext binary_name dynamic_ext sqlite_library lancedb_library <<< "$info"
+  local asset_name="${prefix}-${version}-${target}${archive_ext}"
+  local temp_dir
+  temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' RETURN
+  local archive="$temp_dir/$asset_name"
+  local extract_dir="$temp_dir/extract"
+  ensure_dir "$extract_dir"
+  save_release_asset_with_sha256 "$repo" "$version" "$asset_name" "$archive"
+  tar -xzf "$archive" -C "$extract_dir"
+  local library
+  library="$(find "$extract_dir" -type f -name "*${dynamic_ext}" | grep -i "$name_hint" | head -1 || true)"
+  [ -n "$library" ] || { echo "VLDB dynamic library matching '$name_hint' not found in $asset_name" >&2; return 1; }
+  ensure_dir "$RUNTIME_ROOT/libs"
+  cp -f "$library" "$RUNTIME_ROOT/libs/$(basename "$library")"
+  printf '%s|libs/%s\n' "$asset_name" "$(basename "$library")"
+}
+
+install_vldb_direct_libraries() {
+  # Download and install vldb-sqlite-lib and vldb-lancedb-lib assets.
+  # 下载并安装 vldb-sqlite-lib 与 vldb-lancedb-lib 资产。
+  local sqlite_info lancedb_info sqlite_asset sqlite_path lancedb_asset lancedb_path
+  sqlite_info="$(install_vldb_library_asset "$VLDB_SQLITE_REPO" "$VLDB_SQLITE_VERSION" "vldb-sqlite-lib" "sqlite")"
+  lancedb_info="$(install_vldb_library_asset "$VLDB_LANCEDB_REPO" "$VLDB_LANCEDB_VERSION" "vldb-lancedb-lib" "lancedb")"
+  IFS='|' read -r sqlite_asset sqlite_path <<< "$sqlite_info"
+  IFS='|' read -r lancedb_asset lancedb_path <<< "$lancedb_info"
+  ensure_dir "$RUNTIME_ROOT/resources"
+  cat > "$RUNTIME_ROOT/resources/vldb-direct-manifest.json" <<JSON
+{
+  "schema_version": 1,
+  "database_mode": "vldb-direct",
+  "sqlite": {
+    "asset": "${sqlite_asset}",
+    "installed_path": "${sqlite_path}"
+  },
+  "lancedb": {
+    "asset": "${lancedb_asset}",
+    "installed_path": "${lancedb_path}"
+  }
+}
+JSON
+}
+
 cd "$PROJECT_ROOT"
 ensure_dir "$RUNTIME_ROOT/resources"
+
+case "$DATABASE" in
+  none|vldb-controller|vldb-direct|host-callback) ;;
+  *)
+    echo "Usage: $0 [all|lua|vldb|vldb-controller|vldb-direct] [none|vldb-controller|vldb-direct|host-callback]" >&2
+    exit 2
+    ;;
+esac
 
 case "$TARGET" in
   all)
     install_lua_runtime
-    install_vldb_controller
+    if [ "$DATABASE" = "vldb-controller" ]; then
+      install_vldb_controller
+    elif [ "$DATABASE" = "vldb-direct" ]; then
+      install_vldb_direct_libraries
+    fi
     ;;
   lua)
     install_lua_runtime
     ;;
   vldb)
+    if [ "$DATABASE" = "vldb-controller" ]; then
+      install_vldb_controller
+    elif [ "$DATABASE" = "vldb-direct" ]; then
+      install_vldb_direct_libraries
+    fi
+    ;;
+  vldb-controller)
     install_vldb_controller
     ;;
+  vldb-direct)
+    install_vldb_direct_libraries
+    ;;
   *)
-    echo "Usage: $0 [all|lua|vldb]" >&2
+    echo "Usage: $0 [all|lua|vldb|vldb-controller|vldb-direct] [none|vldb-controller|vldb-direct|host-callback]" >&2
     exit 2
     ;;
 esac
 
-echo "Runtime dependency target '$TARGET' installed into $RUNTIME_ROOT"
+echo "Runtime dependency target '$TARGET' with database preset '$DATABASE' installed into $RUNTIME_ROOT"

@@ -13,6 +13,7 @@ from typing import Any
 
 from .client import LuaSkillsClient
 from .roots import RuntimeRoots
+from .runtime_assets import RuntimeDatabasePreset, build_runtime_install_manifest, install_runtime_assets
 from .types import Authority, RuntimeSkillRoot
 
 
@@ -24,14 +25,19 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = build_parser()
     args = parser.parse_args(normalize_global_args(argv if argv is not None else sys.argv[1:]))
+    runtime_root = Path(args.runtime_root).expanduser().resolve()
     if args.command == "version":
-        print_json(LuaSkillsClient.version(library_path=args.lib))
+        print_json(LuaSkillsClient.version(library_path=args.lib, runtime_root=runtime_root))
         return
     if args.command == "describe":
-        print_json(LuaSkillsClient.describe(library_path=args.lib))
+        print_json(LuaSkillsClient.describe(library_path=args.lib, runtime_root=runtime_root))
         return
 
-    runtime_root = Path(args.runtime_root).expanduser().resolve()
+    if args.command == "install-runtime":
+        install_options = runtime_install_options(args, runtime_root)
+        print_json(build_runtime_install_manifest(**install_options) if args.dry_run else install_runtime_assets(**install_options))
+        return
+
     skill_roots = build_roots(args, runtime_root)
     RuntimeRoots.ensure_layout(runtime_root, skill_roots)
     with LuaSkillsClient(library_path=args.lib, runtime_root=runtime_root, ensure_runtime_layout=False) as client:
@@ -60,6 +66,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     for command in ["version", "describe", "load", "reload", "list", "help-list"]:
         subparsers.add_parser(command)
+
+    install_runtime_parser = subparsers.add_parser("install-runtime")
+    install_runtime_parser.add_argument("--database", default=RuntimeDatabasePreset.NONE.value, choices=[preset.value for preset in RuntimeDatabasePreset])
+    install_runtime_parser.add_argument("--dry-run", action="store_true")
+    install_runtime_parser.add_argument("--skip-luaskills-ffi", action="store_true")
+    install_runtime_parser.add_argument("--luaskills-version", default=None)
+    install_runtime_parser.add_argument("--vldb-controller-version", default=None)
+    install_runtime_parser.add_argument("--vldb-sqlite-version", default=None)
+    install_runtime_parser.add_argument("--vldb-lancedb-version", default=None)
+    install_runtime_parser.add_argument("--luaskills-repo", default="LuaSkills/luaskills")
+    install_runtime_parser.add_argument("--vldb-controller-repo", default="OpenVulcan/vldb-controller")
+    install_runtime_parser.add_argument("--vldb-sqlite-repo", default="OpenVulcan/vldb-sqlite")
+    install_runtime_parser.add_argument("--vldb-lancedb-repo", default="OpenVulcan/vldb-lancedb")
 
     one_value_commands = ["help-detail", "is-skill", "skill-name", "enable", "disable", "system-enable", "system-disable"]
     for command in one_value_commands:
@@ -187,6 +206,32 @@ def dispatch_engine_command(client: LuaSkillsClient, skill_roots: list[RuntimeSk
         print_json(client.system(authority).uninstall(skill_roots, args.skill_id, options=uninstall_options(args), target_root=target_root(args, skill_roots)))
     else:
         raise ValueError(f"unknown command: {args.command}")
+
+
+def runtime_install_options(args: argparse.Namespace, runtime_root: Path) -> dict[str, Any]:
+    """
+    Build runtime asset installation options from CLI arguments.
+    从 CLI 参数构造运行时资产安装选项。
+    """
+
+    options: dict[str, Any] = {
+        "runtime_root": runtime_root,
+        "database": args.database,
+        "include_luaskills_ffi": not args.skip_luaskills_ffi,
+        "luaskills_repo": args.luaskills_repo,
+        "vldb_controller_repo": args.vldb_controller_repo,
+        "vldb_sqlite_repo": args.vldb_sqlite_repo,
+        "vldb_lancedb_repo": args.vldb_lancedb_repo,
+    }
+    if args.luaskills_version:
+        options["luaskills_version"] = args.luaskills_version
+    if args.vldb_controller_version:
+        options["vldb_controller_version"] = args.vldb_controller_version
+    if args.vldb_sqlite_version:
+        options["vldb_sqlite_version"] = args.vldb_sqlite_version
+    if args.vldb_lancedb_version:
+        options["vldb_lancedb_version"] = args.vldb_lancedb_version
+    return options
 
 
 def dispatch_config_command(client: LuaSkillsClient, args: argparse.Namespace) -> None:

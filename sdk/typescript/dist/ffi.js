@@ -1,6 +1,7 @@
 import koffi from "koffi";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveLuaSkillsLibraryPathFromRuntime } from "./runtime-assets.js";
 /**
  * Shared JSON provider slot registry for this Node.js process.
  * 当前 Node.js 进程内共享的 JSON provider 槽位注册表。
@@ -97,7 +98,7 @@ export class LuaSkillsJsonFfi {
      * 创建一个已加载的 JSON FFI 桥。
      */
     constructor(options = {}) {
-        const libraryPath = resolveLibraryPath(options.libraryPath);
+        const libraryPath = resolveLibraryPath(options.libraryPath, options.runtimeRoot);
         this.libraryPath = libraryPath;
         this.library = koffi.load(libraryPath);
         this.ownedBufferType = OWNED_BUFFER_TYPE;
@@ -303,10 +304,10 @@ function errorMessage(error) {
  * Resolve the dynamic library path from options or environment variables.
  * 从选项或环境变量解析动态库路径。
  */
-export function resolveLibraryPath(explicitPath) {
-    const selectedPath = explicitPath ?? process.env.LUASKILLS_LIB;
+export function resolveLibraryPath(explicitPath, runtimeRoot) {
+    const selectedPath = explicitPath ?? process.env.LUASKILLS_LIB ?? (runtimeRoot ? resolveLuaSkillsLibraryPathFromRuntime(runtimeRoot) : null);
     if (!selectedPath) {
-        throw new Error("LuaSkills library path is required; pass libraryPath or set LUASKILLS_LIB");
+        throw new Error("LuaSkills library path is required; pass libraryPath, set LUASKILLS_LIB, or install runtime assets under runtimeRoot");
     }
     const absolutePath = resolve(selectedPath);
     if (!existsSync(absolutePath)) {

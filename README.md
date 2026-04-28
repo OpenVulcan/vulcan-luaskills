@@ -103,20 +103,40 @@ demo / 源码环境可使用统一拉取脚本：
 Windows：
 
 ```powershell
-.\scripts\fetch_runtime_deps.ps1 -Target all
+.\scripts\fetch_runtime_deps.ps1 -Target all -Database vldb-controller
+.\scripts\fetch_runtime_deps.ps1 -Target all -Database vldb-direct
 .\scripts\fetch_runtime_deps.ps1 -Target lua
-.\scripts\fetch_runtime_deps.ps1 -Target vldb
+.\scripts\fetch_runtime_deps.ps1 -Target vldb-controller
+.\scripts\fetch_runtime_deps.ps1 -Target vldb-direct
 ```
 
 Linux/macOS：
 
 ```bash
-bash scripts/fetch_runtime_deps.sh all
+bash scripts/fetch_runtime_deps.sh all vldb-controller
+bash scripts/fetch_runtime_deps.sh all vldb-direct
 bash scripts/fetch_runtime_deps.sh lua
-bash scripts/fetch_runtime_deps.sh vldb
+bash scripts/fetch_runtime_deps.sh vldb-controller
+bash scripts/fetch_runtime_deps.sh vldb-direct
 ```
 
-其中 `vldb` 会把 `vldb-controller(.exe)` 安装到运行根的 `bin/` 目录，匹配 demo 默认目录约定。
+其中 `vldb-controller` 会下载 `vldb-controller-{version}-{target}` 并把 `vldb-controller(.exe)` 安装到运行根的 `bin/` 目录；`vldb-direct` 会下载 `vldb-sqlite-lib-{version}-{target}` 与 `vldb-lancedb-lib-{version}-{target}` 并把动态库安装到 `libs/`。脚本会同时下载 `.sha256` 旁路文件并校验归档哈希。
+
+SDK 侧同样提供独立发布友好的 runtime 资产入口。TypeScript / Node.js 用户可以直接：
+
+```bash
+npx @luaskills/sdk install-runtime --database vldb-controller --runtime-root D:\runtime\luaskills
+npx @luaskills/sdk install-runtime --database vldb-direct --runtime-root D:\runtime\luaskills
+```
+
+Python 用户可以直接：
+
+```bash
+luaskills install-runtime --database vldb-controller --runtime-root D:\runtime\luaskills
+luaskills install-runtime --database vldb-direct --runtime-root D:\runtime\luaskills
+```
+
+四种 SDK 数据库模式含义固定为：`none` 不安装数据库 provider，`vldb-controller` 使用 controller 可执行资产，`vldb-direct` 使用 `*-lib-*` 动态库资产，`host-callback` 由宿主注册 JSON callback。
 
 发布 demo 包内的运行入口与依赖升级入口是分离的：`run.ps1` / `run.sh` 只运行 demo，不会自动下载依赖；Windows 包可双击 `upgrade_deps.bat` 默认拉取 `all`，Linux/macOS 包执行 `./upgrade_deps.sh` 默认拉取 `all`，也可以传入 `lua` 或 `vldb` 单独更新对应部分。
 

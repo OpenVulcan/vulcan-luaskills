@@ -1,6 +1,7 @@
 import { join, resolve } from "node:path";
 import { LuaSkillsJsonFfi } from "./ffi.js";
 import { RuntimeRoots } from "./roots.js";
+import { hostOptionsFromRuntimeManifest, loadRuntimeInstallManifestSync } from "./runtime-assets.js";
 import {
   Authority,
   type BooleanResult,
@@ -610,7 +611,7 @@ export function defaultPoolConfig(): LuaVmPoolConfig {
  */
 export function defaultHostOptions(runtimeRoot: string): LuaRuntimeHostOptions {
   const root = resolve(runtimeRoot);
-  return {
+  const baseOptions: LuaRuntimeHostOptions = {
     temp_dir: join(root, "temp"),
     resources_dir: join(root, "resources"),
     lua_packages_dir: join(root, "lua_packages"),
@@ -640,6 +641,8 @@ export function defaultHostOptions(runtimeRoot: string): LuaRuntimeHostOptions {
       enable_skill_management_bridge: false,
     },
   };
+  const manifest = loadRuntimeInstallManifestSync(root);
+  return manifest ? mergeHostOptions(baseOptions, hostOptionsFromRuntimeManifest(manifest) as HostOptionsOverride) : baseOptions;
 }
 
 /**

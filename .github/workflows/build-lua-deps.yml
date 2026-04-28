@@ -791,6 +791,11 @@ jobs:
             if (-not (Test-Path -LiteralPath $assetPath)) {
               throw "Missing expected release asset: $assetPath"
             }
+            # SidecarHash keeps SDK installers able to verify every release archive before extraction.
+            # SidecarHash 确保 SDK 安装器在解压前可校验每个发布归档。
+            $sidecarPath = "$assetPath.sha256"
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $assetPath).Hash.ToLowerInvariant()
+            "$hash  $asset" | Set-Content -Path $sidecarPath -Encoding ascii
           }
 
       - name: Package release assets (Unix)
@@ -814,6 +819,9 @@ jobs:
               echo "Missing expected release asset: $GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR/$asset" >&2
               exit 1
             }
+            # SidecarHash keeps SDK installers able to verify every release archive before extraction.
+            # SidecarHash 确保 SDK 安装器在解压前可校验每个发布归档。
+            (cd "$GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR" && sha256sum "$asset" > "$asset.sha256")
           done
 
       - name: Write release description (Windows)
@@ -836,6 +844,7 @@ jobs:
         with:
           files: |
             ${{ env.RELEASE_PACKAGE_DIR }}/*.tar.gz
+            ${{ env.RELEASE_PACKAGE_DIR }}/*.sha256
           tag_name: ${{ needs.prepare-matrix.outputs.release_tag }}
           body_path: ${{ env.RELEASE_PACKAGE_DIR }}/RELEASE_NOTES.md
           fail_on_unmatched_files: true

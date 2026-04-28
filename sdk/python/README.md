@@ -38,10 +38,28 @@ with LuaSkillsClient(library_path="D:/path/to/luaskills.dll", runtime_root=runti
 安装后可使用：
 
 ```bash
+luaskills install-runtime --database vldb-controller --runtime-root D:\runtime\luaskills
+luaskills install-runtime --database vldb-direct --runtime-root D:\runtime\luaskills
+luaskills install-runtime --database none --runtime-root D:\runtime\luaskills
 luaskills version --lib D:\path\to\luaskills.dll
 luaskills list --lib D:\path\to\luaskills.dll --runtime-root D:\runtime\luaskills
 luaskills call demo-standard-ffi-skill-ping "{\"note\":\"python\"}" --lib D:\path\to\luaskills.dll
 ```
+
+`install-runtime` 会按当前平台生成或安装 runtime native 资产，并写入 `resources/luaskills-sdk-runtime-manifest.json`：
+
+- `none`：不安装数据库 provider，只准备 LuaSkills FFI SDK 资产。
+- `vldb-controller`：下载 `vldb-controller-{version}-{target}`，用于 `space_controller` provider mode。
+- `vldb-direct`：下载 `vldb-sqlite-lib-{version}-{target}` 与 `vldb-lancedb-lib-{version}-{target}`，用于 `dynamic_library` provider mode。
+- `host-callback`：不下载 VLDB 资产，生成 `host_callback + json` 的 host option patch。
+
+排查发布资产名时可先使用：
+
+```bash
+luaskills install-runtime --database vldb-direct --dry-run
+```
+
+安装完成后，`LuaSkillsClient(runtime_root=...)` 会自动从 `runtime_root/libs` 解析 LuaSkills 动态库，并读取该 manifest 把数据库 provider 的 host option patch 合入默认配置；宿主仍可通过显式 `library_path` 与 `host_options` 覆盖。
 
 管理命令示例：
 

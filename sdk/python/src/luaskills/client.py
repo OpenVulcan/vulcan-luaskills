@@ -11,6 +11,7 @@ from typing import Any
 
 from .ffi import LuaSkillsJsonFfi
 from .roots import RuntimeRoots, normalized_path
+from .runtime_assets import host_options_from_runtime_manifest, load_runtime_install_manifest
 from .types import Authority, JsonValue, LuaInvocationContext, RuntimeSkillRoot, authority_value, roots_to_json
 
 
@@ -35,8 +36,8 @@ class LuaSkillsClient:
         创建一个原生 LuaSkills 引擎并封装为高级客户端。
         """
 
-        self.ffi = LuaSkillsJsonFfi(library_path)
         runtime_root_path = Path(runtime_root or Path.cwd() / "luaskills-runtime").expanduser().resolve()
+        self.ffi = LuaSkillsJsonFfi(library_path, runtime_root_path)
         options = engine_options or create_engine_options(runtime_root_path, host_options=host_options, pool_config=pool_config)
         if engine_options is None and ensure_runtime_layout:
             RuntimeRoots.ensure_layout(runtime_root_path)
@@ -63,22 +64,30 @@ class LuaSkillsClient:
         self.close()
 
     @staticmethod
-    def version(*, library_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    def version(
+        *,
+        library_path: str | os.PathLike[str] | None = None,
+        runtime_root: str | os.PathLike[str] | None = None,
+    ) -> dict[str, Any]:
         """
         Query the JSON FFI version without creating a runtime engine.
         不创建运行时引擎并查询 JSON FFI 版本。
         """
 
-        return LuaSkillsJsonFfi(library_path).call_json_no_input("luaskills_ffi_version_json")
+        return LuaSkillsJsonFfi(library_path, runtime_root).call_json_no_input("luaskills_ffi_version_json")
 
     @staticmethod
-    def describe(*, library_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    def describe(
+        *,
+        library_path: str | os.PathLike[str] | None = None,
+        runtime_root: str | os.PathLike[str] | None = None,
+    ) -> dict[str, Any]:
         """
         Query the JSON FFI self-description without creating a runtime engine.
         不创建运行时引擎并查询 JSON FFI 自描述。
         """
 
-        return LuaSkillsJsonFfi(library_path).call_json_no_input("luaskills_ffi_describe_json")
+        return LuaSkillsJsonFfi(library_path, runtime_root).call_json_no_input("luaskills_ffi_describe_json")
 
     def system(self, authority: Authority | str = Authority.SYSTEM) -> "SystemSkillManagementClient":
         """
@@ -506,7 +515,7 @@ def default_host_options(runtime_root: str | os.PathLike[str]) -> dict[str, Any]
     """
 
     root = Path(runtime_root).expanduser().resolve()
-    return {
+    base_options = {
         "temp_dir": normalized_path(root / "temp"),
         "resources_dir": normalized_path(root / "resources"),
         "lua_packages_dir": normalized_path(root / "lua_packages"),
@@ -534,6 +543,8 @@ def default_host_options(runtime_root: str | os.PathLike[str]) -> dict[str, Any]
         "ignored_skill_ids": [],
         "capabilities": {"enable_skill_management_bridge": False},
     }
+    manifest = load_runtime_install_manifest(root)
+    return merge_host_options(base_options, host_options_from_runtime_manifest(manifest)) if manifest else base_options
 
 
 def default_space_controller_options() -> dict[str, Any]:

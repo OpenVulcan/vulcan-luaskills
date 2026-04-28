@@ -2,6 +2,7 @@
 import { join, resolve } from "node:path";
 import { LuaSkillsClient } from "./client.js";
 import { RuntimeRoots } from "./roots.js";
+import { buildRuntimeInstallManifest, installRuntimeAssets, normalizeDatabasePreset, RuntimeDatabasePreset } from "./runtime-assets.js";
 import { Authority, SkillInstallSourceType } from "./types.js";
 /**
  * CLI entrypoint that dispatches one command and prints JSON output.
@@ -14,15 +15,20 @@ async function main() {
         printUsage();
         return;
     }
+    const runtimeRoot = resolve(stringFlag(parsed, "runtime-root") ?? join(process.cwd(), "luaskills-runtime"));
     if (command === "version") {
-        printJson(LuaSkillsClient.version({ libraryPath: stringFlag(parsed, "lib") }));
+        printJson(LuaSkillsClient.version({ libraryPath: stringFlag(parsed, "lib"), runtimeRoot }));
         return;
     }
     if (command === "describe") {
-        printJson(LuaSkillsClient.describe({ libraryPath: stringFlag(parsed, "lib") }));
+        printJson(LuaSkillsClient.describe({ libraryPath: stringFlag(parsed, "lib"), runtimeRoot }));
         return;
     }
-    const runtimeRoot = resolve(stringFlag(parsed, "runtime-root") ?? join(process.cwd(), "luaskills-runtime"));
+    if (command === "install-runtime") {
+        const installOptions = runtimeInstallOptionsFromArgs(parsed, runtimeRoot);
+        printJson(booleanFlag(parsed, "dry-run") ? buildRuntimeInstallManifest(installOptions) : await installRuntimeAssets(installOptions));
+        return;
+    }
     const skillRoots = rootsFromArgs(parsed, runtimeRoot);
     const client = LuaSkillsClient.create({
         libraryPath: stringFlag(parsed, "lib"),
@@ -38,6 +44,25 @@ async function main() {
     finally {
         client.close();
     }
+}
+/**
+ * Build runtime asset installation options from CLI flags.
+ * 从 CLI 标志构造运行时资产安装选项。
+ */
+function runtimeInstallOptionsFromArgs(parsed, runtimeRoot) {
+    return {
+        runtimeRoot,
+        database: normalizeDatabasePreset(stringFlag(parsed, "database") ?? RuntimeDatabasePreset.None),
+        luaskillsVersion: stringFlag(parsed, "luaskills-version"),
+        vldbControllerVersion: stringFlag(parsed, "vldb-controller-version"),
+        vldbSqliteVersion: stringFlag(parsed, "vldb-sqlite-version"),
+        vldbLancedbVersion: stringFlag(parsed, "vldb-lancedb-version"),
+        includeLuaSkillsFfi: !booleanFlag(parsed, "skip-luaskills-ffi"),
+        luaskillsRepo: stringFlag(parsed, "luaskills-repo"),
+        vldbControllerRepo: stringFlag(parsed, "vldb-controller-repo"),
+        vldbSqliteRepo: stringFlag(parsed, "vldb-sqlite-repo"),
+        vldbLancedbRepo: stringFlag(parsed, "vldb-lancedb-repo"),
+    };
 }
 /**
  * Dispatch one command that requires an engine handle.
@@ -295,6 +320,7 @@ function printUsage() {
 Commands:
   version
   describe
+  install-runtime [--database none|vldb-controller|vldb-direct|host-callback]
   load | reload | list
   help-list | help-detail <skill-id> [flow]
   is-skill <tool-name> | skill-name <tool-name>
@@ -316,6 +342,8 @@ Global options:
   --authority <value>       delegated_tool or system
   --root-only               Use only ROOT root
   --target-root <label>     ROOT, PROJECT, or USER
+  --dry-run                 Print the runtime asset plan without downloading
+  --skip-luaskills-ffi      Do not install the luaskills FFI SDK archive
 `);
 }
 main().catch((error) => {

@@ -912,4 +912,9 @@ export interface LuaSkillsSdkOptions {
      * 显式动态库路径。
      */
     libraryPath?: string;
+    /**
+     * Optional runtime root used to resolve installed SDK assets.
+     * 用于解析已安装 SDK 资产的可选 runtime root。
+     */
+    runtimeRoot?: string;
 }

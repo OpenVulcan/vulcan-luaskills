@@ -1,25 +1,17 @@
 param(
-    # Dependency target to install: all, lua, or vldb.
-    # 需要安装的依赖目标：all、lua 或 vldb。
-    [ValidateSet("all", "lua", "vldb")]
+    [ValidateSet("all", "lua", "vldb", "vldb-controller", "vldb-direct")]
     [string]$Target = "all",
-    # Runtime root that receives the installed files.
-    # 接收安装文件的运行根目录。
+    [ValidateSet("none", "vldb-controller", "vldb-direct", "host-callback")]
+    [string]$Database = "vldb-controller",
     [string]$RuntimeRoot = "output",
-    # Lua runtime release repository.
-    # Lua runtime 发布仓库。
     [string]$LuaRuntimeRepo = "LuaSkills/luaskills",
-    # Lua runtime release tag.
-    # Lua runtime 发布标签。
     [string]$LuaRuntimeVersion = "v0.2.2",
-    # vldb-controller release repository.
-    # vldb-controller 发布仓库。
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",
-    # vldb-controller release tag.
-    # vldb-controller 发布标签。
     [string]$VldbControllerVersion = "v0.2.1",
-    # Also install vldb-controller into third_party for source builds.
-    # 是否同时将 vldb-controller 安装到 third_party 供源码构建复用。
+    [string]$VldbSQLiteRepo = "OpenVulcan/vldb-sqlite",
+    [string]$VldbSQLiteVersion = "v0.1.5",
+    [string]$VldbLanceDBRepo = "OpenVulcan/vldb-lancedb",
+    [string]$VldbLanceDBVersion = "v0.1.5",
     [switch]$DevCache
 )
 
@@ -77,6 +69,9 @@ $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Spli
 # ProjectRoot points at the repository root regardless of the caller location.
 # ProjectRoot 指向仓库根目录，避免调用方当前位置影响路径解析。
 $ProjectRoot = Resolve-ProjectRoot -ScriptDirectory $ScriptDir
+if (-not $ProjectRoot) {
+    $ProjectRoot = (Resolve-Path -LiteralPath (Get-Location).Path).Path
+}
 Set-Location $ProjectRoot
 
 function Ensure-Dir {
@@ -131,12 +126,12 @@ function Get-PlatformKey {
 function Get-VldbAssetInfo {
     <#
     .SYNOPSIS
-    Resolve vldb-controller asset metadata for the current platform.
-    解析当前平台的 vldb-controller 资产元数据。
+    Resolve VLDB asset metadata for the current platform.
+    解析当前平台的 VLDB 资产元数据。
 
     .OUTPUTS
-    Hashtable containing target, archive_ext, and binary_name.
-    包含 target、archive_ext 与 binary_name 的哈希表。
+    Hashtable containing target, archive_ext, binary_name, and dynamic library names.
+    包含 target、archive_ext、binary_name 与动态库名称的哈希表。
     #>
     $Arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
     switch ($Arch) {
@@ -149,13 +144,13 @@ function Get-VldbAssetInfo {
         if ($ArchKey -ne "x86_64") {
             throw "vldb-controller currently supports Windows x86_64 only."
         }
-        return @{ target = "x86_64-pc-windows-msvc"; archive_ext = ".zip"; binary_name = "vldb-controller.exe" }
+        return @{ target = "x86_64-pc-windows-msvc"; archive_ext = ".zip"; binary_name = "vldb-controller.exe"; dynamic_ext = ".dll"; sqlite_library = "vldb_sqlite.dll"; lancedb_library = "vldb_lancedb.dll" }
     }
     if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::OSX)) {
-        return @{ target = "$ArchKey-apple-darwin"; archive_ext = ".tar.gz"; binary_name = "vldb-controller" }
+        return @{ target = "$ArchKey-apple-darwin"; archive_ext = ".tar.gz"; binary_name = "vldb-controller"; dynamic_ext = ".dylib"; sqlite_library = "libvldb_sqlite.dylib"; lancedb_library = "libvldb_lancedb.dylib" }
     }
     if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)) {
-        return @{ target = "$ArchKey-unknown-linux-gnu"; archive_ext = ".tar.gz"; binary_name = "vldb-controller" }
+        return @{ target = "$ArchKey-unknown-linux-gnu"; archive_ext = ".tar.gz"; binary_name = "vldb-controller"; dynamic_ext = ".so"; sqlite_library = "libvldb_sqlite.so"; lancedb_library = "libvldb_lancedb.so" }
     }
     throw "Unsupported operating system for vldb-controller."
 }
@@ -192,6 +187,47 @@ function Get-ReleaseAssetUrl {
         throw "Asset '$AssetName' not found in $Repo@$Tag. Available: $Available"
     }
     return $Asset.browser_download_url
+}
+
+function Save-ReleaseAssetWithSha256 {
+    <#
+    .SYNOPSIS
+    Download one GitHub Release asset and verify its .sha256 sidecar.
+    下载单个 GitHub Release 资产并校验其 .sha256 旁路文件。
+
+    .PARAMETER Repo
+    GitHub repository in owner/name form.
+    owner/name 形式的 GitHub 仓库。
+
+    .PARAMETER Tag
+    Release tag name.
+    Release 标签名。
+
+    .PARAMETER AssetName
+    Exact asset file name.
+    精确资产文件名。
+
+    .PARAMETER Destination
+    Local destination file path.
+    本地目标文件路径。
+    #>
+    param(
+        [string]$Repo,
+        [string]$Tag,
+        [string]$AssetName,
+        [string]$Destination
+    )
+
+    $Url = Get-ReleaseAssetUrl -Repo $Repo -Tag $Tag -AssetName $AssetName
+    $ShaUrl = Get-ReleaseAssetUrl -Repo $Repo -Tag $Tag -AssetName "$AssetName.sha256"
+    $ShaPath = "$Destination.sha256"
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+    Invoke-WebRequest -Uri $ShaUrl -OutFile $ShaPath -UseBasicParsing
+    $Expected = ((Get-Content -LiteralPath $ShaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash.ToLowerInvariant()
+    if ($Expected -ne $Actual) {
+        throw "SHA-256 mismatch for $AssetName. Expected $Expected, got $Actual"
+    }
 }
 
 function Expand-ArchiveSmart {
@@ -267,7 +303,7 @@ function Install-LuaRuntime {
 
     try {
         try {
-            $Url = Get-ReleaseAssetUrl -Repo $LuaRuntimeRepo -Tag $LuaRuntimeVersion -AssetName $AssetName
+            Save-ReleaseAssetWithSha256 -Repo $LuaRuntimeRepo -Tag $LuaRuntimeVersion -AssetName $AssetName -Destination $ArchivePath
         } catch {
             if (Test-ExistingRuntimeContent -RuntimeRootPath $RuntimeRootPath) {
                 Write-Warning "Lua runtime asset '$AssetName' was not found in $LuaRuntimeRepo@$LuaRuntimeVersion. Existing packaged runtime content will be used."
@@ -275,7 +311,6 @@ function Install-LuaRuntime {
             }
             throw
         }
-        Invoke-WebRequest -Uri $Url -OutFile $ArchivePath -UseBasicParsing
         Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
 
         foreach ($DirName in @("lua_packages", "libs", "resources")) {
@@ -321,8 +356,7 @@ function Install-VldbController {
     Ensure-Dir $TempDir
 
     try {
-        $Url = Get-ReleaseAssetUrl -Repo $VldbControllerRepo -Tag $VldbControllerVersion -AssetName $AssetName
-        Invoke-WebRequest -Uri $Url -OutFile $ArchivePath -UseBasicParsing
+        Save-ReleaseAssetWithSha256 -Repo $VldbControllerRepo -Tag $VldbControllerVersion -AssetName $AssetName -Destination $ArchivePath
         Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
 
         $Binary = Get-ChildItem -Recurse -File -Path $ExtractDir -Filter $AssetInfo.binary_name | Select-Object -First 1
@@ -354,6 +388,96 @@ function Install-VldbController {
     }
 }
 
+function Install-VldbLibraryAsset {
+    <#
+    .SYNOPSIS
+    Download and install one VLDB dynamic library asset.
+    下载并安装单个 VLDB 动态库资产。
+
+    .PARAMETER RuntimeRootPath
+    Runtime root that receives libs content.
+    接收 libs 内容的运行根目录。
+
+    .PARAMETER Repo
+    GitHub repository in owner/name form.
+    owner/name 形式的 GitHub 仓库。
+
+    .PARAMETER Version
+    Release tag name.
+    Release 标签名。
+
+    .PARAMETER Prefix
+    Release asset prefix such as vldb-sqlite-lib.
+    发布资产前缀，例如 vldb-sqlite-lib。
+
+    .PARAMETER NameHint
+    Lowercase library name hint used for recursive lookup.
+    递归查找动态库时使用的小写名称提示。
+    #>
+    param(
+        [string]$RuntimeRootPath,
+        [string]$Repo,
+        [string]$Version,
+        [string]$Prefix,
+        [string]$NameHint
+    )
+
+    $AssetInfo = Get-VldbAssetInfo
+    $AssetName = "$Prefix-$Version-$($AssetInfo.target)$($AssetInfo.archive_ext)"
+    $TempDir = Join-Path $env:TEMP "luaskills_$($Prefix)_$PID"
+    $ArchivePath = Join-Path $TempDir $AssetName
+    $ExtractDir = Join-Path $TempDir "extract"
+
+    if (Test-Path -LiteralPath $TempDir) {
+        Remove-Item -LiteralPath $TempDir -Recurse -Force
+    }
+    Ensure-Dir $TempDir
+
+    try {
+        Save-ReleaseAssetWithSha256 -Repo $Repo -Tag $Version -AssetName $AssetName -Destination $ArchivePath
+        Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
+
+        $Library = Get-ChildItem -Recurse -File -Path $ExtractDir | Where-Object {
+            $_.Name.ToLowerInvariant().Contains($NameHint) -and $_.Name.EndsWith($AssetInfo.dynamic_ext, [System.StringComparison]::OrdinalIgnoreCase)
+        } | Select-Object -First 1
+        if (-not $Library) {
+            throw "VLDB dynamic library matching '$NameHint' not found in $AssetName"
+        }
+
+        $RuntimeLibs = Join-Path $RuntimeRootPath "libs"
+        Ensure-Dir $RuntimeLibs
+        Copy-Item -Force -LiteralPath $Library.FullName -Destination (Join-Path $RuntimeLibs $Library.Name)
+        return [ordered]@{
+            asset = $AssetName
+            installed_path = "libs/$($Library.Name)"
+        }
+    } finally {
+        Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-VldbDirectLibraries {
+    <#
+    .SYNOPSIS
+    Download and install vldb-sqlite-lib and vldb-lancedb-lib assets.
+    下载并安装 vldb-sqlite-lib 与 vldb-lancedb-lib 资产。
+
+    .PARAMETER RuntimeRootPath
+    Runtime root that receives libs content.
+    接收 libs 内容的运行根目录。
+    #>
+    param([string]$RuntimeRootPath)
+
+    $SQLite = Install-VldbLibraryAsset -RuntimeRootPath $RuntimeRootPath -Repo $VldbSQLiteRepo -Version $VldbSQLiteVersion -Prefix "vldb-sqlite-lib" -NameHint "sqlite"
+    $LanceDB = Install-VldbLibraryAsset -RuntimeRootPath $RuntimeRootPath -Repo $VldbLanceDBRepo -Version $VldbLanceDBVersion -Prefix "vldb-lancedb-lib" -NameHint "lancedb"
+    [ordered]@{
+        schema_version = 1
+        database_mode = "vldb-direct"
+        sqlite = $SQLite
+        lancedb = $LanceDB
+    } | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $RuntimeRootPath "resources\vldb-direct-manifest.json") -Encoding UTF8
+}
+
 Ensure-Dir $RuntimeRoot
 Ensure-Dir (Join-Path $RuntimeRoot "resources")
 
@@ -361,8 +485,12 @@ if ($Target -eq "all" -or $Target -eq "lua") {
     Install-LuaRuntime -RuntimeRootPath $RuntimeRoot
 }
 
-if ($Target -eq "all" -or $Target -eq "vldb") {
+if (($Target -eq "all" -and $Database -eq "vldb-controller") -or ($Target -eq "vldb" -and $Database -eq "vldb-controller") -or $Target -eq "vldb-controller") {
     Install-VldbController -RuntimeRootPath $RuntimeRoot
 }
 
-Write-Host "Runtime dependency target '$Target' installed into $RuntimeRoot"
+if (($Target -eq "all" -and $Database -eq "vldb-direct") -or ($Target -eq "vldb" -and $Database -eq "vldb-direct") -or $Target -eq "vldb-direct") {
+    Install-VldbDirectLibraries -RuntimeRootPath $RuntimeRoot
+}
+
+Write-Host "Runtime dependency target '$Target' with database preset '$Database' installed into $RuntimeRoot"

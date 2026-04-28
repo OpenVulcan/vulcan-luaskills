@@ -93,6 +93,32 @@ err := luaskills.SetSQLiteProviderJSONCallback(func(request any) (any, error) {
 
 当前该 API 会返回 `ErrProviderCallbacksRequireHostBridge`。正式 Go 宿主如果需要 `host_callback + json`，建议在宿主工程内实现受控 cgo callback bridge，或先通过 TypeScript / Python SDK 接 JSON callback。示例见 `examples/provider_callback/main.go`。
 
+## Runtime 资产规划
+
+Go SDK 提供与 TypeScript / Python SDK 相同的发布资产命名模型。宿主可以先生成 manifest，再决定由自己的安装器下载或复用 TypeScript / Python CLI：
+
+```go
+manifest, err := luaskills.BuildRuntimeInstallManifest(luaskills.RuntimeInstallOptions{
+	RuntimeRoot:         "D:/runtime/luaskills",
+	Database:            luaskills.RuntimeDatabaseVldbDirect,
+	SkipLuaSkillsFFI:    false,
+})
+if err != nil {
+	panic(err)
+}
+
+hostOptions := luaskills.HostOptionsFromRuntimeManifest(manifest)
+```
+
+`DefaultHostOptions(runtimeRoot)` / `NewClient` 会自动读取 `runtimeRoot/resources/luaskills-sdk-runtime-manifest.json` 并合入 `host_options_patch`；上面的显式读取适合宿主自定义安装器或需要审计 manifest 内容的场景。
+
+数据库模式固定为：
+
+- `RuntimeDatabaseNone`：不安装数据库 provider。
+- `RuntimeDatabaseVldbController`：使用 `vldb-controller-{version}-{target}`，对应 `space_controller`。
+- `RuntimeDatabaseVldbDirect`：使用 `vldb-sqlite-lib-{version}-{target}` 与 `vldb-lancedb-lib-{version}-{target}`，对应 `dynamic_library`。
+- `RuntimeDatabaseHostCallback`：由宿主提供 JSON callback。
+
 ## 验证
 
 源码环境可运行：

@@ -259,7 +259,7 @@ func DefaultPoolConfig() map[string]any {
 // DefaultHostOptions 返回单个 runtime root 对应的 SDK 默认宿主选项。
 func DefaultHostOptions(runtimeRoot string) map[string]any {
 	root := normalizePath(runtimeRoot)
-	return map[string]any{
+	baseOptions := map[string]any{
 		"temp_dir":                normalizePath(filepath.Join(root, "temp")),
 		"resources_dir":           normalizePath(filepath.Join(root, "resources")),
 		"lua_packages_dir":        normalizePath(filepath.Join(root, "lua_packages")),
@@ -287,6 +287,10 @@ func DefaultHostOptions(runtimeRoot string) map[string]any {
 		"ignored_skill_ids":       []string{},
 		"capabilities":            map[string]any{"enable_skill_management_bridge": false},
 	}
+	if manifest, err := LoadRuntimeInstallManifest(root); err == nil && manifest != nil {
+		return mergeHostOptions(baseOptions, HostOptionsFromRuntimeManifest(manifest))
+	}
+	return baseOptions
 }
 
 // DefaultSpaceControllerOptions returns the SDK default space-controller options.

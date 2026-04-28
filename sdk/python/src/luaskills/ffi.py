@@ -12,6 +12,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from .runtime_assets import resolve_luaskills_library_path_from_runtime
+
 
 class FfiBorrowedBuffer(ctypes.Structure):
     """
@@ -97,13 +99,17 @@ class LuaSkillsJsonFfi:
     高层 Python SDK 客户端使用的底层 JSON FFI 桥。
     """
 
-    def __init__(self, library_path: str | os.PathLike[str] | None = None) -> None:
+    def __init__(
+        self,
+        library_path: str | os.PathLike[str] | None = None,
+        runtime_root: str | os.PathLike[str] | None = None,
+    ) -> None:
         """
         Load one LuaSkills dynamic library and configure shared buffer helpers.
         加载单个 LuaSkills 动态库并配置共享缓冲辅助函数。
         """
 
-        self.library_path = resolve_library_path(library_path)
+        self.library_path = resolve_library_path(library_path, runtime_root)
         self.library = ctypes.CDLL(str(self.library_path))
         self.library.luaskills_ffi_buffer_free.argtypes = [FfiOwnedBuffer]
         self.library.luaskills_ffi_buffer_free.restype = None
@@ -364,15 +370,20 @@ class LuaSkillsJsonFfi:
         return (str(self.library_path), kind)
 
 
-def resolve_library_path(explicit_path: str | os.PathLike[str] | None = None) -> Path:
+def resolve_library_path(
+    explicit_path: str | os.PathLike[str] | None = None,
+    runtime_root: str | os.PathLike[str] | None = None,
+) -> Path:
     """
     Resolve the LuaSkills dynamic library path from an explicit path or environment variable.
     从显式路径或环境变量解析 LuaSkills 动态库路径。
     """
 
     selected_path = explicit_path or os.environ.get("LUASKILLS_LIB")
+    if not selected_path and runtime_root:
+        selected_path = resolve_luaskills_library_path_from_runtime(runtime_root)
     if not selected_path:
-        raise RuntimeError("LuaSkills library path is required; pass library_path or set LUASKILLS_LIB")
+        raise RuntimeError("LuaSkills library path is required; pass library_path, set LUASKILLS_LIB, or install runtime assets under runtime_root")
     path = Path(selected_path).expanduser().resolve()
     if not path.exists():
         raise RuntimeError(f"LuaSkills library not found: {path}")

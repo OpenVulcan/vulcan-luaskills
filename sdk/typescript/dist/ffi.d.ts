@@ -140,4 +140,4 @@ export declare class LuaSkillsJsonFfi {
  * Resolve the dynamic library path from options or environment variables.
  * 从选项或环境变量解析动态库路径。
  */
-export declare function resolveLibraryPath(explicitPath?: string): string;
+export declare function resolveLibraryPath(explicitPath?: string, runtimeRoot?: string): string;
