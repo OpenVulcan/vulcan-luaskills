@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luaskills-sdk"
+version = "0.2.2"
+description = "Python SDK for integrating the LuaSkills runtime through the public JSON FFI surface."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "LuaSkills" }
+]
+keywords = ["lua", "skills", "ffi", "runtime", "sdk"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.scripts]
+luaskills = "luaskills.cli:main"
+
+[project.urls]
+Repository = "https://github.com/LuaSkills/luaskills"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+luaskills = ["py.typed"]

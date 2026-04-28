@@ -1,8 +1,10 @@
 # luaskills FFI 收敛改造草案
 
+> 状态说明：本文是历史改造草案，主体设计已经进入当前 `v0.2.x / beta` FFI 与 SDK 文档。最新接入说明请优先阅读 [FFI_INTEGRATION_GUIDE.md](FFI_INTEGRATION_GUIDE.md) 与 [FFI_HOST_CHECKLIST.md](FFI_HOST_CHECKLIST.md)。
+
 ## 1. 文档定位
 
-本文档不是并行 `v2` 设计，而是当前 `v0.1.x / beta` 阶段对**现有 FFI** 的直接收敛改造草案。
+本文档不是并行 `v2` 设计，而是当前 `v0.2.x / beta` 阶段对**现有 FFI** 的直接收敛改造草案。
 
 当前判断依据如下：
 
@@ -21,7 +23,7 @@
 1. 不影响当前 Rust 主集成方式
 2. 不重写当前 Rust runtime 主流程
 3. 优先收敛 callback ABI、所有权模型、错误模型
-4. 允许在 `beta / v0.1.x` 阶段做必要的破坏性 ABI 调整
+4. 允许在 `beta / v0.2.x` 阶段做必要的破坏性 ABI 调整
 5. 保留标准 C ABI 与公共 JSON FFI 两层接口，但明确两者职责边界
 
 ## 3. 当前 FFI 的主要问题
@@ -188,4 +190,4 @@
 
 也就是说，本文档讨论的不是“下一代接口”，而是：
 
-**现有接口如何在 `beta / v0.1.x` 阶段被直接整理为未来正式接口。**
+**现有接口如何在 `beta / v0.2.x` 阶段被直接整理为未来正式接口。**

@@ -47,9 +47,10 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 ## FFI Beta 摘要
 
-如果您是第一次打开这个仓库，并且主要关注 FFI，对当前 `v0.1.x / beta` 阶段可以直接这样理解：
+如果您是第一次打开这个仓库，并且主要关注 FFI，对当前 `v0.2.x / beta` 阶段可以直接这样理解：
 
 - Rust 直连仍然是主集成方式
+- TypeScript / Python / Go 宿主优先使用对应 SDK
 - 标准 C ABI 是低层正式宿主契约
 - 公共 `_json` FFI 是高层易用公共接口
 - 当前 FFI 更适合作为**受控宿主集成接口**
@@ -58,8 +59,11 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 也就是说：
 
 - Rust 宿主优先直接接 Rust API
-- C / C++ / Go 这类低层宿主优先看标准 C ABI
+- C / C++ 这类低层宿主优先看标准 C ABI
 - Python / Node.js / TypeScript 这类动态宿主优先看公共 `_json` FFI
+- TypeScript / Node.js 宿主优先通过 [sdk/typescript](sdk/typescript) 接公共 `_json` FFI，避免手写 buffer、JSON 包络与 JSON provider callback 处理
+- Python 宿主优先通过 [sdk/python](sdk/python) 接公共 `_json` FFI，避免手写 ctypes buffer、JSON 包络与 JSON provider callback 处理
+- Go 宿主可通过 [sdk/go](sdk/go) 接公共 `_json` FFI；该 SDK 使用 cgo，适合希望用 Go module 封装主链但仍接受本机动态库链接的宿主。Go provider callback 需要宿主工程自行实现受控 cgo callback bridge。
 
 如果您只想先抓一份最短说明，建议按下面顺序阅读：
 
@@ -70,11 +74,17 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 如果您只想先看示例，建议按下面顺序阅读：
 
-1. [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
-2. [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
-3. [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
-4. [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
-5. [examples/ffi/typescript/README.md](examples/ffi/typescript/README.md)
+1. [sdk/typescript/README.md](sdk/typescript/README.md)
+2. [sdk/python/README.md](sdk/python/README.md)
+3. [sdk/go/README.md](sdk/go/README.md)
+4. [sdk/typescript/examples/provider-callback.mjs](sdk/typescript/examples/provider-callback.mjs)
+5. [sdk/python/examples/provider_callback.py](sdk/python/examples/provider_callback.py)
+6. [sdk/go/examples/provider_callback/main.go](sdk/go/examples/provider_callback/main.go)
+7. [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
+8. [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
+9. [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
+10. [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
+11. [examples/ffi/typescript/README.md](examples/ffi/typescript/README.md)
 
 ## 发布产物分层
 
@@ -510,9 +520,10 @@ FFI 设计规则如下：
   - 标准 C ABI 负责 `engine/load/list/call/lifecycle`
   - 公共 `_json` FFI 负责动态安装、快速原型和调试链路
 
-当前 `beta / v0.1.x` 阶段的推荐理解是：
+当前 `beta / v0.2.x` 阶段的推荐理解是：
 
 - Rust 直连仍然是主集成方式
+- TypeScript / Python / Go 宿主优先使用对应 SDK
 - 标准 C ABI 是低层正式宿主契约
 - 公共 `_json` FFI 是高层易用公共接口
 - 两者不是互斥关系，而是面向不同接入成本与宿主能力的两层交付
@@ -561,6 +572,12 @@ FFI 设计规则如下：
 
 语言示例：
 
+- [sdk/typescript/examples/basic.mjs](sdk/typescript/examples/basic.mjs)
+- [sdk/typescript/examples/provider-callback.mjs](sdk/typescript/examples/provider-callback.mjs)
+- [sdk/python/examples/basic.py](sdk/python/examples/basic.py)
+- [sdk/python/examples/provider_callback.py](sdk/python/examples/provider_callback.py)
+- [sdk/go/examples/basic/main.go](sdk/go/examples/basic/main.go)
+- [sdk/go/examples/provider_callback/main.go](sdk/go/examples/provider_callback/main.go)
 - [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
 - [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
 - [examples/ffi/python/lifecycle_demo.py](examples/ffi/python/lifecycle_demo.py)
@@ -580,8 +597,13 @@ FFI 设计规则如下：
 
 - `c/demo.c`
   - 通过标准头文件与链接产物直接演示标准 C ABI 下的 `version / engine_new / load_from_roots / list_entries / call_skill / run_lua / engine_free`
-- Python / Go / TypeScript / standard_runtime / demo_runtime / host_provider_demo
+- SDK 示例 / Python / Go / TypeScript / standard_runtime / demo_runtime / host_provider_demo
   - 通过环境变量 `LUASKILLS_LIB` 指向动态库文件
+- `sdk/typescript/examples/provider-callback.mjs` 与 `sdk/python/examples/provider_callback.py`
+  - 演示 SDK 如何封装 JSON provider callback 注册、清理、错误回传和 buffer clone
+- pip 安装 `luaskills-sdk` 后也可直接运行 `python -m luaskills.examples.provider_callback`
+- `sdk/go/examples/provider_callback/main.go`
+  - 演示 Go SDK 对 provider callback 的显式边界；正式 Go 宿主需要自己实现受控 cgo callback bridge
 - `python/lifecycle_demo.py`
   - 额外演示标准 ABI 下的 `disable_skill / enable_skill` 生命周期切换
 - `python/query_demo.py`
@@ -622,12 +644,15 @@ FFI 设计规则如下：
 - 想看动态安装与真实调用烟测：
   - 看 [examples/ffi/demo_runtime/README.md](examples/ffi/demo_runtime/README.md)
 - 想看宿主如何接管数据库 provider：
+  - 看 [sdk/typescript/examples/provider-callback.mjs](sdk/typescript/examples/provider-callback.mjs)
+  - 看 [sdk/python/examples/provider_callback.py](sdk/python/examples/provider_callback.py)
+  - 看 [sdk/go/examples/provider_callback/main.go](sdk/go/examples/provider_callback/main.go)
   - 看 [examples/ffi/host_provider_demo/README.md](examples/ffi/host_provider_demo/README.md)
 
 一句话建议：
 
 - 标准 C ABI 学习入口优先从 `demo / lifecycle_demo / query_demo` 这一组看
-- 公共 `_json` FFI 与宿主 provider 接管链路，再按需要进入 `demo_runtime / host_provider_demo`
+- 公共 `_json` FFI 与宿主 provider 接管链路，优先看 SDK 示例，再按需要进入 `demo_runtime / host_provider_demo`
 
 #### 宿主数据库 Provider
 
@@ -648,7 +673,7 @@ FFI 设计规则如下：
   - lib 把数据库请求和稳定绑定上下文回调给宿主
 - `space_controller`
   - 由 lib 把数据库请求转发给外部空间控制器
-  - 代码层通过 `git + tag v0.2.1` 固定依赖 `vldb-controller-client`
+  - 代码层通过 crates.io 版本 `vldb-controller-client = 0.2.1` 固定依赖 controller Rust SDK
   - 当前上游 Rust SDK 注册字段为 `client_name`，会话主键 `client_session_id` 由 SDK 内部自动管理
   - 稳定 `binding_tag` 只保留诊断与命名语义，controller 实际使用的 `binding_id` 会由 lib 结合当前 client 会话域派生，避免不同客户端实例抢占同一 binding
   - `v0.2.1` 额外修复了本地共享 controller 自动拉起阶段的重复拉起协调风险

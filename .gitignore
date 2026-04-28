@@ -32,6 +32,20 @@ examples/ffi/c/*.obj
 examples/ffi/**/__pycache__/
 examples/ffi/**/*.pyc
 
+# Ignore local Python build and cache artifacts.
+# 忽略本地 Python 构建与缓存产物。
+**/__pycache__/
+**/*.pyc
+sdk/python/build/
+sdk/python/dist/
+sdk/python/*.egg-info/
+sdk/python/src/*.egg-info/
+
+# Ignore local Node package dependencies.
+# 忽略本地 Node 包依赖目录。
+node_modules/
+sdk/**/node_modules/
+
 # Ignore local task planning records.
 # 忽略本地任务计划与完成记录。
 docs/plan/

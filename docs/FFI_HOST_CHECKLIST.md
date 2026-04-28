@@ -18,10 +18,17 @@
 
 - 如果宿主本身是 Rust：
   - 优先直接接 Rust API
-- 如果宿主是 C / C++ / Go / 其他能稳定处理结构体和 out 指针的语言：
+- 如果宿主是 C / C++ / C# / 其他能稳定处理结构体和 out 指针的语言：
   - 优先接标准 C ABI
 - 如果宿主是 Python / Node.js / TypeScript / 动态脚本环境：
   - 优先接公共 `_json` FFI
+  - TypeScript / Node.js 优先使用 [sdk/typescript](../sdk/typescript) 的 `@luaskills/sdk`，其中已经封装 JSON provider callback 注册与清理
+- 如果宿主是 Python：
+  - 优先使用 [sdk/python](../sdk/python) 的 `luaskills-sdk`，其中已经封装 JSON provider callback 注册与清理
+- 如果宿主是 Go：
+  - 可直接接标准 C ABI
+  - 也可使用 [sdk/go](../sdk/go) 的 cgo JSON FFI SDK；该路径需要 `CGO_ENABLED=1`、C 编译器、链接库搜索路径与运行时动态库路径
+  - 若需要 provider callback，需要宿主工程自行实现受控 cgo callback bridge，SDK 会通过显式错误提示这条边界
 - 如果宿主需要“稳定主链 + 快速调试链”：
   - 可以混合使用
   - 标准 C ABI 负责主链
@@ -44,6 +51,7 @@
   - `space_controller`
 - 如果要用 callback：
   - callback 必须先注册，再创建 engine
+  - TypeScript / Python 宿主优先使用 SDK 的 `set_*_provider_json_callback`，不要在业务代码里手写 buffer clone
 - 如果要用 `space_controller`：
   - 已确认 `endpoint / auto_spawn / executable_path / process_mode`
 - 如果连接远端 controller：
@@ -146,6 +154,7 @@ ROOT -> PROJECT -> USER
 - 如果一个进程里需要多套 callback 逻辑：
   - 应分别创建不同 engine
   - 不要指望在 engine 创建后再切换全局 callback
+- Go 宿主的 provider callback 不应直接挂临时闭包给进程级 C 回调；应先在宿主层设计明确的 cgo bridge、线程模型和生命周期。
 
 ## 9. 标准 C ABI 与公共 `_json` FFI 的最短判断
 
@@ -182,6 +191,10 @@ ROOT -> PROJECT -> USER
 - 动态安装烟测：
   - [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
 - 宿主 provider 接管：
+  - [sdk/typescript/examples/provider-callback.mjs](../sdk/typescript/examples/provider-callback.mjs)
+  - [sdk/python/examples/provider_callback.py](../sdk/python/examples/provider_callback.py)
+  - pip 安装后可运行 `python -m luaskills.examples.provider_callback`
+  - [sdk/go/examples/provider_callback/main.go](../sdk/go/examples/provider_callback/main.go)
   - [examples/ffi/host_provider_demo/README.md](../examples/ffi/host_provider_demo/README.md)
 
 ## 11. 发布前最小自测

@@ -424,6 +424,10 @@ struct UninstallSkillJsonRequest {
     /// Stable target skill identifier.
     /// 稳定的目标技能标识符。
     skill_id: String,
+    /// Optional explicit target root used by advanced SDK wrappers.
+    /// 高级 SDK 封装使用的可选显式目标根。
+    #[serde(default)]
+    target_root: Option<RuntimeSkillRoot>,
     /// Optional database cleanup switches applied after uninstall commit succeeds.
     /// 在卸载提交成功后应用的可选数据库清理开关。
     #[serde(default)]
@@ -447,6 +451,10 @@ struct ApplySkillJsonRequest {
     /// Managed install or update request forwarded to the Rust runtime.
     /// 直接转发给 Rust 运行时的受管安装或更新请求。
     request: SkillInstallRequest,
+    /// Optional explicit target root used by advanced SDK wrappers.
+    /// 高级 SDK 封装使用的可选显式目标根。
+    #[serde(default)]
+    target_root: Option<RuntimeSkillRoot>,
     /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
     /// system JSON 入口必填、普通入口忽略的可选权限等级。
     #[serde(default)]
@@ -1084,6 +1092,8 @@ pub unsafe extern "C" fn luaskills_ffi_skill_name_for_tool_json(
 
 /// List flattened skill config records through the JSON FFI surface.
 /// 通过 JSON FFI 入口列出扁平化技能配置记录。
+/// Skill config is addressed by skill id and is intentionally outside root visibility filtering.
+/// skill 配置按 skill id 寻址，并有意不进入 root 可见性过滤。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_skill_config_list_json(
     input_json: FfiBorrowedBuffer,
@@ -1105,6 +1115,8 @@ pub unsafe extern "C" fn luaskills_ffi_skill_config_list_json(
 
 /// Read one optional skill config value through the JSON FFI surface.
 /// 通过 JSON FFI 入口读取单个可选技能配置值。
+/// Skill config only affects behavior when Lua skill code reads it explicitly.
+/// skill 配置只有在 Lua skill 代码显式读取时才影响行为。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_skill_config_get_json(
     input_json: FfiBorrowedBuffer,
@@ -1131,6 +1143,8 @@ pub unsafe extern "C" fn luaskills_ffi_skill_config_get_json(
 
 /// Insert or replace one skill config value through the JSON FFI surface.
 /// 通过 JSON FFI 入口插入或替换单个技能配置值。
+/// Hosts that do not want user-level config mutation should not expose this endpoint.
+/// 不希望用户级修改配置的宿主不应暴露该入口。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_skill_config_set_json(
     input_json: FfiBorrowedBuffer,
@@ -1158,6 +1172,8 @@ pub unsafe extern "C" fn luaskills_ffi_skill_config_set_json(
 
 /// Delete one skill config key through the JSON FFI surface.
 /// 通过 JSON FFI 入口删除单个技能配置键。
+/// Hosts that do not want user-level config mutation should not expose this endpoint.
+/// 不希望用户级修改配置的宿主不应暴露该入口。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_skill_config_delete_json(
     input_json: FfiBorrowedBuffer,
@@ -1185,6 +1201,8 @@ pub unsafe extern "C" fn luaskills_ffi_skill_config_delete_json(
 
 /// Call one loaded skill entry through the JSON FFI surface.
 /// 通过 JSON FFI 入口调用单个已加载技能入口。
+/// Calls target the active runtime execution surface and do not apply root visibility filtering.
+/// 调用面向当前已激活运行时执行面，不应用 root 可见性过滤。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_call_skill_json(
     input_json: FfiBorrowedBuffer,
@@ -1210,6 +1228,8 @@ pub unsafe extern "C" fn luaskills_ffi_call_skill_json(
 
 /// Execute arbitrary Lua code through the JSON FFI surface.
 /// 通过 JSON FFI 入口执行任意 Lua 代码。
+/// Hosts should wrap or hide this endpoint when arbitrary Lua execution is not intended.
+/// 不希望开放任意 Lua 执行的宿主应封装或隐藏该入口。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaskills_ffi_run_lua_json(
     input_json: FfiBorrowedBuffer,
@@ -1422,9 +1442,20 @@ pub unsafe extern "C" fn luaskills_ffi_uninstall_skill_json(
         Err(error) => return ffi_error(error),
     };
     match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .uninstall_skill(&request.skill_roots, &request.skill_id, &request.options)
-            .map_err(|error| error.to_string())
+        if let Some(target_root) = request.target_root.as_ref() {
+            engine
+                .uninstall_skill_in_root(
+                    &request.skill_roots,
+                    target_root,
+                    &request.skill_id,
+                    &request.options,
+                )
+                .map_err(|error| error.to_string())
+        } else {
+            engine
+                .uninstall_skill(&request.skill_roots, &request.skill_id, &request.options)
+                .map_err(|error| error.to_string())
+        }
     }) {
         Ok(result) => ffi_ok::<SkillUninstallResult>(result),
         Err(error) => ffi_error(error),
@@ -1452,14 +1483,26 @@ pub unsafe extern "C" fn luaskills_ffi_system_uninstall_skill_json(
         Err(error) => return ffi_error(error),
     };
     match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .system_uninstall_skill(
-                &request.skill_roots,
-                authority,
-                &request.skill_id,
-                &request.options,
-            )
-            .map_err(|error| error.to_string())
+        if let Some(target_root) = request.target_root.as_ref() {
+            engine
+                .system_uninstall_skill_in_root(
+                    &request.skill_roots,
+                    target_root,
+                    authority,
+                    &request.skill_id,
+                    &request.options,
+                )
+                .map_err(|error| error.to_string())
+        } else {
+            engine
+                .system_uninstall_skill(
+                    &request.skill_roots,
+                    authority,
+                    &request.skill_id,
+                    &request.options,
+                )
+                .map_err(|error| error.to_string())
+        }
     }) {
         Ok(result) => ffi_ok::<SkillUninstallResult>(result),
         Err(error) => ffi_error(error),
@@ -1480,9 +1523,15 @@ pub unsafe extern "C" fn luaskills_ffi_install_skill_json(
         Err(error) => return ffi_error(error),
     };
     match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .install_skill(&request.skill_roots, &request.request)
-            .map_err(|error| error.to_string())
+        if let Some(target_root) = request.target_root.as_ref() {
+            engine
+                .install_skill_in_root(&request.skill_roots, target_root, &request.request)
+                .map_err(|error| error.to_string())
+        } else {
+            engine
+                .install_skill(&request.skill_roots, &request.request)
+                .map_err(|error| error.to_string())
+        }
     }) {
         Ok(result) => ffi_ok::<SkillApplyResult>(result),
         Err(error) => ffi_error(error),
@@ -1510,9 +1559,20 @@ pub unsafe extern "C" fn luaskills_ffi_system_install_skill_json(
         Err(error) => return ffi_error(error),
     };
     match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .system_install_skill(&request.skill_roots, authority, &request.request)
-            .map_err(|error| error.to_string())
+        if let Some(target_root) = request.target_root.as_ref() {
+            engine
+                .system_install_skill_in_root(
+                    &request.skill_roots,
+                    target_root,
+                    authority,
+                    &request.request,
+                )
+                .map_err(|error| error.to_string())
+        } else {
+            engine
+                .system_install_skill(&request.skill_roots, authority, &request.request)
+                .map_err(|error| error.to_string())
+        }
     }) {
         Ok(result) => ffi_ok::<SkillApplyResult>(result),
         Err(error) => ffi_error(error),
@@ -1533,9 +1593,15 @@ pub unsafe extern "C" fn luaskills_ffi_update_skill_json(
         Err(error) => return ffi_error(error),
     };
     match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .update_skill(&request.skill_roots, &request.request)
-            .map_err(|error| error.to_string())
+        if let Some(target_root) = request.target_root.as_ref() {
+            engine
+                .update_skill_in_root(&request.skill_roots, target_root, &request.request)
+                .map_err(|error| error.to_string())
+        } else {
+            engine
+                .update_skill(&request.skill_roots, &request.request)
+                .map_err(|error| error.to_string())
+        }
     }) {
         Ok(result) => ffi_ok::<SkillApplyResult>(result),
         Err(error) => ffi_error(error),
@@ -1561,9 +1627,20 @@ pub unsafe extern "C" fn luaskills_ffi_system_update_skill_json(
             Err(error) => return ffi_error(error),
         };
     match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .system_update_skill(&request.skill_roots, authority, &request.request)
-            .map_err(|error| error.to_string())
+        if let Some(target_root) = request.target_root.as_ref() {
+            engine
+                .system_update_skill_in_root(
+                    &request.skill_roots,
+                    target_root,
+                    authority,
+                    &request.request,
+                )
+                .map_err(|error| error.to_string())
+        } else {
+            engine
+                .system_update_skill(&request.skill_roots, authority, &request.request)
+                .map_err(|error| error.to_string())
+        }
     }) {
         Ok(result) => ffi_ok::<SkillApplyResult>(result),
         Err(error) => ffi_error(error),

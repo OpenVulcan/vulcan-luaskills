@@ -392,7 +392,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 ### 6.4 Beta 阶段 ABI 迁移要点
 
-当前 `v0.1.x / beta` 阶段已经对现有 FFI 做了一轮直接收敛。  
+当前 `v0.2.x / beta` 阶段已经对现有 FFI 做了一轮直接收敛。
 如果宿主参考的是更早的示例或旧草稿，请优先按下面的对应关系理解：
 
 - 旧：标准 C ABI 接口大量使用 `char **error_out`
@@ -496,11 +496,11 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 这里要特别注意：
 
-- `luaskills` 代码层只通过 `git + tag v0.2.1` 固定依赖 `vldb-controller-client`
+- `luaskills` 代码层通过 crates.io 版本 `vldb-controller-client = 0.2.1` 固定依赖 controller Rust SDK
 - 当前上游 Rust SDK 在注册阶段使用 `client_name`，具体 `client_session_id` 由 SDK 内部自动管理并自动回放附着与 backend 期望状态
 - `v0.2.1` 额外修复了共享本地 endpoint 在 `auto_spawn` 场景下的重复拉起协调风险
 - 真正被拉起的 controller 服务程序，不是通过 Cargo 把二进制嵌进宿主，而是由宿主自行复制并管理
-- 也就是说，**Rust SDK 走 git 固定版本，controller 可执行文件走宿主本地复制路径**
+- 也就是说，**Rust SDK 走 crates.io 固定版本，controller 可执行文件走宿主本地复制路径**
 - 如果宿主要连接远端 controller 或使用远端主机名端点，必须关闭 `auto_spawn`，避免把远端地址错误地当成本地 bind 地址去拉起新进程
 
 ### 7.1.2 callback 注册前置要求
@@ -942,6 +942,19 @@ system 版本的 `_json` 生命周期接口，以及可见性查询、prompt com
 ```json
 { "authority": "delegated_tool" }
 ```
+
+公共 `_json` FFI 的 `install / update / uninstall` 请求支持可选 `target_root` 字段，用于封装显式 root 生命周期 API：
+
+```json
+{
+  "target_root": {
+    "name": "USER",
+    "skills_dir": "D:/runtime/luaskills/user_skills"
+  }
+}
+```
+
+该字段不改变权限语义：普通 `Skills` plane 只能写 `PROJECT / USER`；system 入口只有在 `authority = system` 时可以写 `ROOT`；ROOT 同名 skill 仍具有全局系统占用语义。
 
 ### 9.6 Skill 配置接口
 
@@ -1449,8 +1462,7 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 ### 14.1 优先使用标准 C ABI 的情况
 
-- Go
-- C#
+- C / C++ / C#
 - 高性能宿主
 - 想减少 JSON 编解码
 - 想显式控制内存释放
@@ -1459,9 +1471,16 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 - Python
 - TypeScript / Node.js
+- Go SDK 主链
 - 调试工具
 - 快速接入
 - 动态值很多的场景
+
+TypeScript / Node.js 宿主建议优先使用 [sdk/typescript](../sdk/typescript) 中的 `@luaskills/sdk`。SDK 仍然走公共 `_json` FFI，但会统一处理动态库加载、`FfiBorrowedBuffer` / `FfiOwnedBuffer`、JSON 包络、engine 生命周期、authority、root helper、skill-config、lifecycle 管理入口，以及 SQLite / LanceDB 的 JSON provider callback 注册与清理。
+
+Python 宿主建议优先使用 [sdk/python](../sdk/python) 中的 `luaskills-sdk`。SDK 仍然走公共 `_json` FFI，但会统一处理 `ctypes` 动态库加载、buffer 释放、JSON 包络、authority、root helper、skill-config、lifecycle 管理入口，以及 SQLite / LanceDB 的 JSON provider callback 注册与清理。
+
+Go 宿主如果希望用 Go module 封装主链，建议优先使用 [sdk/go](../sdk/go)。该 SDK 使用 cgo 调公共 `_json` FFI，调用方需要显式配置 `CGO_ENABLED=1`、C 编译器、链接库搜索路径与运行时动态库路径。Go 的 provider callback 当前保留为显式边界 API：需要正式使用 `host_callback + json` 时，应由宿主工程实现受控 cgo callback bridge，或先使用 TypeScript / Python SDK 承担 JSON callback。
 
 ### 14.3 混合使用策略
 
@@ -1479,12 +1498,18 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - Rust 宿主：
   - 优先直接引用 Rust API
   - 不建议额外包装成 FFI 再回调自己
-- C / C++ / Go / 能稳定处理结构体与 out 指针的宿主：
+- C / C++ / C# / 能稳定处理结构体与 out 指针的宿主：
   - 优先选择标准 C ABI
   - 适合把它当成正式低层契约长期维护
 - Python / Node.js / TypeScript / 动态脚本宿主：
   - 优先选择公共 `_json` FFI
   - 适合快速接入、原型验证和减少 ABI 绑定成本
+  - TypeScript / Node.js 优先使用 `@luaskills/sdk`，不要在业务代码里重复手写 buffer 和 JSON FFI 包络
+  - Python 与 TypeScript SDK 已封装 JSON provider callback 的注册、错误转换与 buffer clone
+- Go 宿主：
+  - 如果追求标准 C ABI 的最低编解码成本，可以继续直接接标准 C ABI
+  - 如果希望快速获得 engine/root/query/call/lifecycle 封装，优先使用 `sdk/go` 的公共 `_json` FFI 封装
+  - 如果需要 provider callback，必须额外设计宿主拥有的 cgo callback bridge，不能把进程级回调生命周期交给业务层临时函数
 - 一个宿主同时需要“稳定主链”和“动态扩展链”时：
   - 可以混合使用
   - 标准 C ABI 承载 `engine/load/list/call/lifecycle`
@@ -1503,14 +1528,21 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - C：
   - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
 - Python：
+  - [sdk/python/README.md](../sdk/python/README.md)
+  - [sdk/python/examples/provider_callback.py](../sdk/python/examples/provider_callback.py)
+  - pip 安装后可运行 `python -m luaskills.examples.provider_callback`
   - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
   - [examples/ffi/python/lifecycle_demo.py](../examples/ffi/python/lifecycle_demo.py)
   - [examples/ffi/python/query_demo.py](../examples/ffi/python/query_demo.py)
 - Go：
+  - [sdk/go/README.md](../sdk/go/README.md)
+  - [sdk/go/examples/provider_callback/main.go](../sdk/go/examples/provider_callback/main.go)
   - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
   - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
   - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
 - TypeScript：
+  - [sdk/typescript/README.md](../sdk/typescript/README.md)
+  - [sdk/typescript/examples/provider-callback.mjs](../sdk/typescript/examples/provider-callback.mjs)
   - [examples/ffi/typescript/README.md](../examples/ffi/typescript/README.md)
   - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
   - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
