@@ -61,9 +61,9 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 - Rust 宿主优先直接接 Rust API
 - C / C++ 这类低层宿主优先看标准 C ABI
 - Python / Node.js / TypeScript 这类动态宿主优先看公共 `_json` FFI
-- TypeScript / Node.js 宿主优先通过 [sdk/typescript](sdk/typescript) 接公共 `_json` FFI，避免手写 buffer、JSON 包络与 JSON provider callback 处理
-- Python 宿主优先通过 [sdk/python](sdk/python) 接公共 `_json` FFI，避免手写 ctypes buffer、JSON 包络与 JSON provider callback 处理
-- Go 宿主可通过 [sdk/go](sdk/go) 接公共 `_json` FFI；该 SDK 使用 cgo，适合希望用 Go module 封装主链但仍接受本机动态库链接的宿主。Go provider callback 需要宿主工程自行实现受控 cgo callback bridge。
+- TypeScript / Node.js 宿主优先通过独立仓库 [`luaskills-sdk-typescript`](https://github.com/LuaSkills/luaskills-sdk-typescript) 接公共 `_json` FFI，避免手写 buffer、JSON 包络与 JSON provider callback 处理
+- Python 宿主优先通过独立仓库 [`luaskills-sdk-python`](https://github.com/LuaSkills/luaskills-sdk-python) 接公共 `_json` FFI，避免手写 ctypes buffer、JSON 包络与 JSON provider callback 处理
+- Go 宿主可通过独立仓库 [`luaskills-sdk-go`](https://github.com/LuaSkills/luaskills-sdk-go) 接公共 `_json` FFI；该 SDK 使用 cgo，适合希望用 Go module 封装主链但仍接受本机动态库链接的宿主。Go provider callback 需要宿主工程自行实现受控 cgo callback bridge。
 
 如果您只想先抓一份最短说明，建议按下面顺序阅读：
 
@@ -74,17 +74,14 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 如果您只想先看示例，建议按下面顺序阅读：
 
-1. [sdk/typescript/README.md](sdk/typescript/README.md)
-2. [sdk/python/README.md](sdk/python/README.md)
-3. [sdk/go/README.md](sdk/go/README.md)
-4. [sdk/typescript/examples/provider-callback.mjs](sdk/typescript/examples/provider-callback.mjs)
-5. [sdk/python/examples/provider_callback.py](sdk/python/examples/provider_callback.py)
-6. [sdk/go/examples/provider_callback/main.go](sdk/go/examples/provider_callback/main.go)
-7. [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
-8. [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
-9. [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
-10. [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
-11. [examples/ffi/typescript/README.md](examples/ffi/typescript/README.md)
+1. [`luaskills-sdk-typescript`](https://github.com/LuaSkills/luaskills-sdk-typescript)
+2. [`luaskills-sdk-python`](https://github.com/LuaSkills/luaskills-sdk-python)
+3. [`luaskills-sdk-go`](https://github.com/LuaSkills/luaskills-sdk-go)
+4. [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
+5. [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
+6. [examples/ffi/go/demo.go](examples/ffi/go/demo.go)
+7. [examples/ffi/typescript/demo.ts](examples/ffi/typescript/demo.ts)
+8. [examples/ffi/typescript/README.md](examples/ffi/typescript/README.md)
 
 ## 发布产物分层
 
@@ -122,21 +119,38 @@ bash scripts/fetch_runtime_deps.sh vldb-direct
 
 其中 `vldb-controller` 会下载 `vldb-controller-{version}-{target}` 并把 `vldb-controller(.exe)` 安装到运行根的 `bin/` 目录；`vldb-direct` 会下载 `vldb-sqlite-lib-{version}-{target}` 与 `vldb-lancedb-lib-{version}-{target}` 并把动态库安装到 `libs/`。脚本会同时下载 `.sha256` 旁路文件并校验归档哈希。
 
-SDK 侧同样提供独立发布友好的 runtime 资产入口。TypeScript / Node.js 用户可以直接：
+The SDKs also provide standalone-package-friendly runtime asset installers.
+
+SDK 侧同样提供独立发布友好的 runtime 资产入口。
+
+TypeScript / Node.js users can run:
+
+TypeScript / Node.js 用户可以直接运行：
 
 ```bash
+npx @luaskills/sdk install-runtime --database none --runtime-root D:\runtime\luaskills
 npx @luaskills/sdk install-runtime --database vldb-controller --runtime-root D:\runtime\luaskills
 npx @luaskills/sdk install-runtime --database vldb-direct --runtime-root D:\runtime\luaskills
 ```
 
-Python 用户可以直接：
+Python users can run:
+
+Python 用户可以直接运行：
 
 ```bash
+pip install luaskills-sdk
+luaskills install-runtime --database none --runtime-root D:\runtime\luaskills
 luaskills install-runtime --database vldb-controller --runtime-root D:\runtime\luaskills
 luaskills install-runtime --database vldb-direct --runtime-root D:\runtime\luaskills
 ```
 
-四种 SDK 数据库模式含义固定为：`none` 不安装数据库 provider，`vldb-controller` 使用 controller 可执行资产，`vldb-direct` 使用 `*-lib-*` 动态库资产，`host-callback` 由宿主注册 JSON callback。
+After installation, `LuaSkillsClient(runtime_root="D:/runtime/luaskills")` automatically resolves the LuaSkills dynamic library from `runtime_root/libs`. In normal SDK installs, hosts do not need to set `LUASKILLS_LIB`.
+
+安装完成后，`LuaSkillsClient(runtime_root="D:/runtime/luaskills")` 会自动从 `runtime_root/libs` 解析 LuaSkills 动态库。常规 SDK 安装场景下，宿主不需要手动设置 `LUASKILLS_LIB`。
+
+The SDK database modes are fixed: `none` installs `lua-runtime-{platform}.tar.gz` and the LuaSkills FFI SDK without database providers; `vldb-controller` uses the controller executable asset; `vldb-direct` uses `*-lib-*` dynamic library assets; `host-callback` expects the host to register JSON callbacks.
+
+四种 SDK 数据库模式含义固定为：`none` 安装 `lua-runtime-{platform}.tar.gz` 与 LuaSkills FFI SDK 但不安装数据库 provider；`vldb-controller` 使用 controller 可执行资产；`vldb-direct` 使用 `*-lib-*` 动态库资产；`host-callback` 由宿主注册 JSON callback。
 
 发布 demo 包内的运行入口与依赖升级入口是分离的：`run.ps1` / `run.sh` 只运行 demo，不会自动下载依赖；Windows 包可双击 `upgrade_deps.bat` 默认拉取 `all`，Linux/macOS 包执行 `./upgrade_deps.sh` 默认拉取 `all`，也可以传入 `lua` 或 `vldb` 单独更新对应部分。
 
@@ -592,12 +606,9 @@ FFI 设计规则如下：
 
 语言示例：
 
-- [sdk/typescript/examples/basic.mjs](sdk/typescript/examples/basic.mjs)
-- [sdk/typescript/examples/provider-callback.mjs](sdk/typescript/examples/provider-callback.mjs)
-- [sdk/python/examples/basic.py](sdk/python/examples/basic.py)
-- [sdk/python/examples/provider_callback.py](sdk/python/examples/provider_callback.py)
-- [sdk/go/examples/basic/main.go](sdk/go/examples/basic/main.go)
-- [sdk/go/examples/provider_callback/main.go](sdk/go/examples/provider_callback/main.go)
+- [TypeScript SDK examples](https://github.com/LuaSkills/luaskills-sdk-typescript/tree/main/examples)
+- [Python SDK examples](https://github.com/LuaSkills/luaskills-sdk-python/tree/main/examples)
+- [Go SDK examples](https://github.com/LuaSkills/luaskills-sdk-go/tree/main/examples)
 - [examples/ffi/c/demo.c](examples/ffi/c/demo.c)
 - [examples/ffi/python/demo.py](examples/ffi/python/demo.py)
 - [examples/ffi/python/lifecycle_demo.py](examples/ffi/python/lifecycle_demo.py)
@@ -617,12 +628,12 @@ FFI 设计规则如下：
 
 - `c/demo.c`
   - 通过标准头文件与链接产物直接演示标准 C ABI 下的 `version / engine_new / load_from_roots / list_entries / call_skill / run_lua / engine_free`
-- SDK 示例 / Python / Go / TypeScript / standard_runtime / demo_runtime / host_provider_demo
+- 独立 SDK 示例 / Python / Go / TypeScript / standard_runtime / demo_runtime / host_provider_demo
   - 通过环境变量 `LUASKILLS_LIB` 指向动态库文件
-- `sdk/typescript/examples/provider-callback.mjs` 与 `sdk/python/examples/provider_callback.py`
+- 独立 TypeScript 与 Python SDK 的 provider callback 示例
   - 演示 SDK 如何封装 JSON provider callback 注册、清理、错误回传和 buffer clone
 - pip 安装 `luaskills-sdk` 后也可直接运行 `python -m luaskills.examples.provider_callback`
-- `sdk/go/examples/provider_callback/main.go`
+- 独立 Go SDK 的 provider callback 示例
   - 演示 Go SDK 对 provider callback 的显式边界；正式 Go 宿主需要自己实现受控 cgo callback bridge
 - `python/lifecycle_demo.py`
   - 额外演示标准 ABI 下的 `disable_skill / enable_skill` 生命周期切换
@@ -664,9 +675,9 @@ FFI 设计规则如下：
 - 想看动态安装与真实调用烟测：
   - 看 [examples/ffi/demo_runtime/README.md](examples/ffi/demo_runtime/README.md)
 - 想看宿主如何接管数据库 provider：
-  - 看 [sdk/typescript/examples/provider-callback.mjs](sdk/typescript/examples/provider-callback.mjs)
-  - 看 [sdk/python/examples/provider_callback.py](sdk/python/examples/provider_callback.py)
-  - 看 [sdk/go/examples/provider_callback/main.go](sdk/go/examples/provider_callback/main.go)
+  - 看 [TypeScript SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-typescript/blob/main/examples/provider-callback.mjs)
+  - 看 [Python SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-python/blob/main/examples/provider_callback.py)
+  - 看 [Go SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-go/blob/main/examples/provider_callback/main.go)
   - 看 [examples/ffi/host_provider_demo/README.md](examples/ffi/host_provider_demo/README.md)
 
 一句话建议：
@@ -748,6 +759,12 @@ cargo test --lib
 
 ## 配套项目
 
+- [`luaskills-sdk-typescript`](https://github.com/LuaSkills/luaskills-sdk-typescript)
+  - TypeScript / Node.js 高层 SDK，封装 JSON FFI、runtime asset 安装、root helper、authority 与 provider callback
+- [`luaskills-sdk-python`](https://github.com/LuaSkills/luaskills-sdk-python)
+  - Python 高层 SDK，封装 ctypes JSON FFI、runtime asset 安装、root helper、authority 与 provider callback
+- [`luaskills-sdk-go`](https://github.com/LuaSkills/luaskills-sdk-go)
+  - Go 高层 SDK，封装 cgo JSON FFI、runtime manifest helper 与 authority-aware 管理入口
 - [`vulcan-mcp`](https://github.com/OpenVulcan/vulcan-mcp)
   - MCP 宿主与协议适配层
 

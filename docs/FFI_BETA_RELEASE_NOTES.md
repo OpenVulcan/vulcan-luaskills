@@ -122,9 +122,9 @@
   - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
   - [examples/ffi/typescript/query_demo.ts](../examples/ffi/typescript/query_demo.ts)
 - SDK 接入入口：
-  - [../sdk/typescript/README.md](../sdk/typescript/README.md)
-  - [../sdk/python/README.md](../sdk/python/README.md)
-  - [../sdk/go/README.md](../sdk/go/README.md)
+  - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript)
+  - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python)
+  - [luaskills-sdk-go](https://github.com/LuaSkills/luaskills-sdk-go)
   - pip 安装后可运行 `python -m luaskills.examples.provider_callback`
 
 ## 8. 发布给社区时建议怎么表述

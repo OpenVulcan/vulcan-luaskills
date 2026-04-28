@@ -22,12 +22,12 @@
   - 优先接标准 C ABI
 - 如果宿主是 Python / Node.js / TypeScript / 动态脚本环境：
   - 优先接公共 `_json` FFI
-  - TypeScript / Node.js 优先使用 [sdk/typescript](../sdk/typescript) 的 `@luaskills/sdk`，其中已经封装 JSON provider callback 注册与清理
+  - TypeScript / Node.js 优先使用 [`luaskills-sdk-typescript`](https://github.com/LuaSkills/luaskills-sdk-typescript) 的 `@luaskills/sdk`，其中已经封装 JSON provider callback 注册与清理
 - 如果宿主是 Python：
-  - 优先使用 [sdk/python](../sdk/python) 的 `luaskills-sdk`，其中已经封装 JSON provider callback 注册与清理
+  - 优先使用 [`luaskills-sdk-python`](https://github.com/LuaSkills/luaskills-sdk-python) 的 `luaskills-sdk`，其中已经封装 JSON provider callback 注册与清理
 - 如果宿主是 Go：
   - 可直接接标准 C ABI
-  - 也可使用 [sdk/go](../sdk/go) 的 cgo JSON FFI SDK；该路径需要 `CGO_ENABLED=1`、C 编译器、链接库搜索路径与运行时动态库路径
+  - 也可使用 [`luaskills-sdk-go`](https://github.com/LuaSkills/luaskills-sdk-go) 的 cgo JSON FFI SDK；该路径需要 `CGO_ENABLED=1`、C 编译器、链接库搜索路径与运行时动态库路径
   - 若需要 provider callback，需要宿主工程自行实现受控 cgo callback bridge，SDK 会通过显式错误提示这条边界
 - 如果宿主需要“稳定主链 + 快速调试链”：
   - 可以混合使用
@@ -191,10 +191,10 @@ ROOT -> PROJECT -> USER
 - 动态安装烟测：
   - [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
 - 宿主 provider 接管：
-  - [sdk/typescript/examples/provider-callback.mjs](../sdk/typescript/examples/provider-callback.mjs)
-  - [sdk/python/examples/provider_callback.py](../sdk/python/examples/provider_callback.py)
+  - [TypeScript SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-typescript/blob/main/examples/provider-callback.mjs)
+  - [Python SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-python/blob/main/examples/provider_callback.py)
   - pip 安装后可运行 `python -m luaskills.examples.provider_callback`
-  - [sdk/go/examples/provider_callback/main.go](../sdk/go/examples/provider_callback/main.go)
+  - [Go SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-go/blob/main/examples/provider_callback/main.go)
   - [examples/ffi/host_provider_demo/README.md](../examples/ffi/host_provider_demo/README.md)
 
 ## 11. 发布前最小自测

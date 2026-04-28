@@ -1476,11 +1476,11 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 - 快速接入
 - 动态值很多的场景
 
-TypeScript / Node.js 宿主建议优先使用 [sdk/typescript](../sdk/typescript) 中的 `@luaskills/sdk`。SDK 仍然走公共 `_json` FFI，但会统一处理动态库加载、`FfiBorrowedBuffer` / `FfiOwnedBuffer`、JSON 包络、engine 生命周期、authority、root helper、skill-config、lifecycle 管理入口，以及 SQLite / LanceDB 的 JSON provider callback 注册与清理。
+TypeScript / Node.js 宿主建议优先使用独立仓库 [`luaskills-sdk-typescript`](https://github.com/LuaSkills/luaskills-sdk-typescript) 中的 `@luaskills/sdk`。SDK 仍然走公共 `_json` FFI，但会统一处理动态库加载、`FfiBorrowedBuffer` / `FfiOwnedBuffer`、JSON 包络、engine 生命周期、authority、root helper、skill-config、lifecycle 管理入口，以及 SQLite / LanceDB 的 JSON provider callback 注册与清理。
 
-Python 宿主建议优先使用 [sdk/python](../sdk/python) 中的 `luaskills-sdk`。SDK 仍然走公共 `_json` FFI，但会统一处理 `ctypes` 动态库加载、buffer 释放、JSON 包络、authority、root helper、skill-config、lifecycle 管理入口，以及 SQLite / LanceDB 的 JSON provider callback 注册与清理。
+Python 宿主建议优先使用独立仓库 [`luaskills-sdk-python`](https://github.com/LuaSkills/luaskills-sdk-python) 中的 `luaskills-sdk`。SDK 仍然走公共 `_json` FFI，但会统一处理 `ctypes` 动态库加载、buffer 释放、JSON 包络、authority、root helper、skill-config、lifecycle 管理入口，以及 SQLite / LanceDB 的 JSON provider callback 注册与清理。
 
-Go 宿主如果希望用 Go module 封装主链，建议优先使用 [sdk/go](../sdk/go)。该 SDK 使用 cgo 调公共 `_json` FFI，调用方需要显式配置 `CGO_ENABLED=1`、C 编译器、链接库搜索路径与运行时动态库路径。Go 的 provider callback 当前保留为显式边界 API：需要正式使用 `host_callback + json` 时，应由宿主工程实现受控 cgo callback bridge，或先使用 TypeScript / Python SDK 承担 JSON callback。
+Go 宿主如果希望用 Go module 封装主链，建议优先使用独立仓库 [`luaskills-sdk-go`](https://github.com/LuaSkills/luaskills-sdk-go)。该 SDK 使用 cgo 调公共 `_json` FFI，调用方需要显式配置 `CGO_ENABLED=1`、C 编译器、链接库搜索路径与运行时动态库路径。Go 的 provider callback 当前保留为显式边界 API：需要正式使用 `host_callback + json` 时，应由宿主工程实现受控 cgo callback bridge，或先使用 TypeScript / Python SDK 承担 JSON callback。
 
 ### 14.3 混合使用策略
 
@@ -1508,7 +1508,7 @@ Go 宿主如果希望用 Go module 封装主链，建议优先使用 [sdk/go](..
   - Python 与 TypeScript SDK 已封装 JSON provider callback 的注册、错误转换与 buffer clone
 - Go 宿主：
   - 如果追求标准 C ABI 的最低编解码成本，可以继续直接接标准 C ABI
-  - 如果希望快速获得 engine/root/query/call/lifecycle 封装，优先使用 `sdk/go` 的公共 `_json` FFI 封装
+  - 如果希望快速获得 engine/root/query/call/lifecycle 封装，优先使用独立 Go SDK 的公共 `_json` FFI 封装
   - 如果需要 provider callback，必须额外设计宿主拥有的 cgo callback bridge，不能把进程级回调生命周期交给业务层临时函数
 - 一个宿主同时需要“稳定主链”和“动态扩展链”时：
   - 可以混合使用
@@ -1528,21 +1528,21 @@ Go 宿主如果希望用 Go module 封装主链，建议优先使用 [sdk/go](..
 - C：
   - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
 - Python：
-  - [sdk/python/README.md](../sdk/python/README.md)
-  - [sdk/python/examples/provider_callback.py](../sdk/python/examples/provider_callback.py)
+  - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python)
+  - [Python SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-python/blob/main/examples/provider_callback.py)
   - pip 安装后可运行 `python -m luaskills.examples.provider_callback`
   - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
   - [examples/ffi/python/lifecycle_demo.py](../examples/ffi/python/lifecycle_demo.py)
   - [examples/ffi/python/query_demo.py](../examples/ffi/python/query_demo.py)
 - Go：
-  - [sdk/go/README.md](../sdk/go/README.md)
-  - [sdk/go/examples/provider_callback/main.go](../sdk/go/examples/provider_callback/main.go)
+  - [luaskills-sdk-go](https://github.com/LuaSkills/luaskills-sdk-go)
+  - [Go SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-go/blob/main/examples/provider_callback/main.go)
   - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
   - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
   - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
 - TypeScript：
-  - [sdk/typescript/README.md](../sdk/typescript/README.md)
-  - [sdk/typescript/examples/provider-callback.mjs](../sdk/typescript/examples/provider-callback.mjs)
+  - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript)
+  - [TypeScript SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-typescript/blob/main/examples/provider-callback.mjs)
   - [examples/ffi/typescript/README.md](../examples/ffi/typescript/README.md)
   - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
   - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
