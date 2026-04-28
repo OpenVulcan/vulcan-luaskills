@@ -19,6 +19,14 @@ Esta capa ofrece una visión de producto y navegación; la referencia técnica p
 | Arquitectura runtime | [Runtime architecture overview](../architecture/runtime-model.md) |
 | Especificación detallada | [Documentación china](../zh-CN/index.md) |
 
+## Reglas De Nomenclatura De Skills
+
+`skill_id` y cada `entry.name` deben cumplir `^[a-z]([a-z0-9-]*[a-z0-9])?$`.
+El nombre físico del directorio del skill es la única fuente de `skill_id`; `skill.yaml` no debe declarar un campo `skill_id`.
+Las entradas canonical se exponen como `{skill_id}-{entry_name}` y pueden recibir un sufijo estable `-N` si hay conflictos.
+Para skills gestionados por GitHub, el `skill_id` derivado del repositorio o explícito, el prefijo del zip de release, el prefijo de checksums, el directorio superior del zip y el directorio instalado deben ser idénticos.
+Los assets usan `{skill_id}-v{version}-skill.zip` y `{skill_id}-v{version}-checksums.txt`; el zip debe contener `{skill_id}/skill.yaml`.
+
 ## Ecosistema
 
 - [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit): ejemplo importante y cercano a producción.

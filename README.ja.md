@@ -85,6 +85,14 @@ skill の形を学ぶ場合:
 2. [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)
 3. [Skill development overview](docs/skill-development.md)
 
+## Skill 命名規則
+
+`skill_id` と各 `entry.name` は `^[a-z]([a-z0-9-]*[a-z0-9])?$` に一致する必要があります。
+物理的な skill ディレクトリ名だけが `skill_id` の唯一のソースであり、`skill.yaml` で `skill_id` フィールドを宣言してはいけません。
+canonical entry は `{skill_id}-{entry_name}` を使い、競合時には安定した `-N` サフィックスが追加されることがあります。
+GitHub 管理 skill では、リポジトリから派生した、または明示された `skill_id`、release zip のプレフィックス、checksum のプレフィックス、zip の最上位ディレクトリ、インストール先ディレクトリがすべて同一である必要があります。
+asset は `{skill_id}-v{version}-skill.zip` と `{skill_id}-v{version}-checksums.txt` を使い、zip には `{skill_id}/skill.yaml` が含まれている必要があります。
+
 ## 信頼モデル
 
 現在の LuaSkills は skill を信頼済みコードとして扱います。

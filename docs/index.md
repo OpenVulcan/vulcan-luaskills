@@ -34,6 +34,14 @@ Read:
 | Database provider implementer | [Database provider overview](providers/database-providers.md) |
 | Runtime architecture reader | [Runtime architecture overview](architecture/runtime-model.md) |
 
+## Skill Naming Rules
+
+`skill_id` and every `entry.name` must match `^[a-z]([a-z0-9-]*[a-z0-9])?$`.
+The physical skill directory name is the only `skill_id`; `skill.yaml` must not declare a `skill_id` field.
+Canonical entries are exposed as `{skill_id}-{entry_name}` and may receive a stable `-N` suffix on conflicts.
+For GitHub-managed skills, the repository-derived or explicit `skill_id`, release zip prefix, checksum prefix, zip top-level directory, and installed directory must be identical.
+Use `{skill_id}-v{version}-skill.zip`, `{skill_id}-v{version}-checksums.txt`, and a zip containing `{skill_id}/skill.yaml`.
+
 ## English Overviews
 
 - [Why LuaSkills](product/why-luaskills.md)

@@ -34,6 +34,40 @@
 2. `vulcan.context.*`、`vulcan.deps.*`、`vulcan.sqlite.*`、`vulcan.lancedb.*` 中有一部分内容依赖宿主或当前 skill 绑定状态，不能假设始终存在有效值。
 3. 宿主可以通过 `LuaRuntimeHostOptions.ignored_skill_ids` 强制忽略某些 skill，被忽略的 skill 不会进入依赖准备、数据库绑定或 entry 注册阶段。
 
+## 2.1 Skill 命名与发布包规则
+
+`skill_id` 是 LuaSkills 运行时、生命周期管理、配置命名空间、依赖目录、数据库绑定和 canonical entry 名称共同使用的稳定主键。当前规则是“目录名即 `skill_id`”，而不是由 `skill.yaml` 里的字段声明。
+
+`skill_id` 和每个 `entry.name` 必须使用同一套标识符格式：
+
+```text
+^[a-z]([a-z0-9-]*[a-z0-9])?$
+```
+
+规则含义：
+
+- 必须以小写 ASCII 字母开头。
+- 后续只能包含小写 ASCII 字母、数字和连字符 `-`。
+- 不能以下划线、数字、大写字母或连字符结尾。
+- 合法示例：`vulcan-codekit`、`codekit2`、`vulcan-runtime-tools`。
+- 非法示例：`2codekit`、`Vulcan-codekit`、`vulcan_codekit`、`vulcan-codekit-`。
+
+Skill 包结构必须遵守：
+
+- 物理目录名就是最终 `skill_id`，例如 `skills/vulcan-codekit/` 的 `skill_id` 是 `vulcan-codekit`。
+- `skill.yaml` 不允许声明 `skill_id` 字段；如果出现该字段，运行时会拒绝加载。
+- `skill.yaml` 的 `name` 是人类可读元数据，不参与 `skill_id` 匹配。
+- 每个 `entries[].name` 是当前 skill 内部的局部入口名，也必须满足同一标识符规则。
+- 运行时对外暴露的 canonical entry 名称为 `{skill_id}-{entry_name}`；若与宿主保留名称或其他入口冲突，会追加稳定数字后缀，形成 `{skill_id}-{entry_name}-{N}`。
+
+GitHub 托管 skill 的安装与发布资产必须保持同一个 `skill_id`：
+
+- 安装请求若未显式传入 `skill_id`，运行时会从 GitHub 仓库名派生 `skill_id`，不会自动剥离 `luaskills-` 前缀。
+- release zip 文件名必须是 `{skill_id}-v{version}-skill.zip`。
+- checksum 文件名必须是 `{skill_id}-v{version}-checksums.txt`。
+- zip 内部只能包含与 `skill_id` 同名的顶层目录，并且必须包含 `{skill_id}/skill.yaml`。
+- 仓库名、release 资产名前缀、checksum 文件名前缀、zip 顶层目录和最终安装目录应全部使用同一个 `skill_id`。
+
 ## 3. 顶级能力总览
 
 | 顶级项 | 作用 | 默认可用 | 备注 |

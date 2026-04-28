@@ -85,6 +85,14 @@ Pour apprendre la forme d'un skill :
 2. [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)
 3. [Skill development overview](docs/skill-development.md)
 
+## Règles De Nommage Des Skills
+
+`skill_id` et chaque `entry.name` doivent respecter `^[a-z]([a-z0-9-]*[a-z0-9])?$`.
+Le nom physique du dossier du skill est la seule source de `skill_id`; `skill.yaml` ne doit pas déclarer de champ `skill_id`.
+Les entrées canonical utilisent `{skill_id}-{entry_name}` et peuvent recevoir un suffixe stable `-N` en cas de conflit.
+Pour les skills gérés par GitHub, le `skill_id` dérivé du dépôt ou explicite, le préfixe du zip de release, le préfixe des checksums, le dossier racine du zip et le dossier d'installation doivent être identiques.
+Les assets utilisent `{skill_id}-v{version}-skill.zip` et `{skill_id}-v{version}-checksums.txt`; le zip doit contenir `{skill_id}/skill.yaml`.
+
 ## Modèle De Confiance
 
 LuaSkills traite actuellement les skills comme du code fiable par défaut.

@@ -121,6 +121,14 @@ cargo test --lib
 2. [FFI 宿主接入检查清单](docs/zh-CN/ffi/host-checklist.md)
 3. [FFI 对接文档](docs/zh-CN/ffi/integration-guide.md)
 
+## Skill 命名规则
+
+`skill_id` 和每个 `entry.name` 必须匹配 `^[a-z]([a-z0-9-]*[a-z0-9])?$`。
+物理 skill 目录名是唯一 `skill_id` 来源，`skill.yaml` 不能声明 `skill_id` 字段。
+canonical entry 名称为 `{skill_id}-{entry_name}`，冲突时可能追加稳定的 `-N` 后缀。
+GitHub 托管 skill 的仓库派生或显式 `skill_id`、release zip 前缀、checksum 前缀、zip 顶层目录和最终安装目录必须完全一致。
+发布资产使用 `{skill_id}-v{version}-skill.zip`、`{skill_id}-v{version}-checksums.txt`，zip 内必须包含 `{skill_id}/skill.yaml`。
+
 ## 信任模型
 
 当前运行时默认把 skill 当作受信代码执行，不提供任意不可信 Lua 包的沙箱安全承诺。

@@ -143,6 +143,14 @@ For FFI hosts, begin with:
 2. [FFI host checklist](docs/zh-CN/ffi/host-checklist.md)
 3. [FFI integration guide](docs/zh-CN/ffi/integration-guide.md)
 
+## Skill Naming Rules
+
+`skill_id` and every `entry.name` must match `^[a-z]([a-z0-9-]*[a-z0-9])?$`.
+The physical skill directory name is the only `skill_id`; `skill.yaml` must not declare a `skill_id` field.
+Canonical entries use `{skill_id}-{entry_name}` and may receive a stable `-N` suffix on conflicts.
+For GitHub-managed skills, the repository-derived or explicit `skill_id`, release zip prefix, checksum prefix, zip top-level directory, and final installed directory must be identical.
+Use `{skill_id}-v{version}-skill.zip`, `{skill_id}-v{version}-checksums.txt`, and a zip containing `{skill_id}/skill.yaml`.
+
 ## Trust Model
 
 LuaSkills currently treats skills as trusted code by default.

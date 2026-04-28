@@ -38,6 +38,10 @@
 
 Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和 `vulcan.deps.*` 暴露的协议路径，不应该反推宿主物理目录结构。
 
+### Skill 命名规则
+
+`skill_id` 和每个 `entry.name` 都必须匹配 `^[a-z]([a-z0-9-]*[a-z0-9])?$`。物理 skill 目录名是唯一 `skill_id` 来源，`skill.yaml` 不能声明 `skill_id` 字段。canonical entry 名称为 `{skill_id}-{entry_name}`，冲突时可能追加稳定的 `-N` 后缀。GitHub 托管 skill 的仓库派生或显式 `skill_id`、release zip 前缀、checksum 前缀、zip 顶层目录和最终安装目录必须完全一致；发布资产使用 `{skill_id}-v{version}-skill.zip`、`{skill_id}-v{version}-checksums.txt`，zip 内必须包含 `{skill_id}/skill.yaml`。
+
 ## 宿主与 FFI 接入
 
 - [FFI Beta 发布说明](ffi/beta-release-notes.md)

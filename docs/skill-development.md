@@ -17,6 +17,22 @@ A typical skill repository contains:
 Use [demo-skill](https://github.com/LuaSkills/demo-skill) to learn the minimal package shape.
 Use [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit) to study a real, production-oriented skill.
 
+## Naming Rules
+
+`skill_id` is the stable identifier used by the runtime, lifecycle operations, config namespaces, dependency folders, database bindings, and canonical entry names. The physical skill directory name is the only `skill_id`; `skill.yaml` must not declare a `skill_id` field.
+
+`skill_id` and every `entry.name` must match:
+
+```text
+^[a-z]([a-z0-9-]*[a-z0-9])?$
+```
+
+Use lowercase ASCII letters, digits, and `-`; start with a lowercase letter; do not end with `-`. Valid examples include `vulcan-codekit`, `codekit2`, and `vulcan-runtime-tools`. Invalid examples include `2codekit`, `Vulcan-codekit`, `vulcan_codekit`, and `vulcan-codekit-`.
+
+Runtime canonical entry names use `{skill_id}-{entry_name}` and may become `{skill_id}-{entry_name}-{N}` when a stable collision suffix is required.
+
+For GitHub-managed skills, the repository-derived or explicit `skill_id`, release zip prefix, checksum prefix, zip top-level directory, and final installed directory must all use the same value. Release assets use `{skill_id}-v{version}-skill.zip`, checksum files use `{skill_id}-v{version}-checksums.txt`, and the zip must contain `{skill_id}/skill.yaml`.
+
 ## Runtime APIs
 
 LuaSkills injects standard namespaces into Lua:
