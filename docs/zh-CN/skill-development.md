@@ -263,7 +263,7 @@ ROOT -> PROJECT -> USER
 
 其中 `labels` 只应包含 `PROJECT` / `USER` 中当前实际存在的层级，不应包含 `ROOT`。如果当前没有项目上下文，运行时只返回 `USER`；如果只有 `ROOT`，则返回空列表且顶层 `writable=false`。bridge 关闭时仍可发现层级，但顶层 `writable` 与每个 layer 的 `writable` 都必须为 `false`。如果后续安装、更新、卸载输入允许指定层级，也只能使用 `layers()` 返回的标签。
 
-完整层级与管理边界见 [SKILL_ROOT_LAYER_POLICY.md](SKILL_ROOT_LAYER_POLICY.md)。
+完整层级与管理边界见 [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md)。
 
 注意事项：
 
@@ -620,7 +620,7 @@ local ffi_root = vulcan.deps.ffi_path
 - 把 `info()` / `status()` 当成探测入口。
 - 业务调用前先判断 `enabled`，避免把“能力未绑定”误当成查询失败。
 - 具体输入输出字段请结合宿主的 SQLite provider 契约与：
-  - [HOST_DATABASE_PROVIDER_GUIDE.md](HOST_DATABASE_PROVIDER_GUIDE.md)
+  - [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md)
 
 ## 15. `vulcan.lancedb.*`
 
@@ -657,7 +657,7 @@ local ffi_root = vulcan.deps.ffi_path
 
 具体输入输出字段请结合宿主的 LanceDB provider 契约与：
 
-- [HOST_DATABASE_PROVIDER_GUIDE.md](HOST_DATABASE_PROVIDER_GUIDE.md)
+- [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md)
 
 ## 16. 常见开发建议
 
@@ -710,10 +710,10 @@ return {
 如果你主要是写 skill，建议按下面顺序阅读：
 
 1. 本文档：了解当前 `vulcan.*` 真实能力面
-2. `README.md`：理解运行时定位与宿主边界
-3. [HOST_DATABASE_PROVIDER_GUIDE.md](HOST_DATABASE_PROVIDER_GUIDE.md)：了解 SQLite / LanceDB 与宿主的对接契约
+2. [README.zh-CN.md](../../README.zh-CN.md)：理解运行时定位与宿主边界
+3. [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md)：了解 SQLite / LanceDB 与宿主的对接契约
 
 如果后续你要做宿主集成而不是写 skill，请改看：
 
-- [FFI_INTEGRATION_GUIDE.md](FFI_INTEGRATION_GUIDE.md)
-- [FFI_HOST_CHECKLIST.md](FFI_HOST_CHECKLIST.md)
+- [FFI 对接文档](ffi/integration-guide.md)
+- [FFI 宿主接入检查清单](ffi/host-checklist.md)

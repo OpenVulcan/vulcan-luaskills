@@ -217,7 +217,7 @@ lib 会一并提供稳定绑定上下文：
 
 头文件：
 
-- [include/luaskills_ffi.h](../include/luaskills_ffi.h)
+- [include/luaskills_ffi.h](../../../include/luaskills_ffi.h)
 
 回调签名：
 
@@ -236,7 +236,7 @@ lib 会一并提供稳定绑定上下文：
 
 头文件：
 
-- [include/luaskills_ffi.h](../include/luaskills_ffi.h)
+- [include/luaskills_ffi.h](../../../include/luaskills_ffi.h)
 
 回调签名：
 
@@ -303,7 +303,7 @@ lib 会一并提供稳定绑定上下文：
 
 头文件：
 
-- [include/luaskills_json_ffi.h](../include/luaskills_json_ffi.h)
+- [include/luaskills_json_ffi.h](../../../include/luaskills_json_ffi.h)
 
 ### LanceDB
 
@@ -313,7 +313,7 @@ lib 会一并提供稳定绑定上下文：
 
 头文件：
 
-- [include/luaskills_json_ffi.h](../include/luaskills_json_ffi.h)
+- [include/luaskills_json_ffi.h](../../../include/luaskills_json_ffi.h)
 
 ### JSON 回调规则
 
@@ -446,7 +446,7 @@ D:/project-a/.host-dbs/sqlite/PROJECT-vulcan-ai-memory.db
 
 当前仓库已经提供一个独立演示：
 
-- [../examples/ffi/host_provider_demo/README.md](../examples/ffi/host_provider_demo/README.md)
+- [../examples/ffi/host_provider_demo/README.md](../../../examples/ffi/host_provider_demo/README.md)
 
 这个 demo 的特点是：
 

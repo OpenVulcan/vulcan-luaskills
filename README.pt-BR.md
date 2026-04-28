@@ -1,0 +1,97 @@
+# LuaSkills
+
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Português (BR)](README.pt-BR.md)
+
+[Documentação](docs/pt-BR/index.md) | [Template de skill](https://github.com/LuaSkills/demo-skill) | [Exemplo CodeKit](https://github.com/LuaSkills/vulcan-codekit)
+
+LuaSkills é um runtime em Rust para carregar, executar e gerenciar skills baseadas em Lua.
+Ele permite que aplicações host adicionem ferramentas scriptáveis, help estruturado, APIs de runtime, caminhos de dependências e integração com SQLite / LanceDB sem reconstruir uma runtime de plugins.
+
+Em uma frase: LuaSkills executa skills; o host decide como transformá-las em funcionalidades de produto.
+
+## O Que É
+
+LuaSkills é a camada central de runtime do ecossistema LuaSkills.
+Ele foi criado para aplicações que precisam de um sistema de skills controlado, não apenas scripts soltos.
+
+Ele fornece:
+
+- Descoberta, carregamento, listagem e chamada de skills.
+- Strict help trees que o host pode renderizar como documentação, comandos, tools ou UI.
+- Injeção de APIs padrão `vulcan.*` e `vulcan.runtime.*`.
+- Contexto de runtime para request atual, diretórios de skill, recursos, dependências e metadados do cliente.
+- Integração opcional com SQLite e LanceDB para skills com estado ou memória.
+- API Rust, C ABI padrão e FFI pública `_json`.
+- Caminhos de integração SDK para TypeScript, Python e Go.
+
+## O Que Não É
+
+LuaSkills não controla toda a superfície do produto.
+
+Não é:
+
+- Um MCP server por si só.
+- Um leitor de configuração do host.
+- Uma calculadora de budget do cliente.
+- Um renderizador de UI de produto.
+- Uma fronteira sandbox para código Lua não confiável.
+
+Permissões, autenticação, UI, budgets, armazenamento e exposição ao usuário continuam sob controle do host.
+
+## Ecossistema
+
+- [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit): exemplo importante e próximo de produção, com navegação de código, inspeção AST, busca estrutural, navegação Markdown e workflows de patch.
+- [demo-skill](https://github.com/LuaSkills/demo-skill): template mínimo para aprender `skill.yaml`, runtime entries, arquivos help e layout de repositório.
+- [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript): SDK para TypeScript / Node.js.
+- [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python): SDK para Python.
+- [luaskills-sdk-go](https://github.com/LuaSkills/luaskills-sdk-go): SDK para Go.
+
+## Documentação
+
+- [Entrada em português do Brasil](docs/pt-BR/index.md)
+- [Por Que LuaSkills](docs/pt-BR/product/why-luaskills.md)
+- [Entrada em inglês](docs/index.md)
+- [Documentação técnica detalhada em chinês](docs/zh-CN/index.md)
+
+## Caminhos De Integração
+
+| Tipo de host | Caminho recomendado |
+| --- | --- |
+| Rust | Usar diretamente o crate Rust. |
+| C / C++ / host de baixo nível | Usar o C ABI padrão. |
+| TypeScript / Node.js | Preferir `luaskills-sdk-typescript`. |
+| Python | Preferir `luaskills-sdk-python`. |
+| Go | Escolher `luaskills-sdk-go` ou C ABI padrão conforme callbacks e implantação. |
+
+## Início Rápido
+
+Host Rust:
+
+```toml
+[dependencies]
+luaskills = "0.2"
+```
+
+Comandos de desenvolvimento:
+
+```bash
+cargo check
+cargo test --lib
+```
+
+Para aprender a forma de uma skill:
+
+1. [demo-skill](https://github.com/LuaSkills/demo-skill)
+2. [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)
+3. [Skill development overview](docs/skill-development.md)
+
+## Modelo De Confiança
+
+Atualmente LuaSkills trata skills como código confiável por padrão.
+Ele não oferece uma promessa de sandbox para pacotes Lua arbitrários e não confiáveis.
+
+O host deve decidir roots, skills instaláveis, ações de gerenciamento, modo de database provider e authority de cada operação.
+
+## License
+
+MIT

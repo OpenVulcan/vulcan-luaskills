@@ -7,9 +7,9 @@
 它不是完整 API 参考，也不是完整设计文档。  
 如果您需要更细的参数、内存和接口说明，请继续阅读：
 
-- [FFI_INTEGRATION_GUIDE.md](FFI_INTEGRATION_GUIDE.md)
-- [FFI_HOST_CHECKLIST.md](FFI_HOST_CHECKLIST.md)
-- [HOST_DATABASE_PROVIDER_GUIDE.md](HOST_DATABASE_PROVIDER_GUIDE.md)
+- [FFI 对接文档](integration-guide.md)
+- [FFI 宿主接入检查清单](host-checklist.md)
+- [宿主数据库 Provider 对接说明](../providers/host-database-provider-guide.md)
 
 ## 2. 当前版本应如何理解
 
@@ -49,8 +49,8 @@
 - 标准 C ABI 的 C 示例当前覆盖最短主调用链，用于演示底层宿主接法
 - TypeScript / Python / Go SDK 已补齐公共 `_json` FFI 主能力面，其中 TypeScript / Python SDK 已封装 JSON provider callback 注册与清理
 - 外部宿主可以直接使用：
-  - [FFI_HOST_CHECKLIST.md](FFI_HOST_CHECKLIST.md)
-  - [examples/ffi/standard_runtime/README.md](../examples/ffi/standard_runtime/README.md)
+  - [FFI 宿主接入检查清单](host-checklist.md)
+  - [examples/ffi/standard_runtime/README.md](../../../examples/ffi/standard_runtime/README.md)
   快速完成 beta 联调前自检
 
 ## 4. 当前 beta 发布边界
@@ -109,18 +109,18 @@
 如果宿主需要最短路径上手，直接按下面选：
 
 - 标准 C ABI 最短闭环：
-  - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
-  - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
-  - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
-  - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
+  - [examples/ffi/c/demo.c](../../../examples/ffi/c/demo.c)
+  - [examples/ffi/python/demo.py](../../../examples/ffi/python/demo.py)
+  - [examples/ffi/go/demo.go](../../../examples/ffi/go/demo.go)
+  - [examples/ffi/typescript/demo.ts](../../../examples/ffi/typescript/demo.ts)
 - 生命周期切换：
-  - [examples/ffi/python/lifecycle_demo.py](../examples/ffi/python/lifecycle_demo.py)
-  - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
-  - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
+  - [examples/ffi/python/lifecycle_demo.py](../../../examples/ffi/python/lifecycle_demo.py)
+  - [examples/ffi/go/lifecycle_demo/main.go](../../../examples/ffi/go/lifecycle_demo/main.go)
+  - [examples/ffi/typescript/lifecycle_demo.ts](../../../examples/ffi/typescript/lifecycle_demo.ts)
 - 查询辅助接口：
-  - [examples/ffi/python/query_demo.py](../examples/ffi/python/query_demo.py)
-  - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
-  - [examples/ffi/typescript/query_demo.ts](../examples/ffi/typescript/query_demo.ts)
+  - [examples/ffi/python/query_demo.py](../../../examples/ffi/python/query_demo.py)
+  - [examples/ffi/go/query_demo/main.go](../../../examples/ffi/go/query_demo/main.go)
+  - [examples/ffi/typescript/query_demo.ts](../../../examples/ffi/typescript/query_demo.ts)
 - SDK 接入入口：
   - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript)
   - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python)

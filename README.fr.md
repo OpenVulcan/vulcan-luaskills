@@ -1,0 +1,97 @@
+# LuaSkills
+
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Português (BR)](README.pt-BR.md)
+
+[Documentation](docs/fr/index.md) | [Template de skill](https://github.com/LuaSkills/demo-skill) | [Exemple CodeKit](https://github.com/LuaSkills/vulcan-codekit)
+
+LuaSkills est un runtime écrit en Rust pour charger, exécuter et gérer des skills écrits en Lua.
+Il permet à une application hôte d'ajouter des outils scriptables, une aide structurée, des APIs de runtime, des chemins de dépendances et une intégration SQLite / LanceDB sans reconstruire un runtime de plugins.
+
+En une phrase : LuaSkills exécute les skills ; l'hôte décide comment les exposer comme fonctionnalités produit.
+
+## Ce Que C'est
+
+LuaSkills est la couche runtime centrale de l'écosystème LuaSkills.
+Il est conçu pour les applications qui veulent un système de skills contrôlé plutôt que des scripts isolés.
+
+Il fournit :
+
+- Découverte, chargement, énumération et invocation de skills.
+- Strict help trees que l'hôte peut afficher comme documentation, palette de commandes, tools ou UI.
+- Injection des APIs standard `vulcan.*` et `vulcan.runtime.*`.
+- Contexte de runtime pour la requête courante, les dossiers de skill, les ressources, les dépendances et les métadonnées client.
+- Intégration optionnelle SQLite et LanceDB pour des skills avec état ou mémoire.
+- API Rust, C ABI standard et FFI publique `_json`.
+- Chemins d'intégration SDK pour TypeScript, Python et Go.
+
+## Ce Que Ce N'est Pas
+
+LuaSkills ne possède pas toute la surface produit.
+
+Ce n'est pas :
+
+- Un MCP server autonome.
+- Un lecteur de fichiers de configuration hôte.
+- Un calculateur de budget client.
+- Un moteur de rendu UI produit.
+- Une frontière sandbox pour du code Lua non fiable.
+
+L'hôte garde le contrôle des permissions, de l'authentification, de l'UI, des budgets, du stockage et de l'exposition utilisateur.
+
+## Écosystème
+
+- [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit) : exemple LuaSkills important et proche de la production, avec navigation de code, inspection AST, recherche structurée, navigation Markdown et workflows de patch.
+- [demo-skill](https://github.com/LuaSkills/demo-skill) : template minimal pour apprendre `skill.yaml`, les runtime entries, les fichiers help et la structure d'un dépôt.
+- [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript) : SDK TypeScript / Node.js.
+- [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python) : SDK Python.
+- [luaskills-sdk-go](https://github.com/LuaSkills/luaskills-sdk-go) : SDK Go.
+
+## Documentation
+
+- [Entrée française](docs/fr/index.md)
+- [Pourquoi LuaSkills](docs/fr/product/why-luaskills.md)
+- [Entrée anglaise](docs/index.md)
+- [Documentation technique détaillée en chinois](docs/zh-CN/index.md)
+
+## Chemins D'intégration
+
+| Type d'hôte | Chemin recommandé |
+| --- | --- |
+| Rust | Utiliser directement le crate Rust. |
+| C / C++ / hôte bas niveau | Utiliser le C ABI standard. |
+| TypeScript / Node.js | Préférer `luaskills-sdk-typescript`. |
+| Python | Préférer `luaskills-sdk-python`. |
+| Go | Choisir `luaskills-sdk-go` ou le C ABI standard selon les callbacks et le déploiement. |
+
+## Démarrage Rapide
+
+Hôte Rust :
+
+```toml
+[dependencies]
+luaskills = "0.2"
+```
+
+Commandes de développement :
+
+```bash
+cargo check
+cargo test --lib
+```
+
+Pour apprendre la forme d'un skill :
+
+1. [demo-skill](https://github.com/LuaSkills/demo-skill)
+2. [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)
+3. [Skill development overview](docs/skill-development.md)
+
+## Modèle De Confiance
+
+LuaSkills traite actuellement les skills comme du code fiable par défaut.
+Il ne fournit pas de promesse sandbox pour des packages Lua arbitraires et non fiables.
+
+L'hôte doit décider des roots, des skills installables, des actions de gestion, du mode database provider et de l'authority de chaque opération.
+
+## License
+
+MIT

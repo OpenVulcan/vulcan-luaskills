@@ -1,0 +1,69 @@
+# LuaSkills 中文文档
+
+[English](../index.md) | [简体中文](index.md) | [日本語](../ja/index.md) | [한국어](../ko/index.md) | [Español](../es/index.md) | [Français](../fr/index.md) | [Deutsch](../de/index.md) | [Português (BR)](../pt-BR/index.md)
+
+[English README](../../README.md) | [中文首页](../../README.zh-CN.md)
+
+这里是 LuaSkills 的中文技术文档入口。
+根目录 README 已调整为英文产品首页，中文读者可以从本页进入完整技术文档。
+
+## 推荐阅读路径
+
+| 读者类型 | 推荐入口 |
+| --- | --- |
+| 第一次了解项目 | [中文首页](../../README.zh-CN.md) |
+| 想了解产品定位与能力边界 | [为什么是 LuaSkills](product/why-luaskills.md) |
+| Skill 作者 | [Lua Skill 开发手册](skill-development.md) |
+| 第一次做 FFI 联调 | [FFI 宿主接入检查清单](ffi/host-checklist.md) |
+| 需要完整 FFI 参数、内存和生命周期规则 | [FFI 对接文档](ffi/integration-guide.md) |
+| 需要了解当前 beta 发布边界 | [FFI Beta 发布说明](ffi/beta-release-notes.md) |
+| 需要接管 SQLite / LanceDB | [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md) |
+| 需要理解 ROOT / PROJECT / USER | [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md) |
+| 需要理解 Skill 配置能力 | [Skill 配置系统设计稿](architecture/skill-config-system-design.md) |
+
+## 产品与生态
+
+- [为什么是 LuaSkills](product/why-luaskills.md)
+- [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)：重要的真实 LuaSkills 示例。
+- [demo-skill](https://github.com/LuaSkills/demo-skill)：标准 skill 仓库模板。
+- [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript)：TypeScript / Node.js SDK。
+- [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python)：Python SDK。
+- [luaskills-sdk-go](https://github.com/LuaSkills/luaskills-sdk-go)：Go SDK。
+
+## Skill 开发
+
+- [Lua Skill 开发手册](skill-development.md)
+- [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md)
+- [Skill 配置系统设计稿](architecture/skill-config-system-design.md)
+
+Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和 `vulcan.deps.*` 暴露的协议路径，不应该反推宿主物理目录结构。
+
+## 宿主与 FFI 接入
+
+- [FFI Beta 发布说明](ffi/beta-release-notes.md)
+- [FFI 宿主接入检查清单](ffi/host-checklist.md)
+- [FFI 对接文档](ffi/integration-guide.md)
+- [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md)
+
+第一次接入时建议先跑通 `version -> engine_new -> load_from_roots -> list_entries -> call_skill -> run_lua -> engine_free`，再继续接 lifecycle、query helper、install/update/uninstall、provider callback 或 `space_controller`。
+
+## 架构与设计
+
+- [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md)
+- [Skill 配置系统设计稿](architecture/skill-config-system-design.md)
+
+## 历史与归档
+
+- [FFI 收敛改造草案](archive/ffi-refactor-draft.md)
+
+归档文档只保留历史设计背景。实际接入请优先阅读当前 FFI、Provider 与 Skill 文档。
+
+## 本地示例
+
+- [C FFI Demo](../../examples/ffi/c/README.md)
+- [TypeScript 标准 FFI 示例](../../examples/ffi/typescript/README.md)
+- [Standard Runtime FFI Fixture](../../examples/ffi/standard_runtime/README.md)
+- [FFI Demo Runtime](../../examples/ffi/demo_runtime/README.md)
+- [Host Callback Demo](../../examples/ffi/host_provider_demo/README.md)
+- [LuaSkills Rust Demo](../../examples/demo-rust/README.md)
+- [LuaSkills FFI Demo](../../examples/demo-ffi/README.md)

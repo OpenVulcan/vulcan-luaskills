@@ -1,6 +1,6 @@
 # luaskills FFI 收敛改造草案
 
-> 状态说明：本文是历史改造草案，主体设计已经进入当前 `v0.2.x / beta` FFI 与 SDK 文档。最新接入说明请优先阅读 [FFI_INTEGRATION_GUIDE.md](FFI_INTEGRATION_GUIDE.md) 与 [FFI_HOST_CHECKLIST.md](FFI_HOST_CHECKLIST.md)。
+> 状态说明：本文是历史改造草案，主体设计已经进入当前 `v0.2.x / beta` FFI 与 SDK 文档。最新接入说明请优先阅读 [FFI 对接文档](../ffi/integration-guide.md) 与 [FFI 宿主接入检查清单](../ffi/host-checklist.md)。
 
 ## 1. 文档定位
 

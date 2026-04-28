@@ -9,8 +9,8 @@
 
 如果您需要完整背景说明，请继续阅读：
 
-- [FFI_INTEGRATION_GUIDE.md](FFI_INTEGRATION_GUIDE.md)
-- [HOST_DATABASE_PROVIDER_GUIDE.md](HOST_DATABASE_PROVIDER_GUIDE.md)
+- [FFI 对接文档](integration-guide.md)
+- [宿主数据库 Provider 对接说明](../providers/host-database-provider-guide.md)
 
 ## 2. 先选接入面
 
@@ -174,28 +174,28 @@ ROOT -> PROJECT -> USER
 按目标直接选示例：
 
 - 最短标准 ABI 闭环：
-  - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
-  - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
-  - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
-  - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
+  - [examples/ffi/c/demo.c](../../../examples/ffi/c/demo.c)
+  - [examples/ffi/python/demo.py](../../../examples/ffi/python/demo.py)
+  - [examples/ffi/go/demo.go](../../../examples/ffi/go/demo.go)
+  - [examples/ffi/typescript/demo.ts](../../../examples/ffi/typescript/demo.ts)
 - 生命周期切换：
-  - [examples/ffi/python/lifecycle_demo.py](../examples/ffi/python/lifecycle_demo.py)
-  - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
-  - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
+  - [examples/ffi/python/lifecycle_demo.py](../../../examples/ffi/python/lifecycle_demo.py)
+  - [examples/ffi/go/lifecycle_demo/main.go](../../../examples/ffi/go/lifecycle_demo/main.go)
+  - [examples/ffi/typescript/lifecycle_demo.ts](../../../examples/ffi/typescript/lifecycle_demo.ts)
 - 查询辅助接口：
-  - [examples/ffi/python/query_demo.py](../examples/ffi/python/query_demo.py)
-  - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
-  - [examples/ffi/typescript/query_demo.ts](../examples/ffi/typescript/query_demo.ts)
+  - [examples/ffi/python/query_demo.py](../../../examples/ffi/python/query_demo.py)
+  - [examples/ffi/go/query_demo/main.go](../../../examples/ffi/go/query_demo/main.go)
+  - [examples/ffi/typescript/query_demo.ts](../../../examples/ffi/typescript/query_demo.ts)
 - 标准 ABI 共用夹具：
-  - [examples/ffi/standard_runtime/README.md](../examples/ffi/standard_runtime/README.md)
+  - [examples/ffi/standard_runtime/README.md](../../../examples/ffi/standard_runtime/README.md)
 - 动态安装烟测：
-  - [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
+  - [examples/ffi/demo_runtime/README.md](../../../examples/ffi/demo_runtime/README.md)
 - 宿主 provider 接管：
   - [TypeScript SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-typescript/blob/main/examples/provider-callback.mjs)
   - [Python SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-python/blob/main/examples/provider_callback.py)
   - pip 安装后可运行 `python -m luaskills.examples.provider_callback`
   - [Go SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-go/blob/main/examples/provider_callback/main.go)
-  - [examples/ffi/host_provider_demo/README.md](../examples/ffi/host_provider_demo/README.md)
+  - [examples/ffi/host_provider_demo/README.md](../../../examples/ffi/host_provider_demo/README.md)
 
 ## 11. 发布前最小自测
 

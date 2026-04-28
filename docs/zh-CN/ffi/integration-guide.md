@@ -6,8 +6,8 @@
 
 如果您希望先按最短路径做宿主自检，而不是从头读完整文档，请先看：
 
-- [FFI_BETA_RELEASE_NOTES.md](FFI_BETA_RELEASE_NOTES.md)
-- [FFI_HOST_CHECKLIST.md](FFI_HOST_CHECKLIST.md)
+- [FFI Beta 发布说明](beta-release-notes.md)
+- [FFI 宿主接入检查清单](host-checklist.md)
 
 本文档覆盖当前对外公开的两层 FFI：
 
@@ -108,7 +108,7 @@
 
 数据库 provider 的详细对接说明见：
 
-- [HOST_DATABASE_PROVIDER_GUIDE.md](HOST_DATABASE_PROVIDER_GUIDE.md)
+- [宿主数据库 Provider 对接说明](../providers/host-database-provider-guide.md)
 
 ### 2.5 固定术语
 
@@ -119,9 +119,9 @@
 - `公共 `_json` FFI`
   - 指高层、JSON 包络、面向动态语言和快速集成的 FFI 接口层
 - `标准 C ABI 头文件`
-  - 指 [include/luaskills_ffi.h](../include/luaskills_ffi.h)
+  - 指 [include/luaskills_ffi.h](../../../include/luaskills_ffi.h)
 - `公共 `_json` FFI 头文件`
-  - 指 [include/luaskills_json_ffi.h](../include/luaskills_json_ffi.h)
+  - 指 [include/luaskills_json_ffi.h](../../../include/luaskills_json_ffi.h)
 
 如果正文里为了简化阅读出现：
 
@@ -141,21 +141,21 @@
 核心文件：
 
 - 标准 C ABI 导出：
-  - [src/ffi_standard.rs](../src/ffi_standard.rs)
+  - [src/ffi_standard.rs](../../../src/ffi_standard.rs)
 - 公共 JSON FFI 导出：
-  - [src/ffi.rs](../src/ffi.rs)
+  - [src/ffi.rs](../../../src/ffi.rs)
 - 标准头文件：
-  - [include/luaskills_ffi.h](../include/luaskills_ffi.h)
+  - [include/luaskills_ffi.h](../../../include/luaskills_ffi.h)
 - JSON 头文件：
-  - [include/luaskills_json_ffi.h](../include/luaskills_json_ffi.h)
+  - [include/luaskills_json_ffi.h](../../../include/luaskills_json_ffi.h)
   - 该头文件会复用标准头文件中的共享结构体与释放辅助函数
 - 示例：
-  - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
-  - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
-  - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
-  - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
-  - [examples/ffi/c/README.md](../examples/ffi/c/README.md)
-  - [examples/ffi/standard_runtime/README.md](../examples/ffi/standard_runtime/README.md)
+  - [examples/ffi/c/demo.c](../../../examples/ffi/c/demo.c)
+  - [examples/ffi/python/demo.py](../../../examples/ffi/python/demo.py)
+  - [examples/ffi/go/demo.go](../../../examples/ffi/go/demo.go)
+  - [examples/ffi/typescript/demo.ts](../../../examples/ffi/typescript/demo.ts)
+  - [examples/ffi/c/README.md](../../../examples/ffi/c/README.md)
+  - [examples/ffi/standard_runtime/README.md](../../../examples/ffi/standard_runtime/README.md)
 
 当前 FFI 版本字符串统一派生自 crate 包版本：
 
@@ -1456,7 +1456,7 @@ FFI 宿主接入时，推荐优先使用 `RuntimeSkillRoot[]`。
 
 如果宿主内部存在组织、工作区、模板等更复杂来源，建议在宿主侧折叠成单个对外 `PROJECT` 标签，而不是向用户暴露任意多层 root 链。
 
-完整策略见 [SKILL_ROOT_LAYER_POLICY.md](SKILL_ROOT_LAYER_POLICY.md)。
+完整策略见 [Skill Root 层级与管理边界](../architecture/skill-root-layer-policy.md)。
 
 ## 14. 标准 C ABI 与公共 `_json` FFI 的选择建议
 
@@ -1526,27 +1526,27 @@ Go 宿主如果希望用 Go module 封装主链，建议优先使用独立仓库
 示例位置：
 
 - C：
-  - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
+  - [examples/ffi/c/demo.c](../../../examples/ffi/c/demo.c)
 - Python：
   - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python)
   - [Python SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-python/blob/main/examples/provider_callback.py)
   - pip 安装后可运行 `python -m luaskills.examples.provider_callback`
-  - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
-  - [examples/ffi/python/lifecycle_demo.py](../examples/ffi/python/lifecycle_demo.py)
-  - [examples/ffi/python/query_demo.py](../examples/ffi/python/query_demo.py)
+  - [examples/ffi/python/demo.py](../../../examples/ffi/python/demo.py)
+  - [examples/ffi/python/lifecycle_demo.py](../../../examples/ffi/python/lifecycle_demo.py)
+  - [examples/ffi/python/query_demo.py](../../../examples/ffi/python/query_demo.py)
 - Go：
   - [luaskills-sdk-go](https://github.com/LuaSkills/luaskills-sdk-go)
   - [Go SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-go/blob/main/examples/provider_callback/main.go)
-  - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
-  - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
-  - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
+  - [examples/ffi/go/demo.go](../../../examples/ffi/go/demo.go)
+  - [examples/ffi/go/lifecycle_demo/main.go](../../../examples/ffi/go/lifecycle_demo/main.go)
+  - [examples/ffi/go/query_demo/main.go](../../../examples/ffi/go/query_demo/main.go)
 - TypeScript：
   - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript)
   - [TypeScript SDK provider callback example](https://github.com/LuaSkills/luaskills-sdk-typescript/blob/main/examples/provider-callback.mjs)
-  - [examples/ffi/typescript/README.md](../examples/ffi/typescript/README.md)
-  - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
-  - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
-  - [examples/ffi/typescript/query_demo.ts](../examples/ffi/typescript/query_demo.ts)
+  - [examples/ffi/typescript/README.md](../../../examples/ffi/typescript/README.md)
+  - [examples/ffi/typescript/demo.ts](../../../examples/ffi/typescript/demo.ts)
+  - [examples/ffi/typescript/lifecycle_demo.ts](../../../examples/ffi/typescript/lifecycle_demo.ts)
+  - [examples/ffi/typescript/query_demo.ts](../../../examples/ffi/typescript/query_demo.ts)
 
 当前示例主要演示：
 
@@ -1580,8 +1580,8 @@ Go 宿主如果希望用 Go module 封装主链，建议优先使用独立仓库
 
 另外还提供一个可直接运行的完整烟测目录：
 
-- [examples/ffi/standard_runtime/README.md](../examples/ffi/standard_runtime/README.md)
-- [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
+- [examples/ffi/standard_runtime/README.md](../../../examples/ffi/standard_runtime/README.md)
+- [examples/ffi/demo_runtime/README.md](../../../examples/ffi/demo_runtime/README.md)
 
 其中：
 
@@ -1605,24 +1605,24 @@ Go 宿主如果希望用 Go module 封装主链，建议优先使用独立仓库
 如果宿主只想先抓一条最短路径，请按目标直接看对应示例：
 
 - 想先理解标准 ABI 的主调用链：
-  - [examples/ffi/c/demo.c](../examples/ffi/c/demo.c)
-  - [examples/ffi/python/demo.py](../examples/ffi/python/demo.py)
-  - [examples/ffi/go/demo.go](../examples/ffi/go/demo.go)
-  - [examples/ffi/typescript/demo.ts](../examples/ffi/typescript/demo.ts)
+  - [examples/ffi/c/demo.c](../../../examples/ffi/c/demo.c)
+  - [examples/ffi/python/demo.py](../../../examples/ffi/python/demo.py)
+  - [examples/ffi/go/demo.go](../../../examples/ffi/go/demo.go)
+  - [examples/ffi/typescript/demo.ts](../../../examples/ffi/typescript/demo.ts)
 - 想看 `disable_skill / enable_skill`：
-  - [examples/ffi/python/lifecycle_demo.py](../examples/ffi/python/lifecycle_demo.py)
-  - [examples/ffi/go/lifecycle_demo/main.go](../examples/ffi/go/lifecycle_demo/main.go)
-  - [examples/ffi/typescript/lifecycle_demo.ts](../examples/ffi/typescript/lifecycle_demo.ts)
+  - [examples/ffi/python/lifecycle_demo.py](../../../examples/ffi/python/lifecycle_demo.py)
+  - [examples/ffi/go/lifecycle_demo/main.go](../../../examples/ffi/go/lifecycle_demo/main.go)
+  - [examples/ffi/typescript/lifecycle_demo.ts](../../../examples/ffi/typescript/lifecycle_demo.ts)
 - 想看 `is_skill / skill_name_for_tool / prompt_argument_completions`：
-  - [examples/ffi/python/query_demo.py](../examples/ffi/python/query_demo.py)
-  - [examples/ffi/go/query_demo/main.go](../examples/ffi/go/query_demo/main.go)
-  - [examples/ffi/typescript/query_demo.ts](../examples/ffi/typescript/query_demo.ts)
+  - [examples/ffi/python/query_demo.py](../../../examples/ffi/python/query_demo.py)
+  - [examples/ffi/go/query_demo/main.go](../../../examples/ffi/go/query_demo/main.go)
+  - [examples/ffi/typescript/query_demo.ts](../../../examples/ffi/typescript/query_demo.ts)
 - 想看标准 ABI 示例共用的最小 skill 夹具：
-  - [examples/ffi/standard_runtime/README.md](../examples/ffi/standard_runtime/README.md)
+  - [examples/ffi/standard_runtime/README.md](../../../examples/ffi/standard_runtime/README.md)
 - 想看公共 `_json` FFI 驱动的动态安装烟测：
-  - [examples/ffi/demo_runtime/README.md](../examples/ffi/demo_runtime/README.md)
+  - [examples/ffi/demo_runtime/README.md](../../../examples/ffi/demo_runtime/README.md)
 - 想看宿主接管 SQLite / LanceDB provider：
-  - [examples/ffi/host_provider_demo/README.md](../examples/ffi/host_provider_demo/README.md)
+  - [examples/ffi/host_provider_demo/README.md](../../../examples/ffi/host_provider_demo/README.md)
 
 建议阅读顺序：
 
