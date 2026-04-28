@@ -61,4 +61,5 @@ The host can render help as:
 
 - [Skill root layer policy](../zh-CN/architecture/skill-root-layer-policy.md)
 - [Skill config system design](../zh-CN/architecture/skill-config-system-design.md)
-- [Lua Skill developer manual](../zh-CN/skill-development.md)
+- [Lua Skill developer manual](../skill-development.md)
+- [Chinese Lua Skill developer manual](../zh-CN/skill-development.md)

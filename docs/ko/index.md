@@ -5,7 +5,7 @@
 [한국어 README](../../README.ko.md) | [영어 문서](../index.md) | [중국어 상세 기술 문서](../zh-CN/index.md)
 
 이 페이지는 LuaSkills의 한국어 문서 입구입니다.
-이 언어에서는 제품 개요와 탐색 경로를 제공하며, 상세 API 참조는 현재 중국어 문서와 영어 overview로 연결합니다.
+이 언어에서는 제품 개요와 탐색 경로를 제공합니다. Skill 작성자 매뉴얼은 영어로 제공되며, 더 깊은 host / FFI 참조는 계속 중국어 문서에 있습니다.
 
 ## 추천 경로
 
@@ -13,7 +13,7 @@
 | --- | --- |
 | 처음 보는 사용자 | [한국어 README](../../README.ko.md) |
 | 제품 가치 이해 | [왜 LuaSkills인가](product/why-luaskills.md) |
-| Skill 작성자 | [Skill development overview](../skill-development.md) |
+| Skill 작성자 | [Skill development manual](../skill-development.md) |
 | FFI / SDK 통합 담당자 | [FFI and SDK overview](../ffi/overview.md) |
 | Database provider 구현자 | [Database provider overview](../providers/database-providers.md) |
 | Runtime 경계 이해 | [Runtime architecture overview](../architecture/runtime-model.md) |

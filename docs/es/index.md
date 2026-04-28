@@ -5,7 +5,7 @@
 [README en español](../../README.es.md) | [Documentación en inglés](../index.md) | [Documentación técnica detallada en chino](../zh-CN/index.md)
 
 Esta es la entrada en español para la documentación de LuaSkills.
-Esta capa ofrece una visión de producto y navegación; la referencia técnica profunda se mantiene actualmente en chino, con overviews en inglés.
+Esta capa ofrece una visión de producto y navegación; el manual para autores de skills está disponible en inglés, mientras que las referencias profundas de host y FFI se mantienen en chino.
 
 ## Ruta Recomendada
 
@@ -13,7 +13,7 @@ Esta capa ofrece una visión de producto y navegación; la referencia técnica p
 | --- | --- |
 | Primera visita | [README en español](../../README.es.md) |
 | Valor de producto | [Por Qué LuaSkills](product/why-luaskills.md) |
-| Autor de skills | [Skill development overview](../skill-development.md) |
+| Autor de skills | [Skill development manual](../skill-development.md) |
 | Integrador FFI / SDK | [FFI and SDK overview](../ffi/overview.md) |
 | Implementador de database provider | [Database provider overview](../providers/database-providers.md) |
 | Arquitectura runtime | [Runtime architecture overview](../architecture/runtime-model.md) |

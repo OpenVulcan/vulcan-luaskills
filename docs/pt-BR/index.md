@@ -5,7 +5,7 @@
 [README em português do Brasil](../../README.pt-BR.md) | [Documentação em inglês](../index.md) | [Documentação técnica detalhada em chinês](../zh-CN/index.md)
 
 Esta é a entrada em português do Brasil para a documentação do LuaSkills.
-Esta camada oferece visão de produto e navegação; a referência técnica profunda é mantida atualmente em chinês, com overviews em inglês.
+Esta camada oferece visão de produto e navegação; o manual para autores de skills está disponível em inglês, enquanto as referências profundas de host e FFI continuam em chinês.
 
 ## Caminho Recomendado
 
@@ -13,7 +13,7 @@ Esta camada oferece visão de produto e navegação; a referência técnica prof
 | --- | --- |
 | Primeira visita | [README em português do Brasil](../../README.pt-BR.md) |
 | Valor de produto | [Por Que LuaSkills](product/why-luaskills.md) |
-| Autor de skills | [Skill development overview](../skill-development.md) |
+| Autor de skills | [Skill development manual](../skill-development.md) |
 | Integrador FFI / SDK | [FFI and SDK overview](../ffi/overview.md) |
 | Implementador de database provider | [Database provider overview](../providers/database-providers.md) |
 | Arquitetura runtime | [Runtime architecture overview](../architecture/runtime-model.md) |

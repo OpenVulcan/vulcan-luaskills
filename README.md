@@ -87,15 +87,16 @@ Start here:
 - [Documentation hub](docs/index.md): English navigation and product-level map.
 - [Chinese documentation](README.zh-CN.md): Chinese product overview and full technical docs entry.
 - [Why LuaSkills](docs/product/why-luaskills.md): product narrative, architecture value, and supported integration categories.
-- [Skill development overview](docs/skill-development.md): English overview for skill authors.
+- [Skill development manual](docs/skill-development.md): full English manual for skill authors.
 - [FFI and SDK overview](docs/ffi/overview.md): English overview for host integrators.
 - [Database provider overview](docs/providers/database-providers.md): English overview for SQLite and LanceDB ownership.
 - [Runtime architecture overview](docs/architecture/runtime-model.md): English overview of host/runtime boundaries.
 - [Chinese docs index](docs/zh-CN/index.md): full Chinese technical documentation map.
 
-Important Chinese technical docs:
+Important technical docs:
 
-- [Lua Skill developer manual](docs/zh-CN/skill-development.md)
+- [Lua Skill developer manual](docs/skill-development.md)
+- [Chinese Lua Skill developer manual](docs/zh-CN/skill-development.md)
 - [FFI integration guide](docs/zh-CN/ffi/integration-guide.md)
 - [FFI host checklist](docs/zh-CN/ffi/host-checklist.md)
 - [Host database provider guide](docs/zh-CN/providers/host-database-provider-guide.md)
@@ -135,7 +136,7 @@ To learn the skill package shape before writing a host integration, start with:
 
 1. [demo-skill](https://github.com/LuaSkills/demo-skill)
 2. [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)
-3. [Lua Skill developer manual](docs/zh-CN/skill-development.md)
+3. [Lua Skill developer manual](docs/skill-development.md)
 
 For FFI hosts, begin with:
 

@@ -5,7 +5,7 @@
 [Deutsches README](../../README.de.md) | [Englische Dokumentation](../index.md) | [Ausführliche chinesische technische Dokumentation](../zh-CN/index.md)
 
 Dies ist der deutsche Einstieg in die LuaSkills-Dokumentation.
-Diese Ebene bietet Produktüberblick und Navigation; die vollständige technische Referenz wird derzeit auf Chinesisch gepflegt, mit englischen Overviews.
+Diese Ebene bietet Produktüberblick und Navigation; das Skill-Autorenhandbuch ist auf Englisch verfügbar, während tiefe Host- und FFI-Referenzen weiterhin auf Chinesisch gepflegt werden.
 
 ## Empfohlener Pfad
 
@@ -13,7 +13,7 @@ Diese Ebene bietet Produktüberblick und Navigation; die vollständige technisch
 | --- | --- |
 | Erstbesucher | [Deutsches README](../../README.de.md) |
 | Produktwert | [Warum LuaSkills](product/why-luaskills.md) |
-| Skill-Autor | [Skill development overview](../skill-development.md) |
+| Skill-Autor | [Skill development manual](../skill-development.md) |
 | FFI / SDK Integrator | [FFI and SDK overview](../ffi/overview.md) |
 | Database-provider Implementierung | [Database provider overview](../providers/database-providers.md) |
 | Runtime-Architektur | [Runtime architecture overview](../architecture/runtime-model.md) |

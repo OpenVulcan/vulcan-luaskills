@@ -5,7 +5,7 @@
 [Repository README](../README.md) | [Why LuaSkills](product/why-luaskills.md)
 
 This is the English documentation hub for LuaSkills.
-The detailed technical manuals currently live in Chinese under `docs/zh-CN`, while this page gives English readers the product map, role-based reading path, and ecosystem links.
+The skill author manual is available in English, while some deep host and FFI references still live in Chinese under `docs/zh-CN`.
 
 ## Product Overview
 
@@ -15,7 +15,7 @@ It lets a host application load, run, manage, and document Lua skill packages wh
 Read:
 
 - [Why LuaSkills](product/why-luaskills.md)
-- [Skill development overview](skill-development.md)
+- [Skill development manual](skill-development.md)
 - [FFI and SDK overview](ffi/overview.md)
 - [Database provider overview](providers/database-providers.md)
 - [Runtime architecture overview](architecture/runtime-model.md)
@@ -27,7 +27,7 @@ Read:
 | Reader | Start Here |
 | --- | --- |
 | Product or platform owner | [Why LuaSkills](product/why-luaskills.md) |
-| Lua skill author | [Skill development overview](skill-development.md) |
+| Lua skill author | [Skill development manual](skill-development.md) |
 | Rust host developer | [Repository README](../README.md#integration-paths) |
 | C ABI or SDK integrator | [FFI and SDK overview](ffi/overview.md) |
 | Deep FFI integrator | [FFI integration guide](zh-CN/ffi/integration-guide.md) |
@@ -42,19 +42,20 @@ Canonical entries are exposed as `{skill_id}-{entry_name}` and may receive a sta
 For GitHub-managed skills, the repository-derived or explicit `skill_id`, release zip prefix, checksum prefix, zip top-level directory, and installed directory must be identical.
 Use `{skill_id}-v{version}-skill.zip`, `{skill_id}-v{version}-checksums.txt`, and a zip containing `{skill_id}/skill.yaml`.
 
-## English Overviews
+## English Documents
 
 - [Why LuaSkills](product/why-luaskills.md)
-- [Skill development overview](skill-development.md)
+- [Skill development manual](skill-development.md)
 - [FFI and SDK overview](ffi/overview.md)
 - [Database provider overview](providers/database-providers.md)
 - [Runtime architecture overview](architecture/runtime-model.md)
 
 ## Main Technical Documents
 
-The complete deep technical manuals are currently maintained in Chinese.
+Skill development is available in English. The deepest host, FFI, provider, and architecture references are still maintained in Chinese.
 
-- [Lua Skill developer manual](zh-CN/skill-development.md)
+- [Lua Skill developer manual](skill-development.md)
+- [Chinese Lua Skill developer manual](zh-CN/skill-development.md)
 - [FFI beta release notes](zh-CN/ffi/beta-release-notes.md)
 - [FFI host checklist](zh-CN/ffi/host-checklist.md)
 - [FFI integration guide](zh-CN/ffi/integration-guide.md)

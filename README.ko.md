@@ -83,7 +83,7 @@ skill 구조를 배우려면:
 
 1. [demo-skill](https://github.com/LuaSkills/demo-skill)
 2. [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)
-3. [Skill development overview](docs/skill-development.md)
+3. [Skill development manual](docs/skill-development.md)
 
 ## Skill 명명 규칙
 

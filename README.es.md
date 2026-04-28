@@ -83,7 +83,7 @@ Para aprender la forma de un skill:
 
 1. [demo-skill](https://github.com/LuaSkills/demo-skill)
 2. [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)
-3. [Skill development overview](docs/skill-development.md)
+3. [Skill development manual](docs/skill-development.md)
 
 ## Reglas De Nomenclatura De Skills
 

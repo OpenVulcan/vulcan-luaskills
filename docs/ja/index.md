@@ -5,7 +5,7 @@
 [日本語 README](../../README.ja.md) | [英語ドキュメント](../index.md) | [中国語の詳細技術ドキュメント](../zh-CN/index.md)
 
 ここは LuaSkills の日本語ドキュメント入口です。
-この言語では製品概要とナビゲーションを提供し、詳細な API リファレンスは現在中国語ドキュメントと英語 overview にリンクします。
+この言語では製品概要とナビゲーションを提供します。Skill 作者向け手冊は英語で利用でき、より深い host / FFI 参照は引き続き中国語ドキュメントにあります。
 
 ## 推奨ルート
 
@@ -13,7 +13,7 @@
 | --- | --- |
 | 初めて読む人 | [日本語 README](../../README.ja.md) |
 | 製品価値を知りたい人 | [なぜ LuaSkills なのか](product/why-luaskills.md) |
-| Skill 作者 | [Skill development overview](../skill-development.md) |
+| Skill 作者 | [Skill development manual](../skill-development.md) |
 | FFI / SDK 統合担当 | [FFI and SDK overview](../ffi/overview.md) |
 | Database provider 実装者 | [Database provider overview](../providers/database-providers.md) |
 | Runtime 境界を理解したい人 | [Runtime architecture overview](../architecture/runtime-model.md) |
