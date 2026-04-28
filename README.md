@@ -161,8 +161,12 @@ Product hosts should decide:
 ```text
 README.md        English product homepage.
 README.zh-CN.md  Chinese product homepage.
-README.{locale}.md
-                 Localized product homepages for ja, ko, es, fr, de, and pt-BR.
+README.ja.md     Japanese product homepage.
+README.ko.md     Korean product homepage.
+README.es.md     Spanish product homepage.
+README.fr.md     French product homepage.
+README.de.md     German product homepage.
+README.pt-BR.md  Brazilian Portuguese product homepage.
 
 src/
   dependency/    Skill dependency parsing, installation, and cleanup.
