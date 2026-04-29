@@ -41,6 +41,11 @@ Permissões, autenticação, UI, budgets, armazenamento e exposição ao usuári
 ## Ecossistema
 
 - [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit): exemplo importante e próximo de produção, com navegação de código, inspeção AST, busca estrutural, navegação Markdown e workflows de patch.
+- [vulcan-curl](https://github.com/LuaSkills/vulcan-curl): skill de requests HTTP com entradas GET / POST estruturadas e execução de requests no estilo curl.
+- [vulcan-file](https://github.com/LuaSkills/vulcan-file): skill de operações de arquivo para listagem com regras de ignore, leitura exata de texto e pequenas edições com prévia.
+- [vulcan-lua](https://github.com/LuaSkills/vulcan-lua): skill de execução Lua controlada para código inline ou tarefas baseadas em arquivos Lua.
+- [vulcan-testkit](https://github.com/LuaSkills/vulcan-testkit): roteador de validação que transforma saídas de build, test, lint e typecheck em diagnósticos compactos.
+- [vulcan-workmem](https://github.com/LuaSkills/vulcan-workmem): skill de memória de trabalho por projeto para checkpoints de tarefa e contexto de handoff persistente.
 - [demo-skill](https://github.com/LuaSkills/demo-skill): template mínimo para aprender `skill.yaml`, runtime entries, arquivos help e layout de repositório.
 - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript): SDK para TypeScript / Node.js.
 - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python): SDK para Python.

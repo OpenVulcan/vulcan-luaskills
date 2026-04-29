@@ -41,6 +41,11 @@ LuaSkills는 제품 전체를 소유하지 않습니다.
 ## 생태계
 
 - [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit): 실제 제품 수준의 중요한 LuaSkills 예제입니다. 코드 탐색, AST 검사, 구조 검색, Markdown 탐색, patch workflow를 보여줍니다.
+- [vulcan-curl](https://github.com/LuaSkills/vulcan-curl): 구조화된 GET / POST entry와 curl 스타일 request 실행을 제공하는 HTTP request skill입니다.
+- [vulcan-file](https://github.com/LuaSkills/vulcan-file): ignore 규칙을 반영한 file list, 정확한 text read, preview-first 소규모 edit를 다루는 file operation skill입니다.
+- [vulcan-lua](https://github.com/LuaSkills/vulcan-lua): inline Lua code 또는 Lua file task를 제한된 방식으로 실행하는 controlled Lua execution skill입니다.
+- [vulcan-testkit](https://github.com/LuaSkills/vulcan-testkit): build, test, lint, typecheck 출력을 compact diagnostics로 정리하는 validation router skill입니다.
+- [vulcan-workmem](https://github.com/LuaSkills/vulcan-workmem): task checkpoint와 handoff context를 저장하는 project-scoped working memory skill입니다.
 - [demo-skill](https://github.com/LuaSkills/demo-skill): `skill.yaml`, runtime entry, help 파일, 기본 디렉터리 구조를 배우기 위한 최소 skill 템플릿입니다.
 - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript): TypeScript / Node.js SDK.
 - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python): Python SDK.

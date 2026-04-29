@@ -64,6 +64,11 @@ LuaSkills 不试图接管宿主产品本身。
 ## 生态仓库
 
 - [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit)：非常重要的 LuaSkills 实战示例，展示源码导航、AST 检查、结构化搜索、Markdown 导航与安全 patch 工作流。
+- [vulcan-curl](https://github.com/LuaSkills/vulcan-curl)：HTTP 请求 skill，提供结构化 GET / POST 入口和 curl 风格请求执行能力。
+- [vulcan-file](https://github.com/LuaSkills/vulcan-file)：文件操作 skill，覆盖忽略规则感知的文件列表、精确文本读取和预览优先的小范围编辑。
+- [vulcan-lua](https://github.com/LuaSkills/vulcan-lua)：受控 Lua 执行 skill，用于有边界地运行内联 Lua 代码或 Lua 文件任务。
+- [vulcan-testkit](https://github.com/LuaSkills/vulcan-testkit)：验证路由 skill，把 build、test、lint、typecheck 输出压缩成结构化诊断。
+- [vulcan-workmem](https://github.com/LuaSkills/vulcan-workmem)：项目级工作记忆 skill，用于持久化任务检查点和上下文交接。
 - [demo-skill](https://github.com/LuaSkills/demo-skill)：标准 skill 仓库示例，适合学习 `skill.yaml`、runtime entry、help 文件和基础目录布局。
 - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript)：TypeScript / Node.js 高层 SDK。
 - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python)：Python 高层 SDK。

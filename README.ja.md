@@ -41,6 +41,11 @@ LuaSkills は製品全体を所有しません。
 ## エコシステム
 
 - [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit): 実運用に近い重要な LuaSkills サンプル。コードナビゲーション、AST 検査、構造検索、Markdown ナビゲーション、patch workflow を示します。
+- [vulcan-curl](https://github.com/LuaSkills/vulcan-curl): 構造化された GET / POST entry と curl 形式の request 実行を提供する HTTP request skill。
+- [vulcan-file](https://github.com/LuaSkills/vulcan-file): ignore ルールを考慮した file list、正確な text read、preview-first の小さな edit を扱う file operation skill。
+- [vulcan-lua](https://github.com/LuaSkills/vulcan-lua): inline Lua code または Lua file task を境界付きで実行する controlled Lua execution skill。
+- [vulcan-testkit](https://github.com/LuaSkills/vulcan-testkit): build、test、lint、typecheck の出力を compact diagnostics にまとめる validation router skill。
+- [vulcan-workmem](https://github.com/LuaSkills/vulcan-workmem): task checkpoint と handoff context を永続化する project-scoped working memory skill。
 - [demo-skill](https://github.com/LuaSkills/demo-skill): `skill.yaml`、runtime entry、help、ディレクトリ構造を学ぶための最小 skill テンプレート。
 - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript): TypeScript / Node.js SDK。
 - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python): Python SDK。

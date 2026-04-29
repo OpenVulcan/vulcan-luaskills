@@ -74,6 +74,11 @@ LuaSkills is especially useful when you need a split between runtime truth and h
 LuaSkills is most useful when read together with its ecosystem repositories.
 
 - [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit): a production-grade LuaSkills example that exposes source-code navigation, AST inspection, structural search, Markdown navigation, and safe patching workflows.
+- [vulcan-curl](https://github.com/LuaSkills/vulcan-curl): an HTTP request skill built around structured GET / POST entries and curl-style request execution.
+- [vulcan-file](https://github.com/LuaSkills/vulcan-file): a focused file operation skill for ignored-aware listing, exact text reads, and preview-first small edits.
+- [vulcan-lua](https://github.com/LuaSkills/vulcan-lua): a controlled Lua execution skill for bounded inline code or file-based Lua tasks.
+- [vulcan-testkit](https://github.com/LuaSkills/vulcan-testkit): a validation router that turns build, test, lint, and typecheck output into compact diagnostics.
+- [vulcan-workmem](https://github.com/LuaSkills/vulcan-workmem): a project-scoped working-memory skill for durable task checkpoints and handoff context.
 - [demo-skill](https://github.com/LuaSkills/demo-skill): a minimal skill repository template for learning package layout, `skill.yaml`, runtime entries, and help files.
 - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript): TypeScript and Node.js SDK for the public `_json` FFI path.
 - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python): Python SDK for ctypes-based public `_json` FFI integration.

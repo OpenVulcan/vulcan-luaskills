@@ -41,6 +41,11 @@ Berechtigungen, Authentifizierung, UI, Budgets, Speicherorte und Benutzeroberfl�
 ## Ökosystem
 
 - [vulcan-codekit](https://github.com/LuaSkills/vulcan-codekit): wichtiges produktnahes LuaSkills-Beispiel mit Code-Navigation, AST-Inspektion, struktureller Suche, Markdown-Navigation und Patch-Workflows.
+- [vulcan-curl](https://github.com/LuaSkills/vulcan-curl): HTTP-Request-Skill mit strukturierten GET- / POST-Entries und curl-artiger Request-Ausführung.
+- [vulcan-file](https://github.com/LuaSkills/vulcan-file): File-Operation-Skill für ignore-bewusste Dateilisten, exakte Textlesevorgänge und kleine Preview-first-Edits.
+- [vulcan-lua](https://github.com/LuaSkills/vulcan-lua): kontrollierter Lua-Ausführungs-Skill für Inline-Code oder dateibasierte Lua-Aufgaben.
+- [vulcan-testkit](https://github.com/LuaSkills/vulcan-testkit): Validation-Router, der Build-, Test-, Lint- und Typecheck-Ausgaben in kompakte Diagnosen überführt.
+- [vulcan-workmem](https://github.com/LuaSkills/vulcan-workmem): projektbezogener Working-Memory-Skill für dauerhafte Task-Checkpoints und Handoff-Kontext.
 - [demo-skill](https://github.com/LuaSkills/demo-skill): minimales Template zum Lernen von `skill.yaml`, Runtime Entries, Help-Dateien und Repository-Layout.
 - [luaskills-sdk-typescript](https://github.com/LuaSkills/luaskills-sdk-typescript): TypeScript / Node.js SDK.
 - [luaskills-sdk-python](https://github.com/LuaSkills/luaskills-sdk-python): Python SDK.
