@@ -69,5 +69,5 @@ Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和
 - [Standard Runtime FFI Fixture](../../examples/ffi/standard_runtime/README.md)
 - [FFI Demo Runtime](../../examples/ffi/demo_runtime/README.md)
 - [Host Callback Demo](../../examples/ffi/host_provider_demo/README.md)
-- [LuaSkills Rust Demo](../../examples/demo-rust/README.md)
+- [LuaSkills Rust Demo](../../examples/demo-rust/README.md)：Rust crate 直连宿主示例，覆盖 `call_skill` 与 `vulcan.host.*`。
 - [LuaSkills FFI Demo](../../examples/demo-ffi/README.md)

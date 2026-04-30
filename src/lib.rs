@@ -8,10 +8,11 @@ pub mod runtime;
 pub mod skill;
 
 pub use host::callbacks::{
-    RuntimeEntryRegistryCallback, RuntimeEntryRegistryDelta, RuntimeSkillLifecycleCallback,
+    RuntimeEntryRegistryCallback, RuntimeEntryRegistryDelta, RuntimeHostToolAction,
+    RuntimeHostToolCallback, RuntimeHostToolRequest, RuntimeSkillLifecycleCallback,
     RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction, RuntimeSkillManagementCallback,
-    RuntimeSkillManagementRequest, set_entry_registry_callback, set_skill_lifecycle_callback,
-    set_skill_management_callback,
+    RuntimeSkillManagementRequest, set_entry_registry_callback, set_host_tool_callback,
+    set_skill_lifecycle_callback, set_skill_management_callback,
 };
 pub use host::database::{
     LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,

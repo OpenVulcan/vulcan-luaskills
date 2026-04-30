@@ -25,6 +25,7 @@ The current skill runtime exposes these top-level capabilities:
 - `vulcan.os.*`
 - `vulcan.json.*`
 - `vulcan.cache.*`
+- `vulcan.host.*`
 - `vulcan.context.*`
 - `vulcan.deps.*`
 - `vulcan.sqlite.*`
@@ -82,6 +83,7 @@ GitHub-managed skill installs and release assets must use the same `skill_id`:
 | `vulcan.os` | Host OS and architecture info | Yes | `os`, `arch` |
 | `vulcan.json` | JSON encode/decode | Yes | JSON to/from Lua table |
 | `vulcan.cache` | Runtime cache | Yes | Disabled inside `vulcan.runtime.lua.exec` |
+| `vulcan.host` | Host-registered tool bridge | Yes | Empty until the host registers a callback |
 | `vulcan.context` | Request and current-entry context | Yes | Most values are host-injected |
 | `vulcan.deps` | Current skill dependency root paths | Yes | May be `nil` without a resolved skill context |
 | `vulcan.sqlite` | Current skill SQLite binding | Conditional | `enabled/status/info` still exist when disabled |
@@ -145,6 +147,76 @@ return result
 - `args` must be a table, not a string or another scalar.
 - `vulcan.call` inherits the current request context, budget snapshot, and tool config, then switches to the target skill's file context and database bindings.
 - In `luaexec` scenarios, extra reentry protection prevents unbounded recursion back into the current runtime caller.
+
+## 4.5 `vulcan.host.*`
+
+`vulcan.host.*` is a fixed bridge for host-registered tools.
+It is intentionally narrower than arbitrary `vulcan.xxx` injection: Lua can list, probe, and call host tools, but it cannot create new top-level namespaces or register host tools itself.
+
+Supported methods:
+
+- `vulcan.host.list()`: returns the current host-visible tool metadata table.
+- `vulcan.host.has(tool_name)`: returns whether one host tool exists.
+- `vulcan.host.has_tool(tool_name)`: alias of `has`.
+- `vulcan.host.call(tool_name, args)`: calls one host tool with a Lua table argument and returns a Lua table result.
+
+Minimal example:
+
+```lua
+if not vulcan.host.has("model.embed") then
+    return {
+        ok = false,
+        reason = "model-embed-unavailable",
+    }
+end
+
+local result = vulcan.host.call("model.embed", {
+    model = "text-embedding-3-small",
+    input = "hello",
+})
+
+if not result.ok then
+    return result
+end
+
+return result.value
+```
+
+Recommended host-tool result envelope:
+
+```lua
+{
+    ok = true,
+    value = {
+        embedding = { 0.1, 0.2, 0.3 },
+    },
+    meta = {
+        provider = "openai",
+        elapsed_ms = 120,
+    },
+}
+```
+
+Recommended error envelope:
+
+```lua
+{
+    ok = false,
+    error = {
+        code = "tool_not_found",
+        message = "host tool not found: model.embed",
+    },
+}
+```
+
+Behavior rules:
+
+- `list()` returns an empty table when the host has not registered a host-tool callback.
+- `has()` and `has_tool()` return `false` when the host has not registered a host-tool callback.
+- `call()` returns an error envelope when the host callback is missing or the callback returns an error.
+- `args` must be a Lua table. Use explicit keys for object-shaped inputs.
+- Streaming is not part of this bridge. Host tools should return one complete table result.
+- Permissions, timeouts, audit, secret handling, model policies, and final provider routing remain host responsibilities.
 
 ## 5. `vulcan.runtime.*`
 

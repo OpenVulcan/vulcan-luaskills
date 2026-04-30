@@ -35,11 +35,12 @@ For a new FFI host, stabilize the smallest runtime loop first:
 6. `run_lua`
 7. `engine_free`
 
-After that, add lifecycle operations, query helpers, installation/update flows, provider callbacks, or `space_controller`.
+After that, add lifecycle operations, query helpers, installation/update flows, provider callbacks, host-tool callbacks, or `space_controller`.
 
 ## Key Rules
 
 - Register host callbacks before creating an engine.
+- Use `luaskills_ffi_set_host_tool_json_callback` when Lua skills need to call host-registered tools through `vulcan.host.*`.
 - Do not throw exceptions across C ABI boundaries.
 - Do not re-enter the same engine from the same thread.
 - Free owned buffers with the matching LuaSkills free function.

@@ -74,6 +74,16 @@ int32_t luaskills_ffi_set_lancedb_provider_json_callback(
 );
 
 /*
+Register or clear the host-tool JSON callback used by Lua vulcan.host.*.
+注册或清理 Lua vulcan.host.* 使用的宿主工具 JSON callback。
+*/
+int32_t luaskills_ffi_set_host_tool_json_callback(
+    FfiJsonProviderCallback callback,
+    void *user_data,
+    FfiOwnedBuffer *error_out
+);
+
+/*
 Return one stable FFI version descriptor as JSON.
 以 JSON 形式返回稳定的 FFI 版本描述。
 */

@@ -6,6 +6,9 @@ use std::sync::atomic::Ordering;
 use serde_json::Value;
 
 use crate::ffi::{FFI_ENGINE_COUNTER, ffi_engine_registry, with_engine, with_engine_mut};
+use crate::host::callbacks::{
+    RuntimeHostToolCallback, RuntimeHostToolRequest, set_host_tool_callback,
+};
 use crate::host::database::{
     LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,
     RuntimeDatabaseKind, RuntimeLanceDbProviderAction, RuntimeLanceDbProviderCallback,
@@ -1959,6 +1962,30 @@ pub unsafe extern "C" fn luaskills_ffi_set_lancedb_provider_json_callback(
         }) as crate::host::database::RuntimeLanceDbProviderJsonCallback
     });
     set_lancedb_provider_json_callback(wrapped);
+    ffi_ok_status(error_out)
+}
+
+/// Register or clear one host-tool JSON callback for Lua `vulcan.host.*` integration.
+/// 为 Lua `vulcan.host.*` 集成注册或清理一个宿主工具 JSON 回调。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_set_host_tool_json_callback(
+    callback: Option<FfiJsonProviderCallback>,
+    user_data: *mut c_void,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    let wrapped = callback.map(|callback_fn| {
+        let user_data = user_data as usize;
+        std::sync::Arc::new(move |request: &RuntimeHostToolRequest| {
+            let request_json = serde_json::to_string(request)
+                .map_err(|error| format!("host tool request JSON encode failed: {}", error))?;
+            let response_json =
+                invoke_json_provider_callback(callback_fn, user_data, &request_json)?;
+            serde_json::from_str::<Value>(&response_json)
+                .map_err(|error| format!("host tool response JSON decode failed: {}", error))
+        }) as RuntimeHostToolCallback
+    });
+    set_host_tool_callback(wrapped);
     ffi_ok_status(error_out)
 }
 

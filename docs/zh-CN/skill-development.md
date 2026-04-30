@@ -23,6 +23,7 @@
 - `vulcan.os.*`
 - `vulcan.json.*`
 - `vulcan.cache.*`
+- `vulcan.host.*`
 - `vulcan.context.*`
 - `vulcan.deps.*`
 - `vulcan.sqlite.*`
@@ -80,6 +81,7 @@ GitHub 托管 skill 的安装与发布资产必须保持同一个 `skill_id`：
 | `vulcan.os` | 宿主 OS/架构信息 | 是 | `os`、`arch` |
 | `vulcan.json` | JSON 编解码 | 是 | JSON ↔ Lua table |
 | `vulcan.cache` | 运行时缓存 | 是 | 在 `vulcan.runtime.lua.exec` 中会被禁用 |
+| `vulcan.host` | 宿主注册工具桥接 | 是 | 宿主未注册 callback 时为空能力面 |
 | `vulcan.context` | 请求与当前入口上下文 | 是 | 多数值由宿主注入 |
 | `vulcan.deps` | 当前 skill 依赖根路径 | 是 | 未解析到当前 skill 时可能为 `nil` |
 | `vulcan.sqlite` | 当前 skill 的 SQLite 绑定 | 条件可用 | 未启用时仍有 `enabled/status/info` |
@@ -144,6 +146,76 @@ return result
 - `args` 必须是 table，不能传字符串或其他标量。
 - `vulcan.call` 会继承当前请求上下文、预算快照、tool config，并切换到目标 skill 的文件上下文与数据库绑定。
 - 在 `luaexec` 场景下，存在额外重入保护，不能无限递归调回当前运行时调用方。
+
+## 4.5 `vulcan.host.*`
+
+`vulcan.host.*` 是固定的宿主注册工具桥接。
+它刻意比任意 `vulcan.xxx` 注入更窄：Lua 可以列出、探测和调用宿主工具，但不能自己创建新的顶级命名空间，也不能注册宿主工具。
+
+支持的方法：
+
+- `vulcan.host.list()`：返回当前宿主开放给 Lua 的工具元数据 table。
+- `vulcan.host.has(tool_name)`：判断指定宿主工具是否存在。
+- `vulcan.host.has_tool(tool_name)`：`has` 的别名。
+- `vulcan.host.call(tool_name, args)`：使用 Lua table 参数调用指定宿主工具，并返回 Lua table 结果。
+
+最小示例：
+
+```lua
+if not vulcan.host.has("model.embed") then
+    return {
+        ok = false,
+        reason = "model-embed-unavailable",
+    }
+end
+
+local result = vulcan.host.call("model.embed", {
+    model = "text-embedding-3-small",
+    input = "hello",
+})
+
+if not result.ok then
+    return result
+end
+
+return result.value
+```
+
+推荐的宿主工具成功返回包络：
+
+```lua
+{
+    ok = true,
+    value = {
+        embedding = { 0.1, 0.2, 0.3 },
+    },
+    meta = {
+        provider = "openai",
+        elapsed_ms = 120,
+    },
+}
+```
+
+推荐的错误返回包络：
+
+```lua
+{
+    ok = false,
+    error = {
+        code = "tool_not_found",
+        message = "host tool not found: model.embed",
+    },
+}
+```
+
+行为规则：
+
+- 宿主未注册 host-tool callback 时，`list()` 返回空 table。
+- 宿主未注册 host-tool callback 时，`has()` 和 `has_tool()` 返回 `false`。
+- 宿主 callback 缺失或调用返回错误时，`call()` 返回错误包络。
+- `args` 必须是 Lua table；对象型入参建议使用显式 key。
+- 该桥接不支持 stream，宿主工具应返回完整 table 结果。
+- 权限、超时、审计、secret 管理、模型策略和最终 provider 路由仍由宿主负责。
 
 ## 5. `vulcan.runtime.*`
 

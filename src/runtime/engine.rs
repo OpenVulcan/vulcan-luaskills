@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 use crate::dependency::manager::{DependencyManager, DependencyManagerConfig, ensure_directory};
 use crate::entry_descriptor::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
 use crate::host::callbacks::{
-    RuntimeEntryRegistryDelta, RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction,
-    RuntimeSkillManagementRequest, dispatch_skill_management_request,
+    RuntimeEntryRegistryDelta, RuntimeHostToolAction, RuntimeHostToolRequest,
+    RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction, RuntimeSkillManagementRequest,
+    dispatch_host_tool_request, dispatch_skill_management_request, try_has_host_tool_callback,
     try_has_skill_management_callback,
 };
 use crate::host::database::RuntimeDatabaseProviderCallbacks;
@@ -285,6 +286,123 @@ fn create_runtime_skill_management_bridge_fn(
         .map_err(|error| {
             mlua::Error::runtime(format!("vulcan.runtime.skills.{}: {}", action_name, error))
         })?;
+        json_value_to_lua(lua, &result)
+    })
+}
+
+/// Convert one host-tool bridge error into the stable Lua table result envelope.
+/// 将单个宿主工具桥接错误转换为稳定的 Lua table 结果包络。
+fn host_tool_error_value(code: &str, message: impl Into<String>) -> Value {
+    json!({
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message.into(),
+        },
+    })
+}
+
+/// Convert one host-tool callback response into a Lua table-friendly result value.
+/// 将单个宿主工具回调响应转换为便于 Lua table 通讯的结果值。
+fn normalize_host_tool_call_response(value: Value) -> Value {
+    match value {
+        Value::Object(_) => value,
+        other => json!({
+            "ok": true,
+            "value": other,
+        }),
+    }
+}
+
+/// Parse the host-tool `has` callback response into one boolean.
+/// 将宿主工具 `has` 回调响应解析为布尔值。
+fn parse_host_tool_has_response(value: &Value) -> Result<bool, String> {
+    match value {
+        Value::Bool(value) => Ok(*value),
+        Value::Object(object) => {
+            for key in ["exists", "has", "available"] {
+                if let Some(Value::Bool(value)) = object.get(key) {
+                    return Ok(*value);
+                }
+            }
+            Err("host tool has callback must return a boolean or an object with boolean exists/has/available".to_string())
+        }
+        _ => Err("host tool has callback must return a boolean".to_string()),
+    }
+}
+
+/// Convert a Lua host-tool args table into JSON while preserving empty args as an object.
+/// 将 Lua 宿主工具参数表转换为 JSON，并把空参数保持为空对象。
+fn host_tool_args_table_to_json(args_table: Table) -> Result<Value, String> {
+    if args_table.raw_len() == 0 && args_table.pairs::<String, LuaValue>().next().is_none() {
+        return Ok(Value::Object(serde_json::Map::new()));
+    }
+    lua_value_to_json(&LuaValue::Table(args_table))
+}
+
+/// Create the Lua-facing `vulcan.host.list` function.
+/// 创建面向 Lua 的 `vulcan.host.list` 函数。
+fn create_host_tool_list_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(move |lua, ()| {
+        if !try_has_host_tool_callback().map_err(mlua::Error::runtime)? {
+            return Ok(LuaValue::Table(lua.create_table()?));
+        }
+        let result = dispatch_host_tool_request(&RuntimeHostToolRequest {
+            action: RuntimeHostToolAction::List,
+            tool_name: None,
+            args: json!({}),
+        })
+        .map_err(|error| mlua::Error::runtime(format!("vulcan.host.list: {}", error)))?;
+        json_value_to_lua(lua, &result)
+    })
+}
+
+/// Create the Lua-facing `vulcan.host.has` and `vulcan.host.has_tool` function.
+/// 创建面向 Lua 的 `vulcan.host.has` 与 `vulcan.host.has_tool` 函数。
+fn create_host_tool_has_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(move |_, tool_name: LuaValue| {
+        let tool_name = require_string_arg(tool_name, "host.has", "tool_name", false)?;
+        if !try_has_host_tool_callback().map_err(mlua::Error::runtime)? {
+            return Ok(false);
+        }
+        let result = dispatch_host_tool_request(&RuntimeHostToolRequest {
+            action: RuntimeHostToolAction::Has,
+            tool_name: Some(tool_name),
+            args: json!({}),
+        })
+        .map_err(|error| mlua::Error::runtime(format!("vulcan.host.has: {}", error)))?;
+        parse_host_tool_has_response(&result)
+            .map_err(|error| mlua::Error::runtime(format!("vulcan.host.has: {}", error)))
+    })
+}
+
+/// Create the Lua-facing `vulcan.host.call` function.
+/// 创建面向 Lua 的 `vulcan.host.call` 函数。
+fn create_host_tool_call_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(move |lua, (tool_name, args): (LuaValue, LuaValue)| {
+        let tool_name = require_string_arg(tool_name, "host.call", "tool_name", false)?;
+        let args_table = require_table_arg(args, "host.call", "args")?;
+        let args_value = host_tool_args_table_to_json(args_table).map_err(|error| {
+            mlua::Error::runtime(format!("vulcan.host.call: invalid args table: {}", error))
+        })?;
+        let result = if try_has_host_tool_callback().map_err(mlua::Error::runtime)? {
+            match dispatch_host_tool_request(&RuntimeHostToolRequest {
+                action: RuntimeHostToolAction::Call,
+                tool_name: Some(tool_name.clone()),
+                args: args_value,
+            }) {
+                Ok(value) => normalize_host_tool_call_response(value),
+                Err(error) => host_tool_error_value("host_tool_callback_error", error),
+            }
+        } else {
+            host_tool_error_value(
+                "host_tool_callback_missing",
+                format!(
+                    "host tool bridge has no registered callback for '{}'",
+                    tool_name
+                ),
+            )
+        };
         json_value_to_lua(lua, &result)
     })
 }
@@ -6489,6 +6607,7 @@ end
         let json = lua.create_table()?;
         let cache = lua.create_table()?;
         let config = lua.create_table()?;
+        let host = lua.create_table()?;
         let context = lua.create_table()?;
         let deps = lua.create_table()?;
 
@@ -6767,6 +6886,12 @@ end
         })?;
         config.set("list", config_list_fn)?;
 
+        host.set("list", create_host_tool_list_fn(lua)?)?;
+        let host_has_fn = create_host_tool_has_fn(lua)?;
+        host.set("has", host_has_fn.clone())?;
+        host.set("has_tool", host_has_fn)?;
+        host.set("call", create_host_tool_call_fn(lua)?)?;
+
         context.set("request", lua.create_table()?)?;
         context.set("client_info", LuaValue::Nil)?;
         context.set("client_capabilities", lua.create_table()?)?;
@@ -6875,6 +7000,7 @@ end
         vulcan.set("json", json)?;
         vulcan.set("cache", cache)?;
         vulcan.set("config", config)?;
+        vulcan.set("host", host)?;
         vulcan.set("context", context)?;
         vulcan.set("deps", deps)?;
 
@@ -6997,8 +7123,9 @@ mod tests {
     use crate::lua_skill::SkillMeta;
     use crate::runtime_options::LuaRuntimeRunLuaPoolConfig;
     use crate::{
-        LuaEngineOptions, LuaRuntimeHostOptions, RuntimeSkillRoot, SkillInstallRequest,
-        SkillInstallSourceType, SkillManagementAuthority, SkillUninstallOptions,
+        LuaEngineOptions, LuaRuntimeHostOptions, RuntimeHostToolAction, RuntimeSkillRoot,
+        SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority,
+        SkillUninstallOptions, set_host_tool_callback,
     };
     use mlua::{Table, Value as LuaValue};
     use serde_json::json;
@@ -7006,7 +7133,35 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
-    use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+
+    /// Guard one process-wide host-tool callback test and clear global callback state on drop.
+    /// 保护单个进程级宿主工具回调测试，并在释放时清理全局回调状态。
+    struct HostToolCallbackTestGuard {
+        /// Hold the process-wide mutex guard until the current test finishes.
+        /// 持有进程级互斥锁直到当前测试结束。
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for HostToolCallbackTestGuard {
+        /// Clear the global host-tool callback when one guarded test finishes.
+        /// 当受保护测试结束时清理全局宿主工具回调。
+        fn drop(&mut self) {
+            set_host_tool_callback(None);
+        }
+    }
+
+    /// Acquire the process-wide host-tool callback test guard.
+    /// 获取进程级宿主工具回调测试保护锁。
+    fn host_tool_callback_test_guard() -> HostToolCallbackTestGuard {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        let guard = GUARD
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("lock host tool callback test guard");
+        set_host_tool_callback(None);
+        HostToolCallbackTestGuard { _guard: guard }
+    }
 
     /// Build one minimal loaded skill for collision-index tests.
     /// 为冲突编号测试构造一个最小已加载 skill。
@@ -8572,6 +8727,136 @@ mod tests {
             .run_lua("return vulcan.config.get('api_token')", &json!({}), None)
             .expect_err("run_lua config access should require active skill context");
         assert!(error.contains("vulcan.config.get requires one active skill context"));
+    }
+
+    /// Verify `vulcan.host.*` returns safe defaults when no host callback is registered.
+    /// 验证未注册宿主回调时 `vulcan.host.*` 会返回安全默认值。
+    #[test]
+    fn vulcan_host_bridge_defaults_without_callback() {
+        let _guard = host_tool_callback_test_guard();
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .run_lua(
+                r#"
+local tools = vulcan.host.list()
+local called = vulcan.host.call("model.embed", {})
+return {
+  list_len = #tools,
+  has = vulcan.host.has("model.embed"),
+  has_tool = vulcan.host.has_tool("model.embed"),
+  call_ok = called.ok,
+  call_code = called.error.code,
+}
+"#,
+                &json!({}),
+                None,
+            )
+            .expect("run host bridge default lua");
+
+        assert_eq!(result["list_len"], 0);
+        assert_eq!(result["has"], false);
+        assert_eq!(result["has_tool"], false);
+        assert_eq!(result["call_ok"], false);
+        assert_eq!(result["call_code"], "host_tool_callback_missing");
+    }
+
+    /// Verify `vulcan.host.*` dispatches list, has, and call requests through the host callback.
+    /// 验证 `vulcan.host.*` 会通过宿主回调分发 list、has 与 call 请求。
+    #[test]
+    fn vulcan_host_bridge_dispatches_registered_callback() {
+        let _guard = host_tool_callback_test_guard();
+        set_host_tool_callback(Some(Arc::new(|request| match request.action {
+            RuntimeHostToolAction::List => Ok(json!([
+                {
+                    "name": "model.echo",
+                    "description": "Echo test host tool",
+                    "input_schema": {
+                        "type": "object",
+                    },
+                }
+            ])),
+            RuntimeHostToolAction::Has => {
+                Ok(json!(request.tool_name.as_deref() == Some("model.echo")))
+            }
+            RuntimeHostToolAction::Call => {
+                let tool_name = request.tool_name.as_deref().unwrap_or_default();
+                if tool_name != "model.echo" {
+                    return Err(format!("host tool not found: {}", tool_name));
+                }
+                Ok(json!({
+                    "ok": true,
+                    "value": {
+                        "echo": request.args["text"].clone(),
+                    },
+                    "meta": {
+                        "tool": tool_name,
+                    },
+                }))
+            }
+        })));
+
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .run_lua(
+                r#"
+local tools = vulcan.host.list()
+local called = vulcan.host.call("model.echo", { text = "hello" })
+return {
+  first = tools[1].name,
+  has = vulcan.host.has("model.echo"),
+  missing = vulcan.host.has_tool("missing.tool"),
+  ok = called.ok,
+  echo = called.value.echo,
+  tool = called.meta.tool,
+}
+"#,
+                &json!({}),
+                None,
+            )
+            .expect("run host bridge callback lua");
+
+        assert_eq!(result["first"], "model.echo");
+        assert_eq!(result["has"], true);
+        assert_eq!(result["missing"], false);
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["echo"], "hello");
+        assert_eq!(result["tool"], "model.echo");
+    }
+
+    /// Verify `vulcan.host.call` converts callback failures into table error envelopes.
+    /// 验证 `vulcan.host.call` 会把回调失败转换为 table 错误包络。
+    #[test]
+    fn vulcan_host_call_wraps_callback_errors() {
+        let _guard = host_tool_callback_test_guard();
+        set_host_tool_callback(Some(Arc::new(|request| match request.action {
+            RuntimeHostToolAction::List => Ok(json!([])),
+            RuntimeHostToolAction::Has => Ok(json!(true)),
+            RuntimeHostToolAction::Call => {
+                assert!(request.args.as_object().is_some());
+                assert!(request.args.as_object().unwrap().is_empty());
+                Err("model provider failed".to_string())
+            }
+        })));
+
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .run_lua(
+                r#"
+local called = vulcan.host.call("model.fail", {})
+return {
+  ok = called.ok,
+  code = called.error.code,
+  message = called.error.message,
+}
+"#,
+                &json!({}),
+                None,
+            )
+            .expect("run host bridge callback error lua");
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["code"], "host_tool_callback_error");
+        assert_eq!(result["message"], "model provider failed");
     }
 
     /// Assert that one pooled Lua VM has returned to the neutral request baseline.

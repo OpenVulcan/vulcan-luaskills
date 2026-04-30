@@ -79,5 +79,5 @@ Skill development is available in English. The deepest host, FFI, provider, and 
 - [Standard runtime fixture](../examples/ffi/standard_runtime/README.md)
 - [FFI demo runtime](../examples/ffi/demo_runtime/README.md)
 - [Host provider demo](../examples/ffi/host_provider_demo/README.md)
-- [Rust demo](../examples/demo-rust/README.md)
+- [Rust demo](../examples/demo-rust/README.md): direct crate host integration with `call_skill` and `vulcan.host.*`.
 - [FFI demo package entry](../examples/demo-ffi/README.md)

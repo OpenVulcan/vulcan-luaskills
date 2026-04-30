@@ -448,8 +448,10 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 - database provider callback 会在 `engine_new` 时拍快照
 - engine 创建完成后再修改回调注册表，不会 retroactive 地影响已存在 engine
-- 若一个进程内需要多套不同 callback 逻辑，应按 callback 集合分别创建 engine，而不是复用同一个 engine 再切换全局回调
+- 若一个进程内需要多套数据库 provider callback 逻辑，应按 callback 集合分别创建 engine，让 engine 捕获各自的 provider callback 快照，而不是复用同一个 engine 再切换全局 provider callback
 - 对动态语言宿主，应优先从 JSON callback 模式接入，因为所有权模型更简单，误用面更小
+- `vulcan.host.*` 宿主工具桥接使用进程级 host-tool callback，并在 Lua 调用时读取当前全局 callback；正式接入仍建议在 `engine_new` 前完成注册，避免初始化顺序不稳定
+- 若一个进程内需要多套 host-tool 逻辑，应由宿主在 callback 内自行路由，或避免在同一进程内混用
 
 ## 7. 启动条件与前置要求
 
@@ -509,6 +511,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 - `host_callback`
 - `vulcan.runtime.skills.*` 的运行时技能管理桥接
+- `vulcan.host.*` 的宿主工具桥接
 
 则应在 `engine_new` 前完成所有必需 callback 注册。
 
@@ -516,6 +519,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 - 数据库 provider callback 采用 engine 私有快照
 - 技能管理桥接在运行时会显式检查宿主 callback 是否可用
+- 宿主工具桥接在 Lua 调用时显式检查 host-tool callback 是否可用
 
 因此：
 
@@ -978,6 +982,24 @@ system 版本的 `_json` 生命周期接口，以及可见性查询、prompt com
 - 配置只有在 Lua skill 主动通过 `vulcan.config.*` 读取时才会影响运行行为。
 - 如果宿主不希望客户修改某些配置，不应暴露对应 `set/delete` 工具；必须强制锁定的核心行为应通过宿主硬逻辑或内置核心 skill 实现。
 
+### 9.7 宿主工具桥接 callback
+
+Rust API：
+
+- `set_host_tool_callback`
+
+标准 C ABI 注册接口：
+
+- `luaskills_ffi_set_host_tool_json_callback`
+
+说明：
+
+- 该 callback 供 Lua 侧 `vulcan.host.list()`、`vulcan.host.has()`、`vulcan.host.has_tool()`、`vulcan.host.call()` 使用。
+- 标准 C ABI 当前只提供 JSON callback 入口，因为宿主工具参数和返回值天然是动态 table / JSON 结构。
+- Lua 侧使用 table；FFI 边界内部使用 JSON 请求和 JSON 响应。
+- 该桥接不支持 stream，宿主 callback 必须返回完整 JSON 结果。
+- 权限、超时、审计、secret 管理、模型 provider 策略和工具 allowlist 均由宿主负责。
+
 ## 10. 每类接口的调用逻辑
 
 ### 10.1 `version` / `describe`
@@ -1223,7 +1245,7 @@ system 版本的 `_json` 生命周期接口，以及可见性查询、prompt com
 5. 执行 Lua
 6. 结构化返回结果
 
-### 10.13.1 `vulcan.runtime.skills.*`
+### 10.13 `vulcan.runtime.skills.*`
 
 作用：
 
@@ -1279,7 +1301,100 @@ system 版本的 `_json` 生命周期接口，以及可见性查询、prompt com
 
 `ROOT` 不应出现在普通桥接的可操作层级列表中。`layers()` 基于当前已加载 root 链生成，只返回实际存在的 `PROJECT` / `USER`；若当前没有项目上下文，则不会返回 `PROJECT`；若只有 `ROOT`，则返回空 `labels` / `layers`、没有 `default`，且顶层 `writable=false`。当 bridge 关闭时，顶层 `writable` 与每个 layer 的 `writable` 都必须为 `false`。`layers()` 只是能力发现接口，install / update / uninstall 等请求仍必须由宿主回调做最终校验。
 
-### 10.13 `run_lua`
+### 10.14 `vulcan.host.*`
+
+作用：
+
+- 允许宿主把固定工具注册为 Lua 可发现、可探测、可调用的能力
+- 避免开放任意 `vulcan.xxx` 注入，把宿主扩展面收敛到 `list / has / call`
+
+Lua 侧方法：
+
+- `vulcan.host.list()`
+- `vulcan.host.has(tool_name)`
+- `vulcan.host.has_tool(tool_name)`
+- `vulcan.host.call(tool_name, args_table)`
+
+FFI 注册：
+
+```text
+luaskills_ffi_set_host_tool_json_callback(callback, user_data, error_out)
+```
+
+发送给 callback 的 JSON 请求结构：
+
+```json
+{
+  "action": "call",
+  "tool_name": "model.embed",
+  "args": {
+    "model": "text-embedding-3-small",
+    "input": "hello"
+  }
+}
+```
+
+`action` 取值：
+
+- `list`：`tool_name = null`，`args = {}`
+- `has`：`tool_name` 为待探测工具名，`args = {}`
+- `call`：`tool_name` 为待调用工具名，`args` 为 Lua table 转换出的 JSON
+
+`list` 推荐返回工具元数据数组：
+
+```json
+[
+  {
+    "name": "model.embed",
+    "description": "Create one embedding vector.",
+    "input_schema": {
+      "type": "object"
+    }
+  }
+]
+```
+
+`has` 可以直接返回布尔值：
+
+```json
+true
+```
+
+`call` 推荐返回 table / object 包络：
+
+```json
+{
+  "ok": true,
+  "value": {
+    "embedding": [0.1, 0.2, 0.3]
+  },
+  "meta": {
+    "provider": "openai",
+    "elapsed_ms": 120
+  }
+}
+```
+
+失败时推荐返回：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "tool_not_found",
+    "message": "host tool not found: model.embed"
+  }
+}
+```
+
+运行时默认行为：
+
+- 未注册 callback 时，`list()` 返回空 table。
+- 未注册 callback 时，`has()` / `has_tool()` 返回 `false`。
+- 未注册 callback 或 callback 返回 FFI 错误时，`call()` 返回 `{ ok = false, error = ... }` table，而不是让 Lua skill 自己解析 FFI 错误。
+- 如果 callback 的 `call` 响应不是 JSON object，运行时会包装为 `{ "ok": true, "value": ... }`，确保 Lua 侧拿到 table。
+
+### 10.15 `run_lua`
 
 作用：
 

@@ -137,6 +137,8 @@ cargo check
 cargo test --lib
 ```
 
+The direct Rust host example lives in [examples/demo-rust](examples/demo-rust/README.md) and covers both `call_skill` and the `vulcan.host.*` host-tool bridge.
+
 To learn the skill package shape before writing a host integration, start with:
 
 1. [demo-skill](https://github.com/LuaSkills/demo-skill)
@@ -209,7 +211,7 @@ docs/
   pt-BR/         Brazilian Portuguese product documentation.
 
 examples/
-  demo-rust/     Rust host demo.
+  demo-rust/     Rust host demo with call_skill and host-tool bridge examples.
   demo-ffi/      Packaged FFI demo entry.
   ffi/           C, Python, Go, TypeScript, runtime fixture, and provider demos.
 ```

@@ -17,6 +17,42 @@ pub type RuntimeEntryRegistryCallback = Arc<dyn Fn(&RuntimeEntryRegistryDelta) +
 pub type RuntimeSkillManagementCallback =
     Arc<dyn Fn(&RuntimeSkillManagementRequest) -> Result<Value, String> + Send + Sync>;
 
+/// Callback type used by hosts to handle one Lua-triggered host-tool bridge request.
+/// 宿主用于处理单个由 Lua 触发的宿主工具桥接请求的回调类型。
+pub type RuntimeHostToolCallback =
+    Arc<dyn Fn(&RuntimeHostToolRequest) -> Result<Value, String> + Send + Sync>;
+
+/// Structured host-tool bridge actions that Lua may request through `vulcan.host.*`.
+/// Lua 可以通过 `vulcan.host.*` 请求的结构化宿主工具桥接动作集合。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeHostToolAction {
+    /// Request the current host-visible tool list.
+    /// 请求当前对宿主可见的工具列表。
+    List,
+    /// Request whether one host tool exists.
+    /// 请求判断某个宿主工具是否存在。
+    Has,
+    /// Request one host-tool invocation.
+    /// 请求执行一次宿主工具调用。
+    Call,
+}
+
+/// Structured Lua-triggered host-tool bridge request forwarded to the host.
+/// 转发给宿主的结构化 Lua 触发宿主工具桥接请求。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeHostToolRequest {
+    /// Requested host-tool bridge action kind.
+    /// 请求的宿主工具桥接动作类型。
+    pub action: RuntimeHostToolAction,
+    /// Optional host tool name, required for `has` and `call`.
+    /// 可选宿主工具名称，`has` 与 `call` 动作必填。
+    pub tool_name: Option<String>,
+    /// JSON payload converted from the Lua table argument.
+    /// 从 Lua table 参数转换得到的 JSON 载荷。
+    pub args: Value,
+}
+
 /// Structured management actions that one Lua-exposed runtime bridge may request from the host.
 /// Lua 暴露的运行时桥接可能向宿主请求的结构化管理动作集合。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -120,6 +156,14 @@ pub fn set_skill_management_callback(callback: Option<RuntimeSkillManagementCall
     *guard = callback;
 }
 
+/// Install or clear the process-wide Lua-triggered host-tool callback used by the host.
+/// 安装或清理由宿主使用的进程级 Lua 触发宿主工具回调。
+pub fn set_host_tool_callback(callback: Option<RuntimeHostToolCallback>) {
+    let registry = host_tool_callback_registry();
+    let mut guard = registry.lock().unwrap();
+    *guard = callback;
+}
+
 /// Emit one skill-lifecycle event to the currently registered host callback when it exists.
 /// 当宿主已注册回调时向其发送一条技能生命周期事件。
 pub(crate) fn emit_skill_lifecycle_event(event: &RuntimeSkillLifecycleEvent) {
@@ -164,6 +208,24 @@ pub(crate) fn dispatch_skill_management_request(
     callback(request)
 }
 
+/// Dispatch one Lua-triggered host-tool request into the currently registered host callback.
+/// 将单个 Lua 触发的宿主工具请求分发给当前已注册的宿主回调。
+pub(crate) fn dispatch_host_tool_request(
+    request: &RuntimeHostToolRequest,
+) -> Result<Value, String> {
+    let registry = host_tool_callback_registry();
+    let callback = {
+        let guard = registry
+            .lock()
+            .map_err(|_| "Host tool callback registry lock poisoned".to_string())?;
+        guard.clone()
+    };
+    let callback = callback.ok_or_else(|| {
+        "Host tool bridge is enabled but no host callback is registered".to_string()
+    })?;
+    callback(request)
+}
+
 /// Return whether one host callback is currently registered for runtime skill-management dispatch.
 /// 返回当前是否已为运行时技能管理分发注册宿主回调。
 pub(crate) fn try_has_skill_management_callback() -> Result<bool, String> {
@@ -171,6 +233,16 @@ pub(crate) fn try_has_skill_management_callback() -> Result<bool, String> {
     let guard = registry
         .lock()
         .map_err(|_| "Skill management callback registry lock poisoned".to_string())?;
+    Ok(guard.is_some())
+}
+
+/// Return whether one host callback is currently registered for host-tool dispatch.
+/// 返回当前是否已为宿主工具分发注册宿主回调。
+pub(crate) fn try_has_host_tool_callback() -> Result<bool, String> {
+    let registry = host_tool_callback_registry();
+    let guard = registry
+        .lock()
+        .map_err(|_| "Host tool callback registry lock poisoned".to_string())?;
     Ok(guard.is_some())
 }
 
@@ -192,5 +264,12 @@ fn entry_registry_callback_registry() -> &'static Mutex<Option<RuntimeEntryRegis
 /// 返回进程级技能管理回调存储。
 fn skill_management_callback_registry() -> &'static Mutex<Option<RuntimeSkillManagementCallback>> {
     static REGISTRY: OnceLock<Mutex<Option<RuntimeSkillManagementCallback>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(None))
+}
+
+/// Return the process-wide host-tool callback storage.
+/// 返回进程级宿主工具回调存储。
+fn host_tool_callback_registry() -> &'static Mutex<Option<RuntimeHostToolCallback>> {
+    static REGISTRY: OnceLock<Mutex<Option<RuntimeHostToolCallback>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(None))
 }

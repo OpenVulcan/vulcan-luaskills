@@ -114,6 +114,8 @@ cargo check
 cargo test --lib
 ```
 
+Rust 宿主直连示例位于 [examples/demo-rust](examples/demo-rust/README.md)，覆盖 `call_skill` 和 `vulcan.host.*` 宿主工具桥接。
+
 第一次学习 skill 结构，建议按这个顺序看：
 
 1. [demo-skill](https://github.com/LuaSkills/demo-skill)

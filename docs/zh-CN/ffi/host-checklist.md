@@ -52,6 +52,7 @@
 - 如果要用 callback：
   - callback 必须先注册，再创建 engine
   - TypeScript / Python 宿主优先使用 SDK 的 `set_*_provider_json_callback`，不要在业务代码里手写 buffer clone
+  - 若要让 Lua 调用宿主工具，需注册 `luaskills_ffi_set_host_tool_json_callback`
 - 如果要用 `space_controller`：
   - 已确认 `endpoint / auto_spawn / executable_path / process_mode`
 - 如果连接远端 controller：
@@ -79,6 +80,7 @@
 
 - `install / update / uninstall`
 - 数据库 provider callback
+- `vulcan.host.*` 宿主工具桥接 callback
 - `space_controller`
 
 正式宿主构造 skill roots 时，建议先固定三层语义：
@@ -151,9 +153,14 @@ ROOT -> PROJECT -> USER
 - callback 必须在 `engine_new` 前注册
 - callback 不能跨 C ABI 抛异常
 - 同一线程内，不支持在一个 engine 调用尚未返回时再次重入同一个 engine
-- 如果一个进程里需要多套 callback 逻辑：
-  - 应分别创建不同 engine
-  - 不要指望在 engine 创建后再切换全局 callback
+- `vulcan.host.*` 的 host-tool callback 只接收 JSON 请求并返回完整 JSON 结果，不支持 stream
+- host-tool callback 内部必须自行处理工具 allowlist、权限、超时、审计与 secret 管理
+- 如果一个进程里需要多套数据库 provider callback 逻辑：
+  - 应分别创建不同 engine，让 engine 捕获各自的 provider callback 快照
+  - 不要指望在 engine 创建后再切换全局 provider callback 来 retroactive 影响已存在 engine
+- 如果一个进程里需要多套 `vulcan.host.*` host-tool callback 逻辑：
+  - 当前 host-tool callback 是进程级能力面，Lua 调用时读取当前全局 callback
+  - 多套 host-tool 逻辑需要宿主在 callback 内自行路由，或避免在同一进程内混用
 - Go 宿主的 provider callback 不应直接挂临时闭包给进程级 C 回调；应先在宿主层设计明确的 cgo bridge、线程模型和生命周期。
 
 ## 9. 标准 C ABI 与公共 `_json` FFI 的最短判断
@@ -208,6 +215,7 @@ ROOT -> PROJECT -> USER
 - 所有结构化结果都通过专用 free 回收
 - callback 场景下没有跨 ABI 异常
 - callback 场景下没有同线程重入
+- `vulcan.host.list / has / call` 在 callback 缺失、工具缺失和 callback 失败时都有可诊断结果
 - 普通技能管理工具不会把 `ROOT` 暴露给用户安装、更新或卸载
 - 若存在 ROOT 级系统 skill，已确认 PROJECT / USER 同名 skill 不会被加载
 
