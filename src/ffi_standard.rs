@@ -7,7 +7,10 @@ use serde_json::Value;
 
 use crate::ffi::{FFI_ENGINE_COUNTER, ffi_engine_registry, with_engine, with_engine_mut};
 use crate::host::callbacks::{
-    RuntimeHostToolCallback, RuntimeHostToolRequest, set_host_tool_callback,
+    RuntimeHostToolCallback, RuntimeHostToolRequest, RuntimeModelEmbedCallback,
+    RuntimeModelEmbedRequest, RuntimeModelEmbedResponse, RuntimeModelError, RuntimeModelErrorCode,
+    RuntimeModelLlmCallback, RuntimeModelLlmRequest, RuntimeModelLlmResponse,
+    set_host_tool_callback, set_model_embed_callback, set_model_llm_callback,
 };
 use crate::host::database::{
     LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,
@@ -1593,6 +1596,143 @@ fn invoke_json_provider_callback(
     Ok(response)
 }
 
+/// Build an internal model callback bridge error.
+/// 构造一个模型 callback 桥接内部错误。
+fn runtime_model_callback_internal_error(message: impl Into<String>) -> RuntimeModelError {
+    RuntimeModelError {
+        code: RuntimeModelErrorCode::InternalError,
+        message: message.into(),
+        provider_message: None,
+        provider_code: None,
+        provider_status: None,
+    }
+}
+
+/// Extract one string field from a JSON model error object.
+/// 从 JSON 模型错误对象中提取单个字符串字段。
+fn runtime_model_error_string_field(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Option<String> {
+    object
+        .get(field_name)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Extract one provider status field from a JSON model error object.
+/// 从 JSON 模型错误对象中提取单个 provider 状态字段。
+fn runtime_model_error_status_field(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Option<u16> {
+    object
+        .get(field_name)
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+}
+
+/// Locate the model error object inside either an envelope or a direct error payload.
+/// 在错误包络或直接错误载荷中定位模型错误对象。
+fn runtime_model_error_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+    value.get("error").and_then(Value::as_object).or_else(|| {
+        value.as_object().and_then(|object| {
+            if object.contains_key("code") || object.contains_key("message") {
+                Some(object)
+            } else {
+                None
+            }
+        })
+    })
+}
+
+/// Convert one JSON model error payload into the internal runtime error type.
+/// 将单个 JSON 模型错误载荷转换为内部运行时错误类型。
+fn runtime_model_error_from_json_value(value: &Value) -> Option<RuntimeModelError> {
+    let object = runtime_model_error_object(value)?;
+    let code = runtime_model_error_string_field(object, "code")
+        .map(|value| RuntimeModelErrorCode::from_code_str(&value))
+        .unwrap_or(RuntimeModelErrorCode::InternalError);
+    let message = runtime_model_error_string_field(object, "message")
+        .unwrap_or_else(|| "model callback returned an error".to_string());
+    Some(RuntimeModelError {
+        code,
+        message,
+        provider_message: runtime_model_error_string_field(object, "provider_message"),
+        provider_code: runtime_model_error_string_field(object, "provider_code"),
+        provider_status: runtime_model_error_status_field(object, "provider_status"),
+    })
+}
+
+/// Convert one failed JSON callback bridge message into a model error.
+/// 将单个失败的 JSON callback 桥接消息转换为模型错误。
+fn runtime_model_error_from_callback_failure(message: String) -> RuntimeModelError {
+    if let Ok(value) = serde_json::from_str::<Value>(&message) {
+        if let Some(error) = runtime_model_error_from_json_value(&value) {
+            return error;
+        }
+    }
+    runtime_model_callback_internal_error(message)
+}
+
+/// Decode and normalize one JSON callback model response.
+/// 解码并归一化单个 JSON callback 模型响应。
+fn runtime_model_callback_response_value(
+    response_json: &str,
+    capability: &str,
+) -> Result<Value, RuntimeModelError> {
+    let value = serde_json::from_str::<Value>(response_json).map_err(|error| {
+        runtime_model_callback_internal_error(format!(
+            "model {} response JSON decode failed: {}",
+            capability, error
+        ))
+    })?;
+    if value.get("ok").and_then(Value::as_bool) == Some(false) {
+        return Err(
+            runtime_model_error_from_json_value(&value).unwrap_or_else(|| {
+                runtime_model_callback_internal_error(format!(
+                    "model {} callback returned ok=false without a valid error object",
+                    capability
+                ))
+            }),
+        );
+    }
+    if value.get("ok").and_then(Value::as_bool) == Some(true) {
+        if let Some(inner) = value.get("value").or_else(|| value.get("result")) {
+            return Ok(inner.clone());
+        }
+    }
+    Ok(value)
+}
+
+/// Decode one JSON callback embedding response into the typed runtime response.
+/// 将单个 JSON callback embedding 响应解码为类型化运行时响应。
+fn runtime_model_embed_response_from_json(
+    response_json: &str,
+) -> Result<RuntimeModelEmbedResponse, RuntimeModelError> {
+    let value = runtime_model_callback_response_value(response_json, "embed")?;
+    serde_json::from_value::<RuntimeModelEmbedResponse>(value).map_err(|error| {
+        runtime_model_callback_internal_error(format!(
+            "model embed response JSON decode failed: {}",
+            error
+        ))
+    })
+}
+
+/// Decode one JSON callback LLM response into the typed runtime response.
+/// 将单个 JSON callback LLM 响应解码为类型化运行时响应。
+fn runtime_model_llm_response_from_json(
+    response_json: &str,
+) -> Result<RuntimeModelLlmResponse, RuntimeModelError> {
+    let value = runtime_model_callback_response_value(response_json, "llm")?;
+    serde_json::from_value::<RuntimeModelLlmResponse>(value).map_err(|error| {
+        runtime_model_callback_internal_error(format!(
+            "model llm response JSON decode failed: {}",
+            error
+        ))
+    })
+}
+
 /// Invoke one host-supplied standard SQLite provider callback and decode the returned JSON payload.
 /// 调用宿主提供的标准 SQLite provider 回调，并解码返回的 JSON 载荷。
 fn invoke_standard_sqlite_provider_callback(
@@ -1986,6 +2126,62 @@ pub unsafe extern "C" fn luaskills_ffi_set_host_tool_json_callback(
         }) as RuntimeHostToolCallback
     });
     set_host_tool_callback(wrapped);
+    ffi_ok_status(error_out)
+}
+
+/// Register or clear one model embedding JSON callback for Lua `vulcan.models.embed`.
+/// 为 Lua `vulcan.models.embed` 注册或清理一个模型 embedding JSON callback。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_set_model_embed_json_callback(
+    callback: Option<FfiJsonProviderCallback>,
+    user_data: *mut c_void,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    let wrapped = callback.map(|callback_fn| {
+        let user_data = user_data as usize;
+        std::sync::Arc::new(move |request: &RuntimeModelEmbedRequest| {
+            let request_json = serde_json::to_string(request).map_err(|error| {
+                runtime_model_callback_internal_error(format!(
+                    "model embed request JSON encode failed: {}",
+                    error
+                ))
+            })?;
+            let response_json =
+                invoke_json_provider_callback(callback_fn, user_data, &request_json)
+                    .map_err(runtime_model_error_from_callback_failure)?;
+            runtime_model_embed_response_from_json(&response_json)
+        }) as RuntimeModelEmbedCallback
+    });
+    set_model_embed_callback(wrapped);
+    ffi_ok_status(error_out)
+}
+
+/// Register or clear one model LLM JSON callback for Lua `vulcan.models.llm`.
+/// 为 Lua `vulcan.models.llm` 注册或清理一个模型 LLM JSON callback。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_set_model_llm_json_callback(
+    callback: Option<FfiJsonProviderCallback>,
+    user_data: *mut c_void,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    let wrapped = callback.map(|callback_fn| {
+        let user_data = user_data as usize;
+        std::sync::Arc::new(move |request: &RuntimeModelLlmRequest| {
+            let request_json = serde_json::to_string(request).map_err(|error| {
+                runtime_model_callback_internal_error(format!(
+                    "model llm request JSON encode failed: {}",
+                    error
+                ))
+            })?;
+            let response_json =
+                invoke_json_provider_callback(callback_fn, user_data, &request_json)
+                    .map_err(runtime_model_error_from_callback_failure)?;
+            runtime_model_llm_response_from_json(&response_json)
+        }) as RuntimeModelLlmCallback
+    });
+    set_model_llm_callback(wrapped);
     ffi_ok_status(error_out)
 }
 
@@ -3250,6 +3446,10 @@ pub unsafe extern "C" fn luaskills_ffi_system_update_skill(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::callbacks::{
+        RuntimeModelCaller, dispatch_model_embed_request, dispatch_model_llm_request,
+        runtime_model_callback_test_guard,
+    };
     use crate::runtime_help::{
         RuntimeHelpDetail as RuntimeHelpDetailModel,
         RuntimeHelpNodeDescriptor as RuntimeHelpNodeDescriptorModel,
@@ -3339,6 +3539,160 @@ mod tests {
         let response = invoke_json_provider_callback(callback, 0, "{\"value\":1}")
             .expect("callback bridge should succeed");
         assert_eq!(response, "{\"echo\":{\"value\":1}}");
+    }
+
+    /// Verify model JSON FFI callback setters round-trip requests, responses, and provider error fields.
+    /// 验证模型 JSON FFI callback setter 会往返传递请求、响应和 provider 错误字段。
+    #[test]
+    fn model_json_callback_setters_round_trip_response_and_provider_error() {
+        unsafe extern "C" fn embed_callback(
+            request_json: FfiBorrowedBuffer,
+            _user_data: *mut c_void,
+            response_out: *mut FfiOwnedBuffer,
+            error_out: *mut FfiOwnedBuffer,
+        ) -> i32 {
+            let request_bytes =
+                unsafe { std::slice::from_raw_parts(request_json.ptr, request_json.len) };
+            let request: Value = match serde_json::from_slice(request_bytes) {
+                Ok(request) => request,
+                Err(error) => {
+                    unsafe {
+                        *error_out =
+                            alloc_owned_buffer_from_string(format!("invalid request: {}", error));
+                    }
+                    return FFI_STATUS_ERROR;
+                }
+            };
+            if request["text"] != "hello"
+                || request["caller"]["skill_id"] != "ffi-skill"
+                || request["caller"]["request_id"] != "req-ffi-1"
+            {
+                unsafe {
+                    *error_out =
+                        alloc_owned_buffer_from_string(format!("unexpected request: {}", request));
+                }
+                return FFI_STATUS_ERROR;
+            }
+            unsafe {
+                *response_out = alloc_owned_buffer_from_string(
+                    r#"{"ok":true,"vector":[0.1,0.2],"dimensions":2,"usage":{"input_tokens":3}}"#,
+                );
+                *error_out = FfiOwnedBuffer {
+                    ptr: ptr::null_mut(),
+                    len: 0,
+                };
+            }
+            FFI_STATUS_OK
+        }
+
+        unsafe extern "C" fn llm_callback(
+            request_json: FfiBorrowedBuffer,
+            _user_data: *mut c_void,
+            response_out: *mut FfiOwnedBuffer,
+            error_out: *mut FfiOwnedBuffer,
+        ) -> i32 {
+            let request_bytes =
+                unsafe { std::slice::from_raw_parts(request_json.ptr, request_json.len) };
+            let request: Value = match serde_json::from_slice(request_bytes) {
+                Ok(request) => request,
+                Err(error) => {
+                    unsafe {
+                        *error_out =
+                            alloc_owned_buffer_from_string(format!("invalid request: {}", error));
+                    }
+                    return FFI_STATUS_ERROR;
+                }
+            };
+            if request["system"] != "system" || request["user"] != "user" {
+                unsafe {
+                    *error_out =
+                        alloc_owned_buffer_from_string(format!("unexpected request: {}", request));
+                }
+                return FFI_STATUS_ERROR;
+            }
+            unsafe {
+                *response_out = alloc_owned_buffer_from_string(
+                    r#"{"ok":false,"error":{"code":"provider_error","message":"provider failed","provider_message":"raw provider message","provider_code":"invalid_api_key","provider_status":401}}"#,
+                );
+                *error_out = FfiOwnedBuffer {
+                    ptr: ptr::null_mut(),
+                    len: 0,
+                };
+            }
+            FFI_STATUS_OK
+        }
+
+        let _guard = runtime_model_callback_test_guard();
+        let exported = crate::ffi::exported_ffi_function_names();
+        assert!(
+            exported
+                .iter()
+                .any(|name| name == "luaskills_ffi_set_model_embed_json_callback")
+        );
+        assert!(
+            exported
+                .iter()
+                .any(|name| name == "luaskills_ffi_set_model_llm_json_callback")
+        );
+
+        let mut error_out = FfiOwnedBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let embed_status = unsafe {
+            luaskills_ffi_set_model_embed_json_callback(
+                Some(embed_callback),
+                ptr::null_mut(),
+                &mut error_out,
+            )
+        };
+        assert_eq!(embed_status, FFI_STATUS_OK);
+        assert!(error_out.ptr.is_null());
+        let llm_status = unsafe {
+            luaskills_ffi_set_model_llm_json_callback(
+                Some(llm_callback),
+                ptr::null_mut(),
+                &mut error_out,
+            )
+        };
+        assert_eq!(llm_status, FFI_STATUS_OK);
+        assert!(error_out.ptr.is_null());
+
+        let caller = RuntimeModelCaller {
+            skill_id: Some("ffi-skill".to_string()),
+            entry_name: Some("entry".to_string()),
+            canonical_tool_name: Some("ffi-skill-entry".to_string()),
+            root_name: Some("ROOT".to_string()),
+            skill_dir: Some("D:/skills/ffi-skill".to_string()),
+            client_name: Some("sdk-test".to_string()),
+            request_id: Some("req-ffi-1".to_string()),
+        };
+        let embed_response = dispatch_model_embed_request(&RuntimeModelEmbedRequest {
+            text: "hello".to_string(),
+            caller: caller.clone(),
+        })
+        .expect("embed JSON callback should return a response");
+        assert_eq!(embed_response.vector, vec![0.1, 0.2]);
+        assert_eq!(embed_response.dimensions, 2);
+        assert_eq!(
+            embed_response.usage.and_then(|usage| usage.input_tokens),
+            Some(3)
+        );
+
+        let llm_error = dispatch_model_llm_request(&RuntimeModelLlmRequest {
+            system: "system".to_string(),
+            user: "user".to_string(),
+            caller,
+        })
+        .expect_err("llm JSON callback should return a provider error");
+        assert_eq!(llm_error.code, RuntimeModelErrorCode::ProviderError);
+        assert_eq!(llm_error.message, "provider failed");
+        assert_eq!(
+            llm_error.provider_message.as_deref(),
+            Some("raw provider message")
+        );
+        assert_eq!(llm_error.provider_code.as_deref(), Some("invalid_api_key"));
+        assert_eq!(llm_error.provider_status, Some(401));
     }
 
     /// Verify one entry list allocates nested owned buffers for entry and parameter text fields.

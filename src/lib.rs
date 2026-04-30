@@ -9,9 +9,12 @@ pub mod skill;
 
 pub use host::callbacks::{
     RuntimeEntryRegistryCallback, RuntimeEntryRegistryDelta, RuntimeHostToolAction,
-    RuntimeHostToolCallback, RuntimeHostToolRequest, RuntimeSkillLifecycleCallback,
-    RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction, RuntimeSkillManagementCallback,
-    RuntimeSkillManagementRequest, set_entry_registry_callback, set_host_tool_callback,
+    RuntimeHostToolCallback, RuntimeHostToolRequest, RuntimeModelCaller, RuntimeModelEmbedCallback,
+    RuntimeModelEmbedRequest, RuntimeModelEmbedResponse, RuntimeModelError, RuntimeModelErrorCode,
+    RuntimeModelLlmCallback, RuntimeModelLlmRequest, RuntimeModelLlmResponse, RuntimeModelUsage,
+    RuntimeSkillLifecycleCallback, RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction,
+    RuntimeSkillManagementCallback, RuntimeSkillManagementRequest, set_entry_registry_callback,
+    set_host_tool_callback, set_model_embed_callback, set_model_llm_callback,
     set_skill_lifecycle_callback, set_skill_management_callback,
 };
 pub use host::database::{

@@ -81,6 +81,7 @@ GitHub 托管 skill 的安装与发布资产必须保持同一个 `skill_id`：
 | `vulcan.os` | 宿主 OS/架构信息 | 是 | `os`、`arch` |
 | `vulcan.json` | JSON 编解码 | 是 | JSON ↔ Lua table |
 | `vulcan.cache` | 运行时缓存 | 是 | 在 `vulcan.runtime.lua.exec` 中会被禁用 |
+| `vulcan.models` | 标准模型能力 | 是 | 只有宿主注册对应 callback 后能力才会开启 |
 | `vulcan.host` | 宿主注册工具桥接 | 是 | 宿主未注册 callback 时为空能力面 |
 | `vulcan.context` | 请求与当前入口上下文 | 是 | 多数值由宿主注入 |
 | `vulcan.deps` | 当前 skill 依赖根路径 | 是 | 未解析到当前 skill 时可能为 `nil` |
@@ -147,7 +148,94 @@ return result
 - `vulcan.call` 会继承当前请求上下文、预算快照、tool config，并切换到目标 skill 的文件上下文与数据库绑定。
 - 在 `luaexec` 场景下，存在额外重入保护，不能无限递归调回当前运行时调用方。
 
-## 4.5 `vulcan.host.*`
+## 4.5 `vulcan.models.*`
+
+`vulcan.models.*` 是 Lua skill 使用模型能力的固定标准接口。
+它不是通用 host tool 调用，也不允许 Lua 选择 provider 配置。
+
+支持的方法：
+
+- `vulcan.models.status()`：返回 `{ ok = true, capabilities = { embed = boolean, llm = boolean } }`。
+- `vulcan.models.has(capability)`：返回宿主是否注册了 `embed` 或 `llm` callback。
+- `vulcan.models.embed(text)`：对单个非空字符串执行 embedding，并返回 table 包络。
+- `vulcan.models.llm(system, user)`：执行一轮非流式 LLM 调用，并返回 table 包络。
+
+最小示例：
+
+```lua
+if not vulcan.models.has("embed") then
+    return {
+        ok = false,
+        reason = "model-embed-unavailable",
+    }
+end
+
+local result = vulcan.models.embed("hello")
+if not result.ok then
+    return result
+end
+
+return result.vector
+```
+
+embedding 成功包络：
+
+```lua
+{
+    ok = true,
+    vector = { 0.1, 0.2, 0.3 },
+    dimensions = 1536,
+    usage = {
+        input_tokens = 123,
+    },
+}
+```
+
+LLM 成功包络：
+
+```lua
+{
+    ok = true,
+    assistant = "...",
+    usage = {
+        input_tokens = 123,
+        output_tokens = 456,
+    },
+}
+```
+
+错误包络：
+
+```lua
+{
+    ok = false,
+    error = {
+        code = "provider_error",
+        message = "model provider failed",
+        provider_message = "raw provider error after host redaction",
+        provider_code = "model_not_found",
+        provider_status = 400,
+    },
+}
+```
+
+行为规则：
+
+- `status()` 永远存在，并根据 callback 注册状态生成能力表。
+- `has()` 只识别 `embed` 与 `llm`；未知能力返回 `false`。
+- `embed()` 只接受一个非空字符串，不支持批量输入。
+- `llm()` 只接受两个非空字符串，不支持 messages、tool call、stream 或 thinking 控制。
+- Lua 不能传 `model`、`temperature`、`max_tokens`、`base_url`、`api_key`、`dimensions` 或 provider-specific 参数。
+- LuaSkills 会把 caller context 传给宿主 callback，用于审计与成本归因，但不会通过模型 API 暴露给 Lua。
+- 模型配置、API key、provider 路由、超时、预算和脱敏都由宿主负责。
+
+宿主对接参考：
+
+- [运行时架构中的模型能力边界](../architecture/runtime-model.md#standard-model-capability-boundary)
+- [FFI 与 SDK 模型能力速查](../ffi/overview.md#model-capability-quick-path)
+- [中文 FFI 模型 callback 对接说明](ffi/integration-guide.md#98-模型能力-callback)
+
+## 4.6 `vulcan.host.*`
 
 `vulcan.host.*` 是固定的宿主注册工具桥接。
 它刻意比任意 `vulcan.xxx` 注入更窄：Lua 可以列出、探测和调用宿主工具，但不能自己创建新的顶级命名空间，也不能注册宿主工具。
@@ -162,16 +250,15 @@ return result
 最小示例：
 
 ```lua
-if not vulcan.host.has("model.embed") then
+if not vulcan.host.has("vault.lookup") then
     return {
         ok = false,
-        reason = "model-embed-unavailable",
+        reason = "host-tool-unavailable",
     }
 end
 
-local result = vulcan.host.call("model.embed", {
-    model = "text-embedding-3-small",
-    input = "hello",
+local result = vulcan.host.call("vault.lookup", {
+    key = "demo-secret",
 })
 
 if not result.ok then
@@ -187,10 +274,9 @@ return result.value
 {
     ok = true,
     value = {
-        embedding = { 0.1, 0.2, 0.3 },
+        text = "resolved value",
     },
     meta = {
-        provider = "openai",
         elapsed_ms = 120,
     },
 }
@@ -203,7 +289,7 @@ return result.value
     ok = false,
     error = {
         code = "tool_not_found",
-        message = "host tool not found: model.embed",
+        message = "host tool not found: vault.lookup",
     },
 }
 ```
@@ -215,7 +301,8 @@ return result.value
 - 宿主 callback 缺失或调用返回错误时，`call()` 返回错误包络。
 - `args` 必须是 Lua table；对象型入参建议使用显式 key。
 - 该桥接不支持 stream，宿主工具应返回完整 table 结果。
-- 权限、超时、审计、secret 管理、模型策略和最终 provider 路由仍由宿主负责。
+- 权限、超时、审计和 secret 管理仍由宿主负责。
+- 标准模型能力应使用 `vulcan.models.*`，不要长期依赖通用 host-tool 协议。
 
 ## 5. `vulcan.runtime.*`
 
@@ -609,6 +696,8 @@ local deleted = vulcan.cache.delete(cache_id)
 
 - `transport_name`
 - `session_id`
+- `request_id`
+- `client_name`
 - `client_info`
 - `client_capabilities`
 

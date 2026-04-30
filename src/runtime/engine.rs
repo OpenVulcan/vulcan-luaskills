@@ -13,9 +13,12 @@ use std::time::{Duration, Instant};
 use crate::dependency::manager::{DependencyManager, DependencyManagerConfig, ensure_directory};
 use crate::entry_descriptor::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
 use crate::host::callbacks::{
-    RuntimeEntryRegistryDelta, RuntimeHostToolAction, RuntimeHostToolRequest,
-    RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction, RuntimeSkillManagementRequest,
-    dispatch_host_tool_request, dispatch_skill_management_request, try_has_host_tool_callback,
+    RuntimeEntryRegistryDelta, RuntimeHostToolAction, RuntimeHostToolRequest, RuntimeModelCaller,
+    RuntimeModelEmbedRequest, RuntimeModelEmbedResponse, RuntimeModelError, RuntimeModelErrorCode,
+    RuntimeModelLlmRequest, RuntimeModelLlmResponse, RuntimeModelUsage, RuntimeSkillLifecycleEvent,
+    RuntimeSkillManagementAction, RuntimeSkillManagementRequest, dispatch_host_tool_request,
+    dispatch_model_embed_request, dispatch_model_llm_request, dispatch_skill_management_request,
+    try_has_host_tool_callback, try_has_model_embed_callback, try_has_model_llm_callback,
     try_has_skill_management_callback,
 };
 use crate::host::database::RuntimeDatabaseProviderCallbacks;
@@ -407,6 +410,301 @@ fn create_host_tool_call_fn(lua: &Lua) -> mlua::Result<Function> {
     })
 }
 
+/// Convert one optional model usage object into a JSON object.
+/// 将单个可选模型用量对象转换为 JSON 对象。
+fn model_usage_value(usage: RuntimeModelUsage) -> Value {
+    let mut usage_object = serde_json::Map::new();
+    if let Some(input_tokens) = usage.input_tokens {
+        usage_object.insert("input_tokens".to_string(), json!(input_tokens));
+    }
+    if let Some(output_tokens) = usage.output_tokens {
+        usage_object.insert("output_tokens".to_string(), json!(output_tokens));
+    }
+    Value::Object(usage_object)
+}
+
+/// Convert one structured model error into the stable Lua table result envelope.
+/// 将单个结构化模型错误转换为稳定的 Lua table 返回包络。
+fn runtime_model_error_value(error: RuntimeModelError) -> Value {
+    let mut error_object = serde_json::Map::new();
+    error_object.insert(
+        "code".to_string(),
+        Value::String(error.code.as_str().to_string()),
+    );
+    error_object.insert("message".to_string(), Value::String(error.message));
+    if let Some(provider_message) = error.provider_message {
+        error_object.insert(
+            "provider_message".to_string(),
+            Value::String(provider_message),
+        );
+    }
+    if let Some(provider_code) = error.provider_code {
+        error_object.insert("provider_code".to_string(), Value::String(provider_code));
+    }
+    if let Some(provider_status) = error.provider_status {
+        error_object.insert("provider_status".to_string(), json!(provider_status));
+    }
+    json!({
+        "ok": false,
+        "error": Value::Object(error_object),
+    })
+}
+
+/// Build one structured model error without provider-specific fields.
+/// 构造一个不带 provider 特定字段的结构化模型错误。
+fn runtime_model_error(
+    code: RuntimeModelErrorCode,
+    message: impl Into<String>,
+) -> RuntimeModelError {
+    RuntimeModelError {
+        code,
+        message: message.into(),
+        provider_message: None,
+        provider_code: None,
+        provider_status: None,
+    }
+}
+
+/// Convert one successful embedding callback response into the Lua result envelope.
+/// 将单个成功的 embedding 回调响应转换为 Lua 返回包络。
+fn runtime_model_embed_response_value(response: RuntimeModelEmbedResponse) -> Value {
+    let mut result = json!({
+        "ok": true,
+        "vector": response.vector,
+        "dimensions": response.dimensions,
+    });
+    if let Some(usage) = response.usage
+        && let Value::Object(object) = &mut result
+    {
+        object.insert("usage".to_string(), model_usage_value(usage));
+    }
+    result
+}
+
+/// Convert one successful LLM callback response into the Lua result envelope.
+/// 将单个成功的 LLM 回调响应转换为 Lua 返回包络。
+fn runtime_model_llm_response_value(response: RuntimeModelLlmResponse) -> Value {
+    let mut result = json!({
+        "ok": true,
+        "assistant": response.assistant,
+    });
+    if let Some(usage) = response.usage
+        && let Value::Object(object) = &mut result
+    {
+        object.insert("usage".to_string(), model_usage_value(usage));
+    }
+    result
+}
+
+/// Read one exact non-empty UTF-8 string argument for a model function.
+/// 为模型函数读取一个精确的非空 UTF-8 字符串参数。
+fn runtime_model_string_arg(
+    values: &[LuaValue],
+    index: usize,
+    fn_name: &str,
+    param_name: &str,
+) -> Result<String, RuntimeModelError> {
+    let value = values.get(index).ok_or_else(|| {
+        runtime_model_error(
+            RuntimeModelErrorCode::InvalidArgument,
+            format!("{fn_name}: {param_name} is required"),
+        )
+    })?;
+    let text = match value {
+        LuaValue::String(text) => text
+            .to_str()
+            .map_err(|_| {
+                runtime_model_error(
+                    RuntimeModelErrorCode::InvalidArgument,
+                    format!("{fn_name}: {param_name} must be a valid UTF-8 string"),
+                )
+            })?
+            .to_string(),
+        other => {
+            return Err(runtime_model_error(
+                RuntimeModelErrorCode::InvalidArgument,
+                format!(
+                    "{fn_name}: {param_name} must be a string, got {}",
+                    lua_value_type_name(other)
+                ),
+            ));
+        }
+    };
+    if text.trim().is_empty() {
+        return Err(runtime_model_error(
+            RuntimeModelErrorCode::InvalidArgument,
+            format!("{fn_name}: {param_name} must not be empty"),
+        ));
+    }
+    if text.contains('\0') {
+        return Err(runtime_model_error(
+            RuntimeModelErrorCode::InvalidArgument,
+            format!("{fn_name}: {param_name} must not contain NUL bytes"),
+        ));
+    }
+    Ok(text)
+}
+
+/// Validate the exact argument count for one fixed model API.
+/// 校验单个固定模型 API 的精确参数数量。
+fn validate_runtime_model_arg_count(
+    actual: usize,
+    expected: usize,
+    fn_name: &str,
+) -> Result<(), RuntimeModelError> {
+    if actual == expected {
+        return Ok(());
+    }
+    Err(runtime_model_error(
+        RuntimeModelErrorCode::InvalidArgument,
+        format!("{fn_name}: expected {expected} argument(s), got {actual}"),
+    ))
+}
+
+/// Capture the current runtime caller context for one host model callback.
+/// 为单个宿主模型回调捕获当前运行时调用方上下文。
+fn current_runtime_model_caller(lua: &Lua) -> Result<RuntimeModelCaller, String> {
+    let internal = get_vulcan_runtime_internal_table(lua)?;
+    let context = get_vulcan_context_table(lua)?;
+    let request_value: LuaValue = context
+        .get("request")
+        .map_err(|error| format!("Failed to read vulcan.context.request: {}", error))?;
+    let request_json = lua_value_to_json(&request_value)
+        .map_err(|error| format!("Failed to convert request context to JSON: {}", error))?;
+    let request_context = match &request_json {
+        Value::Object(object) if object.is_empty() => None,
+        _ => serde_json::from_value::<RuntimeRequestContext>(request_json).ok(),
+    };
+    let client_name = request_context
+        .as_ref()
+        .and_then(|context| context.client_name.clone())
+        .or_else(|| {
+            request_context
+                .as_ref()
+                .and_then(|context| context.client_info.as_ref())
+                .and_then(|client_info| client_info.name.clone())
+        });
+    let request_id = request_context
+        .as_ref()
+        .and_then(|context| context.request_id.clone());
+    Ok(RuntimeModelCaller {
+        skill_id: internal.get("skill_name").map_err(|error| {
+            format!(
+                "Failed to read vulcan.runtime.internal.skill_name: {}",
+                error
+            )
+        })?,
+        entry_name: internal.get("entry_name").map_err(|error| {
+            format!(
+                "Failed to read vulcan.runtime.internal.entry_name: {}",
+                error
+            )
+        })?,
+        canonical_tool_name: internal.get("tool_name").map_err(|error| {
+            format!(
+                "Failed to read vulcan.runtime.internal.tool_name: {}",
+                error
+            )
+        })?,
+        root_name: internal.get("root_name").map_err(|error| {
+            format!(
+                "Failed to read vulcan.runtime.internal.root_name: {}",
+                error
+            )
+        })?,
+        skill_dir: context
+            .get("skill_dir")
+            .map_err(|error| format!("Failed to read vulcan.context.skill_dir: {}", error))?,
+        client_name,
+        request_id,
+    })
+}
+
+/// Create the Lua-facing `vulcan.models.status` function.
+/// 创建面向 Lua 的 `vulcan.models.status` 函数。
+fn create_model_status_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(move |lua, _: MultiValue| {
+        let result = json!({
+            "ok": true,
+            "capabilities": {
+                "embed": try_has_model_embed_callback().unwrap_or(false),
+                "llm": try_has_model_llm_callback().unwrap_or(false),
+            },
+        });
+        json_value_to_lua(lua, &result)
+    })
+}
+
+/// Create the Lua-facing `vulcan.models.has` function.
+/// 创建面向 Lua 的 `vulcan.models.has` 函数。
+fn create_model_has_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(move |_, args: MultiValue| {
+        let values = args.into_vec();
+        if values.len() != 1 {
+            return Ok(false);
+        }
+        let capability = match &values[0] {
+            LuaValue::String(text) => text.to_str().map(|text| text.to_string()).ok(),
+            _ => None,
+        };
+        let available = match capability.as_deref() {
+            Some("embed") => try_has_model_embed_callback().unwrap_or(false),
+            Some("llm") => try_has_model_llm_callback().unwrap_or(false),
+            _ => false,
+        };
+        Ok(available)
+    })
+}
+
+/// Create the Lua-facing `vulcan.models.embed` function.
+/// 创建面向 Lua 的 `vulcan.models.embed` 函数。
+fn create_model_embed_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(move |lua, args: MultiValue| {
+        let values = args.into_vec();
+        let result = (|| -> Result<Value, RuntimeModelError> {
+            validate_runtime_model_arg_count(values.len(), 1, "vulcan.models.embed")?;
+            let text = runtime_model_string_arg(&values, 0, "vulcan.models.embed", "text")?;
+            let caller = current_runtime_model_caller(lua).map_err(|error| {
+                runtime_model_error(RuntimeModelErrorCode::InternalError, error)
+            })?;
+            dispatch_model_embed_request(&RuntimeModelEmbedRequest { text, caller })
+                .map(runtime_model_embed_response_value)
+        })();
+        let value = match result {
+            Ok(value) => value,
+            Err(error) => runtime_model_error_value(error),
+        };
+        json_value_to_lua(lua, &value)
+    })
+}
+
+/// Create the Lua-facing `vulcan.models.llm` function.
+/// 创建面向 Lua 的 `vulcan.models.llm` 函数。
+fn create_model_llm_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(move |lua, args: MultiValue| {
+        let values = args.into_vec();
+        let result = (|| -> Result<Value, RuntimeModelError> {
+            validate_runtime_model_arg_count(values.len(), 2, "vulcan.models.llm")?;
+            let system = runtime_model_string_arg(&values, 0, "vulcan.models.llm", "system")?;
+            let user = runtime_model_string_arg(&values, 1, "vulcan.models.llm", "user")?;
+            let caller = current_runtime_model_caller(lua).map_err(|error| {
+                runtime_model_error(RuntimeModelErrorCode::InternalError, error)
+            })?;
+            dispatch_model_llm_request(&RuntimeModelLlmRequest {
+                system,
+                user,
+                caller,
+            })
+            .map(runtime_model_llm_response_value)
+        })();
+        let value = match result {
+            Ok(value) => value,
+            Err(error) => runtime_model_error_value(error),
+        };
+        json_value_to_lua(lua, &value)
+    })
+}
+
 /// Return whether one JSON value is exactly the ROOT layer label.
 /// 返回单个 JSON 值是否正好是 ROOT 层标签。
 fn payload_string_is_root_layer(value: &Value) -> bool {
@@ -585,6 +883,8 @@ fn runlua_cwd_guard() -> &'static Mutex<()> {
 /// 构建内部 luaexec 工具调用使用的受限模拟请求上下文。
 fn build_luaexec_call_request_context() -> RuntimeRequestContext {
     RuntimeRequestContext {
+        request_id: None,
+        client_name: None,
         transport_name: Some("luaexec_call".to_string()),
         session_id: Some("luaexec-call-internal".to_string()),
         client_info: Some(RuntimeClientInfo {
@@ -1258,6 +1558,12 @@ struct VulcanInternalExecutionContext {
     /// Current owner skill name executing inside this Lua VM.
     /// 当前 Lua 虚拟机内正在执行的所属 skill 名称。
     skill_name: Option<String>,
+    /// Current local entry name executing inside this Lua VM.
+    /// 当前 Lua 虚拟机内正在执行的局部入口名称。
+    entry_name: Option<String>,
+    /// Current runtime root name that owns the executing skill.
+    /// 拥有当前执行 skill 的运行时根名称。
+    root_name: Option<String>,
     /// Whether the current Lua VM is the isolated luaexec runtime environment.
     /// 当前 Lua 虚拟机是否处于隔离的 luaexec 运行环境。
     luaexec_active: bool,
@@ -1402,6 +1708,18 @@ fn capture_vulcan_internal_execution_context(
             error
         )
     })?;
+    let entry_name: Option<String> = internal.get("entry_name").map_err(|error| {
+        format!(
+            "Failed to read vulcan.runtime.internal.entry_name: {}",
+            error
+        )
+    })?;
+    let root_name: Option<String> = internal.get("root_name").map_err(|error| {
+        format!(
+            "Failed to read vulcan.runtime.internal.root_name: {}",
+            error
+        )
+    })?;
     let luaexec_active: bool = internal.get("luaexec_active").map_err(|error| {
         format!(
             "Failed to read vulcan.runtime.internal.luaexec_active: {}",
@@ -1418,6 +1736,8 @@ fn capture_vulcan_internal_execution_context(
     Ok(VulcanInternalExecutionContext {
         tool_name,
         skill_name,
+        entry_name,
+        root_name,
         luaexec_active,
         luaexec_caller_tool_name,
     })
@@ -1453,6 +1773,33 @@ fn populate_vulcan_internal_execution_context(
         None => internal.set("skill_name", LuaValue::Nil).map_err(|error| {
             format!(
                 "Failed to clear vulcan.runtime.internal.skill_name: {}",
+                error
+            )
+        })?,
+    }
+
+    match context.entry_name.as_deref() {
+        Some(entry_name) => internal.set("entry_name", entry_name).map_err(|error| {
+            format!(
+                "Failed to set vulcan.runtime.internal.entry_name: {}",
+                error
+            )
+        })?,
+        None => internal.set("entry_name", LuaValue::Nil).map_err(|error| {
+            format!(
+                "Failed to clear vulcan.runtime.internal.entry_name: {}",
+                error
+            )
+        })?,
+    }
+
+    match context.root_name.as_deref() {
+        Some(root_name) => internal.set("root_name", root_name).map_err(|error| {
+            format!("Failed to set vulcan.runtime.internal.root_name: {}", error)
+        })?,
+        None => internal.set("root_name", LuaValue::Nil).map_err(|error| {
+            format!(
+                "Failed to clear vulcan.runtime.internal.root_name: {}",
                 error
             )
         })?,
@@ -1602,6 +1949,7 @@ struct VulcanCoreModuleState {
     cache: Table,
     context: Table,
     deps: Table,
+    models: Table,
 }
 
 impl VulcanCoreModuleState {
@@ -1641,6 +1989,9 @@ impl VulcanCoreModuleState {
             cache: vulcan
                 .get("cache")
                 .map_err(|error| format!("Failed to get vulcan.cache: {}", error))?,
+            models: vulcan
+                .get("models")
+                .map_err(|error| format!("Failed to get vulcan.models: {}", error))?,
             context: vulcan
                 .get("context")
                 .map_err(|error| format!("Failed to get vulcan.context: {}", error))?,
@@ -1688,6 +2039,9 @@ impl VulcanCoreModuleState {
         self.vulcan
             .set("cache", self.cache.clone())
             .map_err(|error| format!("Failed to restore vulcan.cache: {}", error))?;
+        self.vulcan
+            .set("models", self.models.clone())
+            .map_err(|error| format!("Failed to restore vulcan.models: {}", error))?;
         self.vulcan
             .set("context", self.context.clone())
             .map_err(|error| format!("Failed to restore vulcan.context: {}", error))?;
@@ -1869,6 +2223,8 @@ impl LuaNestedCallScopeGuard {
         &self,
         dispatch_entry_display_name: &str,
         owner_skill_name: &str,
+        owner_local_name: &str,
+        owner_root_name: &str,
         owner_skill_dir: &str,
         entry_path: &str,
         nested_invocation_context: &LuaInvocationContext,
@@ -1881,6 +2237,8 @@ impl LuaNestedCallScopeGuard {
             &VulcanInternalExecutionContext {
                 tool_name: Some(dispatch_entry_display_name.to_string()),
                 skill_name: Some(owner_skill_name.to_string()),
+                entry_name: Some(owner_local_name.to_string()),
+                root_name: Some(owner_root_name.to_string()),
                 luaexec_active: self.previous_internal_context.luaexec_active,
                 luaexec_caller_tool_name: self
                     .previous_internal_context
@@ -5628,6 +5986,8 @@ impl LuaEngine {
             &VulcanInternalExecutionContext {
                 tool_name: Some(display_tool_name.clone()),
                 skill_name: Some(skill.meta.effective_skill_id().to_string()),
+                entry_name: Some(resolved_target.local_name.clone()),
+                root_name: Some(skill.root_name.clone()),
                 luaexec_active: false,
                 luaexec_caller_tool_name: None,
             },
@@ -5816,6 +6176,8 @@ impl LuaEngine {
             &VulcanInternalExecutionContext {
                 tool_name: None,
                 skill_name: None,
+                entry_name: None,
+                root_name: None,
                 luaexec_active: true,
                 luaexec_caller_tool_name: request.caller_tool_name.clone(),
             },
@@ -6253,6 +6615,8 @@ end
             &VulcanInternalExecutionContext {
                 tool_name: Some("vulcan-help".to_string()),
                 skill_name: Some(skill.meta.effective_skill_id().to_string()),
+                entry_name: Some(relative_path.to_string()),
+                root_name: Some(skill.root_name.clone()),
                 luaexec_active: false,
                 luaexec_caller_tool_name: None,
             },
@@ -6364,6 +6728,9 @@ end
             /// Stable local entry name declared by the owning skill.
             /// 所属 skill 声明的稳定局部入口名称。
             local_name: String,
+            /// Runtime root name that owns the current entry.
+            /// 拥有当前入口的运行时根名称。
+            root_name: String,
             /// Owning skill directory used to restore file context.
             /// 用于恢复文件上下文的所属 skill 目录。
             owner_skill_dir: String,
@@ -6384,6 +6751,7 @@ end
                     module_name: tool.lua_module.clone(),
                     owner_skill_id: target.skill_id.clone(),
                     local_name: target.local_name.clone(),
+                    root_name: skill.root_name.clone(),
                     owner_skill_dir: skill.dir.to_string_lossy().to_string(),
                     entry_path: entry_path.to_string_lossy().to_string(),
                 })
@@ -6470,6 +6838,8 @@ end
                     .enter_nested_call(
                         &dispatch_entry.display_name,
                         owner_skill_name,
+                        &dispatch_entry.local_name,
+                        &dispatch_entry.root_name,
                         &dispatch_entry.owner_skill_dir,
                         &dispatch_entry.entry_path,
                         &nested_invocation_context,
@@ -6608,6 +6978,7 @@ end
         let cache = lua.create_table()?;
         let config = lua.create_table()?;
         let host = lua.create_table()?;
+        let models = lua.create_table()?;
         let context = lua.create_table()?;
         let deps = lua.create_table()?;
 
@@ -6892,6 +7263,11 @@ end
         host.set("has_tool", host_has_fn)?;
         host.set("call", create_host_tool_call_fn(lua)?)?;
 
+        models.set("status", create_model_status_fn(lua)?)?;
+        models.set("has", create_model_has_fn(lua)?)?;
+        models.set("embed", create_model_embed_fn(lua)?)?;
+        models.set("llm", create_model_llm_fn(lua)?)?;
+
         context.set("request", lua.create_table()?)?;
         context.set("client_info", LuaValue::Nil)?;
         context.set("client_capabilities", lua.create_table()?)?;
@@ -6982,6 +7358,8 @@ end
 
         runtime_internal.set("tool_name", LuaValue::Nil)?;
         runtime_internal.set("skill_name", LuaValue::Nil)?;
+        runtime_internal.set("entry_name", LuaValue::Nil)?;
+        runtime_internal.set("root_name", LuaValue::Nil)?;
         runtime_internal.set("luaexec_active", false)?;
         runtime_internal.set("luaexec_caller_tool_name", LuaValue::Nil)?;
         runtime.set("internal", runtime_internal)?;
@@ -7001,6 +7379,7 @@ end
         vulcan.set("cache", cache)?;
         vulcan.set("config", config)?;
         vulcan.set("host", host)?;
+        vulcan.set("models", models)?;
         vulcan.set("context", context)?;
         vulcan.set("deps", deps)?;
 
@@ -7119,16 +7498,20 @@ mod tests {
         populate_vulcan_dependency_context, populate_vulcan_file_context,
         populate_vulcan_internal_execution_context, runlua_cwd_guard,
     };
+    use crate::host::callbacks::runtime_model_callback_test_guard;
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
     use crate::lua_skill::SkillMeta;
     use crate::runtime_options::LuaRuntimeRunLuaPoolConfig;
     use crate::{
-        LuaEngineOptions, LuaRuntimeHostOptions, RuntimeHostToolAction, RuntimeSkillRoot,
-        SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority,
-        SkillUninstallOptions, set_host_tool_callback,
+        LuaEngineOptions, LuaRuntimeHostOptions, RuntimeClientInfo, RuntimeHostToolAction,
+        RuntimeModelEmbedRequest, RuntimeModelEmbedResponse, RuntimeModelError,
+        RuntimeModelErrorCode, RuntimeModelLlmRequest, RuntimeModelLlmResponse, RuntimeModelUsage,
+        RuntimeRequestContext, RuntimeSkillRoot, SkillInstallRequest, SkillInstallSourceType,
+        SkillManagementAuthority, SkillUninstallOptions, set_host_tool_callback,
+        set_model_embed_callback, set_model_llm_callback,
     };
     use mlua::{Table, Value as LuaValue};
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
@@ -7324,6 +7707,27 @@ mod tests {
             format!("return function(args)\n  return '{response}'\nend\n"),
         )
         .expect("write minimal skill runtime entry");
+        skill_dir
+    }
+
+    /// Write one model-capability test skill with caller-provided Lua source.
+    /// 写入一个使用调用方提供 Lua 源码的模型能力测试 skill。
+    fn write_model_test_skill_to_root(
+        skill_root: &Path,
+        skill_id: &str,
+        lua_source: &str,
+    ) -> PathBuf {
+        let skill_dir = skill_root.join(skill_id);
+        fs::create_dir_all(skill_dir.join("runtime")).expect("create model test skill runtime dir");
+        fs::write(
+            skill_dir.join("skill.yaml"),
+            format!(
+                "name: {skill_id}\nversion: 0.1.0\nenable: true\ndebug: false\nentries:\n  - name: ping\n    description: Model test entry.\n    lua_entry: runtime/ping.lua\n    lua_module: {skill_id}.ping\n"
+            ),
+        )
+        .expect("write model test skill yaml");
+        fs::write(skill_dir.join("runtime").join("ping.lua"), lua_source)
+            .expect("write model test runtime entry");
         skill_dir
     }
 
@@ -8729,6 +9133,316 @@ mod tests {
         assert!(error.contains("vulcan.config.get requires one active skill context"));
     }
 
+    /// Verify `vulcan.models.*` reports disabled capabilities and structured unavailable errors by default.
+    /// 验证 `vulcan.models.*` 默认报告能力未开启，并返回结构化不可用错误。
+    #[test]
+    fn vulcan_models_defaults_without_callbacks() {
+        let _guard = runtime_model_callback_test_guard();
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .run_lua(
+                r#"
+local status = vulcan.models.status()
+local embed = vulcan.models.embed("x")
+local llm = vulcan.models.llm("s", "u")
+return {
+  status_ok = status.ok,
+  embed_capability = status.capabilities.embed,
+  llm_capability = status.capabilities.llm,
+  has_embed = vulcan.models.has("embed"),
+  has_llm = vulcan.models.has("llm"),
+  has_unknown = vulcan.models.has("rerank"),
+  embed_ok = embed.ok,
+  embed_code = embed.error.code,
+  llm_ok = llm.ok,
+  llm_code = llm.error.code,
+}
+"#,
+                &json!({}),
+                None,
+            )
+            .expect("run model defaults lua");
+
+        assert_eq!(result["status_ok"], true);
+        assert_eq!(result["embed_capability"], false);
+        assert_eq!(result["llm_capability"], false);
+        assert_eq!(result["has_embed"], false);
+        assert_eq!(result["has_llm"], false);
+        assert_eq!(result["has_unknown"], false);
+        assert_eq!(result["embed_ok"], false);
+        assert_eq!(result["embed_code"], "model_unavailable");
+        assert_eq!(result["llm_ok"], false);
+        assert_eq!(result["llm_code"], "model_unavailable");
+    }
+
+    /// Verify model APIs return structured invalid-argument errors instead of throwing to Lua.
+    /// 验证模型 API 会返回结构化非法参数错误，而不是向 Lua 抛出异常。
+    #[test]
+    fn vulcan_models_validate_arguments() {
+        let _guard = runtime_model_callback_test_guard();
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .run_lua(
+                r#"
+local embed_empty = vulcan.models.embed("")
+local embed_table = vulcan.models.embed({ "a", "b" })
+local embed_extra = vulcan.models.embed("x", "extra")
+local llm_empty_system = vulcan.models.llm("", "u")
+local llm_empty_user = vulcan.models.llm("s", "")
+local llm_extra = vulcan.models.llm("s", "u", "extra")
+return {
+  embed_empty = embed_empty.error.code,
+  embed_table = embed_table.error.code,
+  embed_extra = embed_extra.error.code,
+  llm_empty_system = llm_empty_system.error.code,
+  llm_empty_user = llm_empty_user.error.code,
+  llm_extra = llm_extra.error.code,
+}
+"#,
+                &json!({}),
+                None,
+            )
+            .expect("run model argument validation lua");
+
+        assert_eq!(result["embed_empty"], "invalid_argument");
+        assert_eq!(result["embed_table"], "invalid_argument");
+        assert_eq!(result["embed_extra"], "invalid_argument");
+        assert_eq!(result["llm_empty_system"], "invalid_argument");
+        assert_eq!(result["llm_empty_user"], "invalid_argument");
+        assert_eq!(result["llm_extra"], "invalid_argument");
+    }
+
+    /// Verify registered embedding callbacks receive text and full caller context.
+    /// 验证已注册的 embedding 回调会收到文本和完整调用方上下文。
+    #[test]
+    fn vulcan_models_embed_dispatches_registered_callback_with_context() {
+        let _guard = runtime_model_callback_test_guard();
+        let captured_request: Arc<Mutex<Option<RuntimeModelEmbedRequest>>> =
+            Arc::new(Mutex::new(None));
+        let captured_request_for_callback = captured_request.clone();
+        set_model_embed_callback(Some(Arc::new(move |request| {
+            *captured_request_for_callback
+                .lock()
+                .expect("lock captured embed request") = Some(request.clone());
+            Ok(RuntimeModelEmbedResponse {
+                vector: vec![0.25, 0.5, 0.75],
+                dimensions: 3,
+                usage: Some(RuntimeModelUsage {
+                    input_tokens: Some(2),
+                    output_tokens: None,
+                }),
+            })
+        })));
+
+        let engine = make_runtime_test_engine();
+        let has_embed = engine
+            .run_lua("return vulcan.models.has('embed')", &json!({}), None)
+            .expect("run has embed lua");
+        assert_eq!(has_embed, json!(true));
+
+        let runtime_root = make_temp_runtime_root("model-embed-context");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+        let skill_dir = write_model_test_skill_to_root(
+            &runtime_root.join("skills"),
+            "model-skill",
+            "return function(args)\n  local result = vulcan.models.embed(\"hello\")\n  return vulcan.json.encode(result)\nend\n",
+        );
+        let mut engine = make_runtime_test_engine();
+        engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("skills"),
+            }])
+            .expect("load model embed test skill");
+        let invocation_context = crate::runtime_options::LuaInvocationContext::new(
+            Some(RuntimeRequestContext {
+                request_id: Some("req-embed-1".to_string()),
+                client_name: Some("Codex Desktop".to_string()),
+                transport_name: Some("mcp".to_string()),
+                session_id: Some("session-embed".to_string()),
+                client_info: Some(RuntimeClientInfo {
+                    kind: Some("desktop".to_string()),
+                    name: Some("Codex Desktop".to_string()),
+                    version: Some("test".to_string()),
+                }),
+                client_capabilities: json!({"models": true}),
+            }),
+            json!({"budget": "test"}),
+            json!({"tool": "config"}),
+        );
+        let result = engine
+            .call_skill("model-skill-ping", &json!({}), Some(&invocation_context))
+            .expect("call model embed skill");
+        let result_json: Value =
+            serde_json::from_str(&result.content).expect("parse embed result json");
+        let captured = captured_request
+            .lock()
+            .expect("lock captured embed request")
+            .clone()
+            .expect("embed request captured");
+
+        assert_eq!(result_json["ok"], true);
+        assert_eq!(result_json["vector"], json!([0.25, 0.5, 0.75]));
+        assert_eq!(result_json["dimensions"], 3);
+        assert_eq!(result_json["usage"]["input_tokens"], 2);
+        assert_eq!(captured.text, "hello");
+        assert_eq!(captured.caller.skill_id.as_deref(), Some("model-skill"));
+        assert_eq!(captured.caller.entry_name.as_deref(), Some("ping"));
+        assert_eq!(
+            captured.caller.canonical_tool_name.as_deref(),
+            Some("model-skill-ping")
+        );
+        assert_eq!(captured.caller.root_name.as_deref(), Some("ROOT"));
+        assert_eq!(
+            captured.caller.skill_dir.as_deref(),
+            Some(skill_dir.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            captured.caller.client_name.as_deref(),
+            Some("Codex Desktop")
+        );
+        assert_eq!(captured.caller.request_id.as_deref(), Some("req-embed-1"));
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify registered LLM callbacks receive prompts and full caller context.
+    /// 验证已注册的 LLM 回调会收到提示词和完整调用方上下文。
+    #[test]
+    fn vulcan_models_llm_dispatches_registered_callback_with_context() {
+        let _guard = runtime_model_callback_test_guard();
+        let captured_request: Arc<Mutex<Option<RuntimeModelLlmRequest>>> =
+            Arc::new(Mutex::new(None));
+        let captured_request_for_callback = captured_request.clone();
+        set_model_llm_callback(Some(Arc::new(move |request| {
+            *captured_request_for_callback
+                .lock()
+                .expect("lock captured llm request") = Some(request.clone());
+            Ok(RuntimeModelLlmResponse {
+                assistant: "assistant text".to_string(),
+                usage: Some(RuntimeModelUsage {
+                    input_tokens: Some(5),
+                    output_tokens: Some(7),
+                }),
+            })
+        })));
+
+        let engine = make_runtime_test_engine();
+        let has_llm = engine
+            .run_lua("return vulcan.models.has('llm')", &json!({}), None)
+            .expect("run has llm lua");
+        assert_eq!(has_llm, json!(true));
+
+        let runtime_root = make_temp_runtime_root("model-llm-context");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+        let skill_dir = write_model_test_skill_to_root(
+            &runtime_root.join("skills"),
+            "llm-skill",
+            "return function(args)\n  local result = vulcan.models.llm(\"system\", \"user\")\n  return vulcan.json.encode(result)\nend\n",
+        );
+        let mut engine = make_runtime_test_engine();
+        engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("skills"),
+            }])
+            .expect("load model llm test skill");
+        let result = engine
+            .call_skill("llm-skill-ping", &json!({}), None)
+            .expect("call model llm skill");
+        let result_json: Value =
+            serde_json::from_str(&result.content).expect("parse llm result json");
+        let captured = captured_request
+            .lock()
+            .expect("lock captured llm request")
+            .clone()
+            .expect("llm request captured");
+
+        assert_eq!(result_json["ok"], true);
+        assert_eq!(result_json["assistant"], "assistant text");
+        assert_eq!(result_json["usage"]["input_tokens"], 5);
+        assert_eq!(result_json["usage"]["output_tokens"], 7);
+        assert_eq!(captured.system, "system");
+        assert_eq!(captured.user, "user");
+        assert_eq!(captured.caller.skill_id.as_deref(), Some("llm-skill"));
+        assert_eq!(captured.caller.entry_name.as_deref(), Some("ping"));
+        assert_eq!(
+            captured.caller.canonical_tool_name.as_deref(),
+            Some("llm-skill-ping")
+        );
+        assert_eq!(captured.caller.root_name.as_deref(), Some("ROOT"));
+        assert_eq!(
+            captured.caller.skill_dir.as_deref(),
+            Some(skill_dir.to_string_lossy().as_ref())
+        );
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify callback errors preserve standard codes and provider raw fields.
+    /// 验证回调错误会保留标准错误码和 provider 原始字段。
+    #[test]
+    fn vulcan_models_wrap_callback_errors_and_provider_fields() {
+        let _guard = runtime_model_callback_test_guard();
+        set_model_embed_callback(Some(Arc::new(|_| {
+            Err(RuntimeModelError {
+                code: RuntimeModelErrorCode::ProviderError,
+                message: "provider failed".to_string(),
+                provider_message: Some("raw provider message".to_string()),
+                provider_code: Some("model_not_found".to_string()),
+                provider_status: Some(400),
+            })
+        })));
+        set_model_llm_callback(Some(Arc::new(|_| {
+            Err(RuntimeModelError {
+                code: RuntimeModelErrorCode::Timeout,
+                message: "llm timed out".to_string(),
+                provider_message: None,
+                provider_code: None,
+                provider_status: None,
+            })
+        })));
+
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .run_lua(
+                r#"
+local embed = vulcan.models.embed("hello")
+local llm = vulcan.models.llm("system", "user")
+return {
+  embed_ok = embed.ok,
+  embed_code = embed.error.code,
+  embed_message = embed.error.message,
+  provider_message = embed.error.provider_message,
+  provider_code = embed.error.provider_code,
+  provider_status = embed.error.provider_status,
+  llm_ok = llm.ok,
+  llm_code = llm.error.code,
+  llm_message = llm.error.message,
+}
+"#,
+                &json!({}),
+                None,
+            )
+            .expect("run model error wrapping lua");
+
+        assert_eq!(result["embed_ok"], false);
+        assert_eq!(result["embed_code"], "provider_error");
+        assert_eq!(result["embed_message"], "provider failed");
+        assert_eq!(result["provider_message"], "raw provider message");
+        assert_eq!(result["provider_code"], "model_not_found");
+        assert_eq!(result["provider_status"], 400);
+        assert_eq!(result["llm_ok"], false);
+        assert_eq!(result["llm_code"], "timeout");
+        assert_eq!(result["llm_message"], "llm timed out");
+    }
+
     /// Verify `vulcan.host.*` returns safe defaults when no host callback is registered.
     /// 验证未注册宿主回调时 `vulcan.host.*` 会返回安全默认值。
     #[test]
@@ -8930,6 +9644,18 @@ return {
             internal
                 .get::<LuaValue>("skill_name")
                 .expect("get skill_name"),
+            LuaValue::Nil
+        ));
+        assert!(matches!(
+            internal
+                .get::<LuaValue>("entry_name")
+                .expect("get entry_name"),
+            LuaValue::Nil
+        ));
+        assert!(matches!(
+            internal
+                .get::<LuaValue>("root_name")
+                .expect("get root_name"),
             LuaValue::Nil
         ));
         assert!(
@@ -9157,6 +9883,8 @@ return {
                 &VulcanInternalExecutionContext {
                     tool_name: Some("test-tool".to_string()),
                     skill_name: Some("test-skill".to_string()),
+                    entry_name: Some("test".to_string()),
+                    root_name: Some("ROOT".to_string()),
                     luaexec_active: false,
                     luaexec_caller_tool_name: None,
                 },

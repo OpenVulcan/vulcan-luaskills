@@ -1000,6 +1000,152 @@ Rust API：
 - 该桥接不支持 stream，宿主 callback 必须返回完整 JSON 结果。
 - 权限、超时、审计、secret 管理、模型 provider 策略和工具 allowlist 均由宿主负责。
 
+### 9.8 模型能力 callback
+
+Rust API：
+
+- `set_model_embed_callback`
+- `set_model_llm_callback`
+
+标准 C ABI 注册接口：
+
+- `luaskills_ffi_set_model_embed_json_callback`
+- `luaskills_ffi_set_model_llm_json_callback`
+
+说明：
+
+- 该 callback 供 Lua 侧 `vulcan.models.embed(text)` 与 `vulcan.models.llm(system, user)` 使用。
+- Lua 侧只能传固定参数，不能传模型名、temperature、max_tokens、base_url、api_key、thinking、stream 或 provider-specific 参数。
+- 宿主按能力分别注册 callback，未注册就表示该能力未开启。
+- callback 请求会携带 caller context，包含 skill、entry、root、skill_dir、client_name、request_id 等可用字段。
+- callback 成功时返回模型能力的裸响应载荷，例如 embedding 的 `vector/dimensions/usage` 或 LLM 的 `assistant/usage`。
+- callback 失败时可返回 `{ "ok": false, "error": { "code": "...", "message": "...", "provider_message": "...", "provider_code": "...", "provider_status": 400 } }`，LuaSkills 会保留 provider 原始错误字段。
+- 模型 provider 配置完全归宿主管理，不走 `skill_config`，Lua 侧不能读取、设置或覆盖。
+
+推荐接入顺序：
+
+1. 宿主先加载自己的模型配置，例如 `model_config.yaml`、环境变量、产品设置或工作区策略。
+2. 宿主按能力分别注册 callback，只注册真实开放的能力。
+3. 宿主创建 engine，并完成 `load_from_roots`。
+4. Lua skill 通过 `vulcan.models.status()` 或 `vulcan.models.has(capability)` 判断能力是否可用。
+5. 宿主关闭时清理进程级 callback，避免测试或长进程复用时留下旧闭包。
+
+能力状态规则：
+
+- 未注册 embed callback 时：
+  - `vulcan.models.has("embed") == false`
+  - `vulcan.models.status().capabilities.embed == false`
+  - `vulcan.models.embed("x")` 返回 `model_unavailable`
+- 注册 embed callback 后：
+  - `vulcan.models.has("embed") == true`
+  - `vulcan.models.status().capabilities.embed == true`
+- LLM 能力同理。
+- `status()` 本身不需要宿主注册 callback；它始终由 LuaSkills 根据当前 callback 注册状态生成。
+
+embedding JSON callback 请求：
+
+```json
+{
+  "text": "hello",
+  "caller": {
+    "skill_id": "demo-skill",
+    "entry_name": "embed",
+    "canonical_tool_name": "demo-skill-embed",
+    "root_name": "USER",
+    "skill_dir": "D:/runtime/luaskills/user_skills/demo-skill",
+    "client_name": "mcp-host",
+    "request_id": "req-001"
+  }
+}
+```
+
+LLM JSON callback 请求：
+
+```json
+{
+  "system": "You are concise.",
+  "user": "Summarize this note.",
+  "caller": {
+    "skill_id": "demo-skill",
+    "entry_name": "ask",
+    "canonical_tool_name": "demo-skill-ask",
+    "root_name": "USER",
+    "skill_dir": "D:/runtime/luaskills/user_skills/demo-skill",
+    "client_name": "mcp-host",
+    "request_id": "req-002"
+  }
+}
+```
+
+embedding 成功返回推荐使用裸载荷：
+
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "dimensions": 3,
+  "usage": {
+    "input_tokens": 12
+  }
+}
+```
+
+LLM 成功返回推荐使用裸载荷：
+
+```json
+{
+  "assistant": "summary text",
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 8
+  }
+}
+```
+
+provider 失败时推荐返回结构化错误包络：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "provider_error",
+    "message": "模型服务拒绝了本次请求",
+    "provider_message": "raw provider message after host-side redaction",
+    "provider_code": "model_not_found",
+    "provider_status": 404
+  }
+}
+```
+
+错误码建议：
+
+- `model_unavailable`：能力 callback 未注册。
+- `invalid_argument`：Lua 侧参数数量、类型或空字符串不合法。
+- `provider_error`：模型 provider 返回错误。
+- `timeout`：宿主模型调用超时。
+- `budget_exceeded`：宿主预算、限流或策略拒绝本次调用。
+- `internal_error`：LuaSkills 或宿主桥接内部错误。
+
+宿主返回 provider 错误时应遵守两条规则：
+
+- 尽量保留 provider 的原始错误文本、原始错误码和 HTTP 状态码，便于排查密钥、额度、限流和模型不存在等问题。
+- 先在宿主侧完成脱敏，不要把 API key、Authorization header、签名、临时凭证或完整请求头传给 LuaSkills。
+
+SDK 对接入口：
+
+| SDK | 注册入口 | 清理入口 | 备注 |
+| --- | --- | --- | --- |
+| TypeScript / Node.js | `setModelEmbedJsonCallback`、`setModelLlmJsonCallback` | `clearModelEmbedJsonCallback`、`clearModelLlmJsonCallback` | 由 `LuaSkillsJsonFfi` 持有 callback 注册。 |
+| Python | `set_model_embed_json_callback`、`set_model_llm_json_callback` | `clear_model_embed_json_callback`、`clear_model_llm_json_callback` | 由 `LuaSkillsJsonFfi` 持有 callback 注册。 |
+| Go | `SetModelEmbedJSONCallback`、`SetModelLLMJSONCallback` | `ClearModelEmbedJSONCallback`、`ClearModelLLMJSONCallback` | 当前只暴露类型化边界，真实进程级注册需要宿主 cgo callback bridge。 |
+
+排查建议：
+
+- Lua 返回 `model_unavailable`：确认 callback 是否注册，且注册发生在创建或调用 engine 之前。
+- Lua 返回 `invalid_argument`：确认 skill 没有传空字符串、table、数组、第三参数或 provider-specific 参数。
+- Lua 返回 `provider_error` 但缺少 provider 字段：确认宿主 callback 返回的是结构化错误包络，而不是只通过 FFI `error_out` 返回纯文本。
+- `caller` 字段为空：确认 skill 是通过正式 `call_skill` 或已加载 runtime 调用，而不是脱离 runtime 上下文的测试路径。
+- TypeScript / Python 找不到 model callback symbol：确认动态库版本包含 `luaskills_ffi_set_model_embed_json_callback` 与 `luaskills_ffi_set_model_llm_json_callback`。
+
 ## 10. 每类接口的调用逻辑
 
 ### 10.1 `version` / `describe`

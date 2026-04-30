@@ -14,6 +14,7 @@ LuaSkills owns:
 - Strict help parsing.
 - Runtime result shaping.
 - `vulcan.*` and `vulcan.runtime.*` injection.
+- Standard `vulcan.models.*` API shape, argument validation, result envelopes, and caller-context forwarding.
 - Skill dependency path injection.
 - Optional SQLite and LanceDB provider routing.
 - Lifecycle primitives such as install, update, enable, disable, and uninstall.
@@ -26,9 +27,130 @@ The host owns:
 - Product UI and command surfaces.
 - Client budgets and truncation policy.
 - Configuration source and storage placement.
+- Model provider configuration, API keys, routing, budgets, redaction, and callback registration.
 - Which roots are writable.
 - Which authority is attached to each management operation.
 - Whether database ownership stays local, host-controlled, or controller-backed.
+
+## Standard Model Capability Boundary
+
+`vulcan.models.*` is part of the LuaSkills standard runtime surface, but the real model implementation is always host-owned.
+LuaSkills only provides:
+
+- The fixed Lua API: `status`, `has`, `embed`, and `llm`.
+- Argument validation for the standard API.
+- Table-shaped success and error envelopes.
+- Caller-context forwarding to host callbacks.
+- Capability discovery based on whether the matching callback is registered.
+
+The host provides:
+
+- The provider configuration, API keys, base URL, model names, temperature, thinking, stream policy, timeout, and budgets.
+- The dedicated callback for each enabled capability.
+- Provider error redaction before returning provider details to LuaSkills.
+- Audit, rate limiting, and cost attribution based on caller context.
+
+Model configuration is intentionally separate from `skill_config`.
+Lua skills cannot read, set, or override provider configuration through `vulcan.models.*`.
+
+## Model Callback Integration Flow
+
+Use this sequence for hosts that expose model capabilities:
+
+1. Load host-managed model configuration from the host's own source, such as `model_config.yaml`, environment, workspace policy, or product settings.
+2. Register `embed` and `llm` callbacks separately. Register only the capabilities the host wants to enable.
+3. Create the LuaSkills engine and load skill roots.
+4. Invoke skills normally. Lua code can discover model capability state with `vulcan.models.status()` or `vulcan.models.has(capability)`.
+5. Clear callbacks during host shutdown when using process-level FFI or SDK callback registration.
+
+When a callback is missing, the corresponding Lua method returns a structured `model_unavailable` error.
+It does not require the Lua skill to wrap the call in `pcall`.
+
+## JSON FFI And SDK Request Shapes
+
+JSON FFI callbacks and SDK callbacks receive fixed request payloads.
+Embedding callbacks receive:
+
+```json
+{
+  "text": "hello",
+  "caller": {
+    "skill_id": "demo-skill",
+    "entry_name": "ask",
+    "canonical_tool_name": "demo-skill-ask",
+    "root_name": "USER",
+    "skill_dir": "D:/runtime/luaskills/user_skills/demo-skill",
+    "client_name": "mcp-host",
+    "request_id": "req-123"
+  }
+}
+```
+
+LLM callbacks receive:
+
+```json
+{
+  "system": "You are concise.",
+  "user": "Summarize this note.",
+  "caller": {
+    "skill_id": "demo-skill",
+    "entry_name": "summarize",
+    "canonical_tool_name": "demo-skill-summarize",
+    "root_name": "USER",
+    "skill_dir": "D:/runtime/luaskills/user_skills/demo-skill",
+    "client_name": "mcp-host",
+    "request_id": "req-124"
+  }
+}
+```
+
+Success responses are bare model payloads:
+
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "dimensions": 3,
+  "usage": {
+    "input_tokens": 12
+  }
+}
+```
+
+```json
+{
+  "assistant": "summary text",
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 8
+  }
+}
+```
+
+Provider failures should use the standard error envelope:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "provider_error",
+    "message": "model provider rejected the request",
+    "provider_message": "raw provider message after host-side redaction",
+    "provider_code": "model_not_found",
+    "provider_status": 404
+  }
+}
+```
+
+`provider_message`, `provider_code`, and `provider_status` are optional, but hosts should preserve them whenever they are safe to expose after redaction.
+
+## SDK Integration Map
+
+| Host | Recommended Entry | Model Callback Notes |
+| --- | --- | --- |
+| Rust | Direct crate API | Use `set_model_embed_callback` and `set_model_llm_callback` with typed request and response structs. |
+| TypeScript / Node.js | `@luaskills/sdk` | Use `LuaSkillsJsonFfi.setModelEmbedJsonCallback` and `setModelLlmJsonCallback`, then create/load the client. |
+| Python | `luaskills-sdk` | Use `LuaSkillsJsonFfi.set_model_embed_json_callback` and `set_model_llm_json_callback`, then create/load the client. |
+| Go | `luaskills-sdk-go` or C ABI | The SDK exposes typed model request/response/error shapes, but direct process-level callback registration still requires a host-owned cgo bridge. |
 
 ## Skill Root Layers
 

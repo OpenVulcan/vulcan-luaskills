@@ -701,6 +701,8 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_set_sqlite_provider_json_callback",
         "luaskills_ffi_set_lancedb_provider_json_callback",
         "luaskills_ffi_set_host_tool_json_callback",
+        "luaskills_ffi_set_model_embed_json_callback",
+        "luaskills_ffi_set_model_llm_json_callback",
         "luaskills_ffi_string_clone",
         "luaskills_ffi_version_json",
         "luaskills_ffi_describe_json",

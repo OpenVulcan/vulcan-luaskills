@@ -84,6 +84,26 @@ int32_t luaskills_ffi_set_host_tool_json_callback(
 );
 
 /*
+Register or clear the model embedding JSON callback used by Lua vulcan.models.embed(text).
+注册或清理 Lua vulcan.models.embed(text) 使用的模型 embedding JSON callback。
+*/
+int32_t luaskills_ffi_set_model_embed_json_callback(
+    FfiJsonProviderCallback callback,
+    void *user_data,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Register or clear the model LLM JSON callback used by Lua vulcan.models.llm(system, user).
+注册或清理 Lua vulcan.models.llm(system, user) 使用的模型 LLM JSON callback。
+*/
+int32_t luaskills_ffi_set_model_llm_json_callback(
+    FfiJsonProviderCallback callback,
+    void *user_data,
+    FfiOwnedBuffer *error_out
+);
+
+/*
 Return one stable FFI version descriptor as JSON.
 以 JSON 形式返回稳定的 FFI 版本描述。
 */

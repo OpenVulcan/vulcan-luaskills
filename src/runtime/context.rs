@@ -23,6 +23,14 @@ pub struct RuntimeClientInfo {
 /// 宿主在单次运行时调用中注入的通用请求级上下文。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RuntimeRequestContext {
+    /// Optional host-defined request identifier for audit and cost attribution.
+    /// 可选的宿主请求标识符，用于审计和成本归因。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Optional host-defined client name for audit and cost attribution.
+    /// 可选的宿主客户端名称，用于审计和成本归因。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_name: Option<String>,
     /// Optional host-defined transport name for the current request.
     /// 当前请求的可选宿主传输层名称。
     #[serde(skip_serializing_if = "Option::is_none")]

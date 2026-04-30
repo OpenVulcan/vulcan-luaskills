@@ -83,6 +83,7 @@ GitHub-managed skill installs and release assets must use the same `skill_id`:
 | `vulcan.os` | Host OS and architecture info | Yes | `os`, `arch` |
 | `vulcan.json` | JSON encode/decode | Yes | JSON to/from Lua table |
 | `vulcan.cache` | Runtime cache | Yes | Disabled inside `vulcan.runtime.lua.exec` |
+| `vulcan.models` | Standard model capabilities | Yes | Capability is active only when the host registers the matching callback |
 | `vulcan.host` | Host-registered tool bridge | Yes | Empty until the host registers a callback |
 | `vulcan.context` | Request and current-entry context | Yes | Most values are host-injected |
 | `vulcan.deps` | Current skill dependency root paths | Yes | May be `nil` without a resolved skill context |
@@ -148,7 +149,94 @@ return result
 - `vulcan.call` inherits the current request context, budget snapshot, and tool config, then switches to the target skill's file context and database bindings.
 - In `luaexec` scenarios, extra reentry protection prevents unbounded recursion back into the current runtime caller.
 
-## 4.5 `vulcan.host.*`
+## 4.5 `vulcan.models.*`
+
+`vulcan.models.*` is the fixed standard model capability surface for Lua skills.
+It is not a generic host-tool call and does not let Lua choose provider configuration.
+
+Supported methods:
+
+- `vulcan.models.status()`: returns `{ ok = true, capabilities = { embed = boolean, llm = boolean } }`.
+- `vulcan.models.has(capability)`: returns whether `embed` or `llm` is registered by the host.
+- `vulcan.models.embed(text)`: embeds one non-empty string and returns a table envelope.
+- `vulcan.models.llm(system, user)`: runs one non-streaming LLM turn and returns a table envelope.
+
+Minimal example:
+
+```lua
+if not vulcan.models.has("embed") then
+    return {
+        ok = false,
+        reason = "model-embed-unavailable",
+    }
+end
+
+local result = vulcan.models.embed("hello")
+if not result.ok then
+    return result
+end
+
+return result.vector
+```
+
+Embedding success envelope:
+
+```lua
+{
+    ok = true,
+    vector = { 0.1, 0.2, 0.3 },
+    dimensions = 1536,
+    usage = {
+        input_tokens = 123,
+    },
+}
+```
+
+LLM success envelope:
+
+```lua
+{
+    ok = true,
+    assistant = "...",
+    usage = {
+        input_tokens = 123,
+        output_tokens = 456,
+    },
+}
+```
+
+Error envelope:
+
+```lua
+{
+    ok = false,
+    error = {
+        code = "provider_error",
+        message = "model provider failed",
+        provider_message = "raw provider error after host redaction",
+        provider_code = "model_not_found",
+        provider_status = 400,
+    },
+}
+```
+
+Behavior rules:
+
+- `status()` always exists and derives capability state from registered callbacks.
+- `has()` only recognizes `embed` and `llm`; unknown capabilities return `false`.
+- `embed()` accepts exactly one non-empty string and does not support batch input.
+- `llm()` accepts exactly two non-empty strings and does not support messages, tools, streaming, or thinking controls.
+- Lua cannot pass `model`, `temperature`, `max_tokens`, `base_url`, `api_key`, `dimensions`, or provider-specific parameters.
+- LuaSkills passes caller context to host callbacks for audit and cost attribution, but does not expose that context through the model API.
+- Model configuration, API keys, provider routing, timeouts, budgets, and redaction remain host responsibilities.
+
+Host integration references:
+
+- [Runtime architecture model capability boundary](architecture/runtime-model.md#standard-model-capability-boundary)
+- [FFI and SDK model capability quick path](ffi/overview.md#model-capability-quick-path)
+- [Chinese FFI model callback guide](zh-CN/ffi/integration-guide.md#98-模型能力-callback)
+
+## 4.6 `vulcan.host.*`
 
 `vulcan.host.*` is a fixed bridge for host-registered tools.
 It is intentionally narrower than arbitrary `vulcan.xxx` injection: Lua can list, probe, and call host tools, but it cannot create new top-level namespaces or register host tools itself.
@@ -163,16 +251,15 @@ Supported methods:
 Minimal example:
 
 ```lua
-if not vulcan.host.has("model.embed") then
+if not vulcan.host.has("vault.lookup") then
     return {
         ok = false,
-        reason = "model-embed-unavailable",
+        reason = "host-tool-unavailable",
     }
 end
 
-local result = vulcan.host.call("model.embed", {
-    model = "text-embedding-3-small",
-    input = "hello",
+local result = vulcan.host.call("vault.lookup", {
+    key = "demo-secret",
 })
 
 if not result.ok then
@@ -188,10 +275,9 @@ Recommended host-tool result envelope:
 {
     ok = true,
     value = {
-        embedding = { 0.1, 0.2, 0.3 },
+        text = "resolved value",
     },
     meta = {
-        provider = "openai",
         elapsed_ms = 120,
     },
 }
@@ -204,7 +290,7 @@ Recommended error envelope:
     ok = false,
     error = {
         code = "tool_not_found",
-        message = "host tool not found: model.embed",
+        message = "host tool not found: vault.lookup",
     },
 }
 ```
@@ -216,7 +302,8 @@ Behavior rules:
 - `call()` returns an error envelope when the host callback is missing or the callback returns an error.
 - `args` must be a Lua table. Use explicit keys for object-shaped inputs.
 - Streaming is not part of this bridge. Host tools should return one complete table result.
-- Permissions, timeouts, audit, secret handling, model policies, and final provider routing remain host responsibilities.
+- Permissions, timeouts, audit, and secret handling remain host responsibilities.
+- Standard model capabilities should use `vulcan.models.*`, not a long-term generic host-tool contract.
 
 ## 5. `vulcan.runtime.*`
 
@@ -610,6 +697,8 @@ Common fields come from:
 
 - `transport_name`
 - `session_id`
+- `request_id`
+- `client_name`
 - `client_info`
 - `client_capabilities`
 

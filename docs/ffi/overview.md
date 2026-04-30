@@ -37,14 +37,48 @@ For a new FFI host, stabilize the smallest runtime loop first:
 
 After that, add lifecycle operations, query helpers, installation/update flows, provider callbacks, host-tool callbacks, or `space_controller`.
 
+## Model Capability Quick Path
+
+Use `vulcan.models.*` when Lua skills need model capabilities that remain fully controlled by the host.
+This is different from `vulcan.host.*`: the model surface is fixed and capability-specific, not a generic host tool call.
+
+Host-side setup:
+
+1. Keep provider settings outside LuaSkills, for example in the host's own model configuration file or product settings.
+2. Register `luaskills_ffi_set_model_embed_json_callback` only when embeddings are enabled.
+3. Register `luaskills_ffi_set_model_llm_json_callback` only when one-turn non-streaming LLM calls are enabled.
+4. Create the engine, load roots, and call skills.
+5. Clear the process-level callbacks when the host shuts down.
+
+Callback request and response rules:
+
+- Embedding callback request: `{ "text": string, "caller": object }`.
+- LLM callback request: `{ "system": string, "user": string, "caller": object }`.
+- Embedding success response: `{ "vector": number[], "dimensions": number, "usage"?: object }`.
+- LLM success response: `{ "assistant": string, "usage"?: object }`.
+- Failure response: `{ "ok": false, "error": { "code": string, "message": string, "provider_message"?: string, "provider_code"?: string, "provider_status"?: number } }`.
+
+`caller` is attached by LuaSkills and may include `skill_id`, `entry_name`, `canonical_tool_name`, `root_name`, `skill_dir`, `client_name`, and `request_id`.
+Use it for attribution, budget policy, rate limits, and audit logs.
+
+SDK mapping:
+
+| SDK | Register | Clear |
+| --- | --- | --- |
+| TypeScript | `setModelEmbedJsonCallback`, `setModelLlmJsonCallback` | `clearModelEmbedJsonCallback`, `clearModelLlmJsonCallback` |
+| Python | `set_model_embed_json_callback`, `set_model_llm_json_callback` | `clear_model_embed_json_callback`, `clear_model_llm_json_callback` |
+| Go | Typed model callback boundary APIs | Requires a host-owned cgo callback bridge for real registration |
+
 ## Key Rules
 
 - Register host callbacks before creating an engine.
 - Use `luaskills_ffi_set_host_tool_json_callback` when Lua skills need to call host-registered tools through `vulcan.host.*`.
+- Use `luaskills_ffi_set_model_embed_json_callback` and `luaskills_ffi_set_model_llm_json_callback` when Lua skills need host-managed model capabilities through `vulcan.models.*`.
 - Do not throw exceptions across C ABI boundaries.
 - Do not re-enter the same engine from the same thread.
 - Free owned buffers with the matching LuaSkills free function.
 - Let the host decide authority and root write policy.
+- Let the host own model provider configuration; LuaSkills only forwards fixed model requests and structured error envelopes.
 - Treat the current FFI surface as a controlled host integration contract, not a sandbox boundary.
 
 ## Deep References
