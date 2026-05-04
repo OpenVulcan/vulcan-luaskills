@@ -37,6 +37,21 @@ For a new FFI host, stabilize the smallest runtime loop first:
 
 After that, add lifecycle operations, query helpers, installation/update flows, provider callbacks, host-tool callbacks, or `space_controller`.
 
+## Managed Identity Field Quick Path
+
+If an FFI or SDK host projects LuaSkills entries into model-facing or user-facing tools, it should implement the standard `LUASKILL_SID` managed identity contract.
+
+Host-side setup:
+
+1. Inspect each entry input schema after `list_entries`.
+2. When a schema contains `LUASKILL_SID` and the host has a stable conversation, task, workspace, or equivalent identity, hide that field from the projected tool schema.
+3. Remove the hidden field from the projected `required` list.
+4. Inject the stable `LUASKILL_SID` value into the entry arguments before `call_skill`.
+5. Add managed-mode help text so the model or user does not ask for, print, or save the raw managed identity.
+6. Redact or rewrite raw managed identities from projected results when needed.
+
+If the host cannot provide a stable identity, leave `LUASKILL_SID` visible and let the caller or the skill's create/start/bootstrap fallback flow provide it.
+
 ## Model Capability Quick Path
 
 Use `vulcan.models.*` when Lua skills need model capabilities that remain fully controlled by the host.
@@ -74,6 +89,7 @@ SDK mapping:
 - Register host callbacks before creating an engine.
 - Use `luaskills_ffi_set_host_tool_json_callback` when Lua skills need to call host-registered tools through `vulcan.host.*`.
 - Use `luaskills_ffi_set_model_embed_json_callback` and `luaskills_ffi_set_model_llm_json_callback` when Lua skills need host-managed model capabilities through `vulcan.models.*`.
+- When projecting entries as tools, follow the `LUASKILL_SID` managed identity contract instead of inventing host-specific session parameter names.
 - Do not throw exceptions across C ABI boundaries.
 - Do not re-enter the same engine from the same thread.
 - Free owned buffers with the matching LuaSkills free function.

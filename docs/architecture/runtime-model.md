@@ -28,9 +28,32 @@ The host owns:
 - Client budgets and truncation policy.
 - Configuration source and storage placement.
 - Model provider configuration, API keys, routing, budgets, redaction, and callback registration.
+- Tool projection rules, including managed identity field hiding, injection, and result redaction.
 - Which roots are writable.
 - Which authority is attached to each management operation.
 - Whether database ownership stays local, host-controlled, or controller-backed.
+
+## Managed Identity Field Boundary
+
+LuaSkills reserves `LUASKILL_SID` as the standard entry argument for skills that need stable session, task, or context identity. This field belongs to the LuaSkills skill/host contract, not to any single transport such as MCP.
+
+LuaSkills owns:
+
+- The reserved argument name `LUASKILL_SID`.
+- The expectation that stateful skills use this name when they need caller-visible or host-managed identity.
+- The create/start/bootstrap guidance for explicit reuse, non-managed fallback generation, public identity return, and authorized persistence prompts.
+
+The runtime treats `LUASKILL_SID` as ordinary entry input. It does not automatically hide, inject, persist, or redact the value.
+
+The host owns:
+
+- Detecting `LUASKILL_SID` in entry schemas when projecting entries into tools.
+- Hiding the field from model/user-facing schemas when the host can provide stable managed identity.
+- Injecting the stable identity before calling the entry.
+- Leaving the field visible when no stable managed identity exists.
+- Rewriting help and redacting results in managed mode so raw managed identities are not exposed accidentally.
+
+This keeps LuaSkills portable across MCP, gRPC, FFI/SDK, IDE, and embedded hosts while giving each host room to bind the identity to its own conversation, task, workspace, or product session model.
 
 ## Standard Model Capability Boundary
 

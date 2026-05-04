@@ -71,6 +71,36 @@ GitHub-managed skill installs and release assets must use the same `skill_id`:
 - The zip must contain only one top-level directory named exactly `{skill_id}`, and it must contain `{skill_id}/skill.yaml`.
 - Repository name, release asset prefix, checksum asset prefix, zip top-level directory, and final install directory should all use the same `skill_id`.
 
+## 2.2 Managed Identity Field Contract
+
+Some skills need to bind multiple entry calls to the same session, task, or context state. LuaSkills reserves `LUASKILL_SID` as the standard managed identity field for skill entry arguments.
+
+This is a LuaSkills ecosystem contract, not an MCP-specific convention. The runtime does not treat `LUASKILL_SID` as a magic field; skill code receives it as an ordinary string argument. Hosts and adapters that project LuaSkills entries into user-facing or model-facing tools are responsible for deciding whether the field is visible, hidden, or automatically injected.
+
+Skill author rules:
+
+- New skills that need a stable session, task, or context identity should use the entry argument name `LUASKILL_SID`.
+- The field is only an identity handle for state continuity. Do not use it as an auth token, secret, database credential, or permission boundary.
+- Skills must not assume every host can provide a managed identity. Help text should describe both managed and non-managed behavior.
+- A stateful skill should provide a create, start, open, or bootstrap style entry when it can establish or resume state.
+- If the caller explicitly passes `LUASKILL_SID`, the skill should reuse it instead of generating a new identity.
+- If `LUASKILL_SID` is omitted and the skill supports non-managed fallback, the create/start/bootstrap entry may generate a new public identity.
+- When a skill generates a public identity, the result must visibly return that identity and state that later calls should pass the same value.
+- A skill may suggest saving a generated public identity into a host- or project-approved rules location, but it must not write that location without explicit user or host authorization.
+- Non-create entries that require `LUASKILL_SID` should return a clear error when it is missing, including the expected create/start/bootstrap recovery path.
+
+Host and adapter rules:
+
+- When exposing entry schemas, scan for an input property named `LUASKILL_SID`.
+- If the host has a stable managed identity for the current conversation, task, workspace, or equivalent context, it may hide `LUASKILL_SID` from the model/user-facing schema and remove it from the visible `required` list.
+- Before invoking the entry in managed mode, the host must inject the hidden `LUASKILL_SID` into the argument object.
+- The injected value must remain stable for the intended host scope and must not be freshly randomized on every call.
+- If the host cannot provide a stable managed identity, it should leave `LUASKILL_SID` visible and let the caller or the skill fallback flow handle it.
+- Managed-mode help should tell the model or user that the identity is injected by the host and should not be requested, printed, or saved.
+- If a tool result includes the injected raw managed identity, the host should redact it or rewrite it into a managed-state note before returning it to the model/user.
+
+These rules apply to every projection layer, including MCP, gRPC, FFI/SDK hosts, IDE integrations, and embedded product hosts.
+
 ## 3. Top-Level Capability Overview
 
 | Top-level item | Purpose | Available by default | Notes |

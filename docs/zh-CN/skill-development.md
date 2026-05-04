@@ -69,6 +69,36 @@ GitHub 托管 skill 的安装与发布资产必须保持同一个 `skill_id`：
 - zip 内部只能包含与 `skill_id` 同名的顶层目录，并且必须包含 `{skill_id}/skill.yaml`。
 - 仓库名、release 资产名前缀、checksum 文件名前缀、zip 顶层目录和最终安装目录应全部使用同一个 `skill_id`。
 
+## 2.2 托管身份字段契约
+
+有些 skill 需要把多次 entry 调用绑定到同一个会话、任务或上下文状态。LuaSkills 保留 `LUASKILL_SID` 作为 skill entry 参数中的标准托管身份字段。
+
+这是 LuaSkills 生态契约，不是 MCP 私有约定。运行时不会把 `LUASKILL_SID` 当成魔法字段处理；skill 代码会把它作为普通字符串参数接收。把 LuaSkills entry 投影成用户可见或模型可见工具的宿主和 adapter，负责决定该字段是可见、隐藏，还是自动注入。
+
+Skill 作者规则：
+
+- 新 skill 如果需要稳定会话、任务或上下文身份，应使用 entry 参数名 `LUASKILL_SID`。
+- 该字段只用于状态连续性的身份句柄，不能作为鉴权 token、密钥、数据库凭证或权限边界。
+- skill 不能假设所有宿主都能提供托管身份；help 文本应说明托管和非托管两种行为。
+- 有状态 skill 如果能够建立或恢复状态，建议提供 create、start、open 或 bootstrap 类 entry。
+- 如果调用方显式传入 `LUASKILL_SID`，skill 应复用该值，而不是生成新身份。
+- 如果调用方未传 `LUASKILL_SID`，并且 skill 支持非托管 fallback，create/start/bootstrap entry 可以生成新的公开身份。
+- 当 skill 生成公开身份时，结果必须显式返回该身份，并说明后续调用应继续传入同一个值。
+- skill 可以建议把生成的公开身份保存到宿主或项目认可的规则位置，但不能在没有用户或宿主明确授权时主动写入。
+- 必须依赖 `LUASKILL_SID` 的非 create 类 entry，在缺少该字段时应返回明确错误，并提示对应的 create/start/bootstrap 恢复路径。
+
+宿主和 adapter 规则：
+
+- 暴露 entry schema 时，应扫描输入参数中是否存在名为 `LUASKILL_SID` 的 property。
+- 如果宿主能为当前对话、任务、工作区或等价上下文提供稳定托管身份，可以从模型/用户可见 schema 中隐藏 `LUASKILL_SID`，并从可见 `required` 列表中移除。
+- 托管模式调用 entry 前，宿主必须把隐藏的 `LUASKILL_SID` 注入参数对象。
+- 注入值必须在目标宿主作用域内保持稳定，不能每次调用都重新随机生成。
+- 如果宿主无法提供稳定托管身份，应保持 `LUASKILL_SID` 可见，让调用方或 skill fallback 流程处理。
+- 托管模式的 help 应告诉模型或用户：身份由宿主注入，不应询问、打印或保存原始值。
+- 如果工具结果包含被注入的原始托管身份，宿主应在返回给模型/用户前脱敏，或改写成托管状态说明。
+
+这些规则适用于所有投影层，包括 MCP、gRPC、FFI/SDK 宿主、IDE 集成和嵌入式产品宿主。
+
 ## 3. 顶级能力总览
 
 | 顶级项 | 作用 | 默认可用 | 备注 |
