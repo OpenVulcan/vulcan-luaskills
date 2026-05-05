@@ -104,7 +104,7 @@ Rust 宿主可直接依赖 crate：
 
 ```toml
 [dependencies]
-luaskills = "0.2"
+luaskills = "0.3"
 ```
 
 仓库开发常用命令：

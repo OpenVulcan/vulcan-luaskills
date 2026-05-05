@@ -127,7 +127,7 @@ Rust hosts can depend on the crate directly:
 
 ```toml
 [dependencies]
-luaskills = "0.2"
+luaskills = "0.3"
 ```
 
 Repository development uses the normal Rust workflow:

@@ -1418,6 +1418,7 @@ $pkgPath = "$pkgPath;$env:Path"
 Push-Location $LuarocksDir
 
 $InstallResults = @{}
+$MaxInstallAttempts = 3
 
 foreach ($pkg in $Packages) {
     Write-Host "==> Installing $pkg..."
@@ -1459,19 +1460,40 @@ foreach ($pkg in $Packages) {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $false
 
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $outTask = $proc.StandardOutput.ReadToEndAsync()
-    $errTask = $proc.StandardError.ReadToEndAsync()
-    $proc.WaitForExit()
+    $installSucceeded = $false
+    for ($attempt = 1; $attempt -le $MaxInstallAttempts; $attempt++) {
+        if ($attempt -gt 1) {
+            Write-Host "==> Retrying $pkg (attempt $attempt/$MaxInstallAttempts)..." -ForegroundColor Yellow
+        }
 
-    $stdout = $outTask.Result
-    if ($stdout) { Write-Host $stdout.Trim() }
-    $stderr = $errTask.Result
-    if ($stderr -and $proc.ExitCode -ne 0) { Write-Host $stderr.Trim() -ForegroundColor Red }
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $proc.WaitForExit()
 
-    $InstallResults[$pkg] = ($proc.ExitCode -eq 0)
-    if ($proc.ExitCode -ne 0) {
-        Write-Host "==> WARNING: Failed to install $pkg (exit code $($proc.ExitCode))" -ForegroundColor Yellow
+        $stdout = $outTask.Result
+        if ($stdout) { Write-Host $stdout.Trim() }
+        $stderr = $errTask.Result
+        if ($stderr -and $proc.ExitCode -ne 0) { Write-Host $stderr.Trim() -ForegroundColor Red }
+
+        if ($proc.ExitCode -eq 0) {
+            $installSucceeded = $true
+            break
+        }
+
+        # Retry transient fetch/proxy failures so one flaky mirror does not fail the whole dependency batch.
+        # 对临时下载或代理抖动执行重试，避免单个镜像瞬时失败拖垮整批依赖安装。
+        $retryableFailure = $stderr -match '502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout|429 Too Many Requests|timed out|TLS|Proxy Error|Connection reset|EOF'
+        if (-not $retryableFailure -or $attempt -eq $MaxInstallAttempts) {
+            break
+        }
+
+        Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+    }
+
+    $InstallResults[$pkg] = $installSucceeded
+    if (-not $installSucceeded) {
+        Write-Host "==> WARNING: Failed to install $pkg after $MaxInstallAttempts attempt(s)" -ForegroundColor Yellow
     }
 }
 

@@ -74,7 +74,7 @@ Rust ホスト:
 
 ```toml
 [dependencies]
-luaskills = "0.2"
+luaskills = "0.3"
 ```
 
 開発用コマンド:
