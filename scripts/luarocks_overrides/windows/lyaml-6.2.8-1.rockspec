@@ -16,7 +16,7 @@ description = {
 }
 
 source = {
-  url = "https://codeload.github.com/gvvaughan/lyaml/zip/refs/tags/v6.2.8",
+  url = "https://github.com/gvvaughan/lyaml/archive/refs/tags/v6.2.8.zip",
   dir = "lyaml-6.2.8",
 }
 
