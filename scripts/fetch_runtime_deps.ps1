@@ -5,7 +5,8 @@ param(
     [string]$Database = "vldb-controller",
     [string]$RuntimeRoot = "output",
     [string]$LuaRuntimeRepo = "LuaSkills/luaskills-packages",
-    [string]$LuaRuntimeVersion = "v0.1.6",
+    [string]$LuaRuntimeSeries = "0.1",
+    [string]$LuaRuntimeVersion = "",
     [string]$LuaSkillsRepo = "LuaSkills/luaskills",
     [string]$LuaSkillsVersion = "v0.3.1",
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",
@@ -191,6 +192,78 @@ function Get-ReleaseAssetUrl {
     return $Asset.browser_download_url
 }
 
+function Convert-TagToSemVer {
+    <#
+    .SYNOPSIS
+    Convert one Git tag such as v0.1.6 into a semantic-version object.
+    将形如 v0.1.6 的 Git 标签转换为语义化版本对象。
+
+    .PARAMETER Tag
+    Git tag text to normalize and parse.
+    需要规范化并解析的 Git 标签文本。
+    #>
+    param([string]$Tag)
+
+    $Normalized = if ($Tag.StartsWith("v")) { $Tag.Substring(1) } else { $Tag }
+    if ($Normalized -notmatch '^\d+\.\d+\.\d+$') {
+        throw "Unsupported semantic version tag: $Tag"
+    }
+    return [System.Version]$Normalized
+}
+
+function Resolve-ReleaseTagForSeries {
+    <#
+    .SYNOPSIS
+    Resolve the newest published GitHub release tag inside one major.minor series.
+    解析一个 major.minor 协议线内最新的已发布 GitHub release 标签。
+
+    .PARAMETER Repo
+    GitHub repository in owner/name form.
+    owner/name 形式的 GitHub 仓库。
+
+    .PARAMETER Series
+    Major.minor series such as 0.1.
+    形如 0.1 的 major.minor 协议线。
+    #>
+    param(
+        [string]$Repo,
+        [string]$Series
+    )
+
+    if ($Series -notmatch '^\d+\.\d+$') {
+        throw "Unsupported packages series: $Series"
+    }
+
+    $ApiUrl = "https://api.github.com/repos/$Repo/releases?per_page=100"
+    $Releases = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing
+    $Matches = @()
+    foreach ($Release in $Releases) {
+        if ($Release.draft -or $Release.prerelease) {
+            continue
+        }
+        $TagName = [string]$Release.tag_name
+        try {
+            $Version = Convert-TagToSemVer -Tag $TagName
+        } catch {
+            continue
+        }
+        $ReleaseSeries = "$($Version.Major).$($Version.Minor)"
+        if ($ReleaseSeries -ne $Series) {
+            continue
+        }
+        $Matches += [PSCustomObject]@{
+            Tag = $TagName
+            Version = $Version
+        }
+    }
+
+    if (-not $Matches -or $Matches.Count -eq 0) {
+        throw "No published release found for $Repo series $Series"
+    }
+
+    return ($Matches | Sort-Object Version -Descending | Select-Object -First 1).Tag
+}
+
 function Save-ReleaseAssetWithSha256 {
     <#
     .SYNOPSIS
@@ -340,6 +413,7 @@ function Install-LuaRuntime {
 
     $Platform = Get-PlatformKey
     $AssetName = "lua-runtime-packages-$Platform.tar.gz"
+    $ResolvedLuaRuntimeTag = if ([string]::IsNullOrWhiteSpace($LuaRuntimeVersion)) { Resolve-ReleaseTagForSeries -Repo $LuaRuntimeRepo -Series $LuaRuntimeSeries } else { $LuaRuntimeVersion }
     $TempDir = Join-Path $env:TEMP "luaskills_lua_runtime_$PID"
     $ArchivePath = Join-Path $TempDir $AssetName
     $ExtractDir = Join-Path $TempDir "extract"
@@ -351,10 +425,10 @@ function Install-LuaRuntime {
 
     try {
         try {
-            Save-ReleaseAssetWithSha256 -Repo $LuaRuntimeRepo -Tag $LuaRuntimeVersion -AssetName $AssetName -Destination $ArchivePath
+            Save-ReleaseAssetWithSha256 -Repo $LuaRuntimeRepo -Tag $ResolvedLuaRuntimeTag -AssetName $AssetName -Destination $ArchivePath
         } catch {
             if (Test-ExistingRuntimeContent -RuntimeRootPath $RuntimeRootPath) {
-                Write-Warning "Lua runtime packages asset '$AssetName' was not found in $LuaRuntimeRepo@$LuaRuntimeVersion. Existing packaged runtime content will be used."
+                Write-Warning "Lua runtime packages asset '$AssetName' was not found in $LuaRuntimeRepo@$ResolvedLuaRuntimeTag. Existing packaged runtime content will be used."
                 return
             }
             throw

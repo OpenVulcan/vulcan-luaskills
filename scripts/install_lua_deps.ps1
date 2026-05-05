@@ -3,7 +3,8 @@
 # Reuses LuaJIT source from luajit-src cargo crate - no network download needed.
 # Prefers one staged luaskills-packages bundle and falls back to scripts/lua_packages.txt only when no bundle is active.
 # 优先读取已暂存的 luaskills-packages bundle，仅在没有活动 bundle 时才回退到 scripts/lua_packages.txt。
-# All build tools are downloaded to third_party/tools/ - system environment is NOT modified.
+# Only helper tools needed for archive extraction or LuaRocks module builds are installed locally when required.
+# 仅在需要解压归档或构建 LuaRocks 模块时，才会在本地安装辅助工具。
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/install_lua_deps.ps1
 
 $ErrorActionPreference = "Stop"
@@ -916,32 +917,20 @@ function Download-Prebuilt-Deps {
 }
 
 # ============================================================
-# Step 0: Detect and install build tools
+# Step 0: Detect required archive helpers
 # ============================================================
-Write-Host "`n=== Step 0: Detect Build Tools ==="
+Write-Host "`n=== Step 0: Detect Archive Helpers ==="
 
 $TarPath = Detect-Tool "tar" { Check-Tar } { Install-Tar } "tar"
-$CmakePath = Detect-Tool "cmake" { Check-Cmake } { Install-Cmake } "cmake"
-
-# vcpkg is preferred for C dependency management
-$VcpkgAvailable = Detect-Tool "vcpkg" { Check-Vcpkg } { Install-Vcpkg } "vcpkg"
-
-if ($VcpkgAvailable) {
-    Write-Host "`n  [INFO] vcpkg available - C deps will use vcpkg (preferred)."
-} else {
-    Write-Host "`n  [WARN] vcpkg not available. Will fall back to source compilation for C deps."
-    Write-Host "         Consider installing vcpkg: iex (iwr -useb https://aka.ms/vcpkg-init.ps1)"
-
-    # Still need Perl + VS BuildTools for source compilation fallback
-    $PerlPath = Detect-Tool "perl" { Check-Perl } { Install-Perl } "perl"
-    $vsResult = Detect-Tool "vs" { Check-VsTools } { Install-VsTools } "VS BuildTools (nmake)"
-    if (-not $vsResult) {
-        throw "VS BuildTools is required for source compilation. Install it and re-run this script."
-    }
+if (-not $TarPath) {
+    throw "tar is required to extract prebuilt dependency archives."
 }
 
-Write-Host "`n  Activating project-local tool paths..."
-Activate-LocalTools
+Write-Host "`n  [INFO] Native C dependencies are no longer compiled in this repository."
+Write-Host "         This script now reuses staged deps or downloads lua-deps assets from luaskills-packages."
+if ($RuntimePackagesState) {
+    Write-Host "         Active bundle: $($RuntimePackagesState.repository)@$($RuntimePackagesState.resolved_tag)"
+}
 
 # ============================================================
 # Parse runtime packages config
@@ -1386,7 +1375,7 @@ variables = {
 Set-Content -Path (Join-Path $LuarocksDir "config.lua") -Value $ConfigContent -Encoding UTF8
 
 # ============================================================
-# Step 3: C dependencies - pre-built -> vcpkg -> source compile
+# Step 3: C dependencies — staged or prebuilt download only
 # ============================================================
 Write-Host "`n=== Step 3: C Dependencies ==="
 
@@ -1420,91 +1409,27 @@ if ($AllDepNames.Count -eq 0) {
         }
     }
 
-    # --- Priority 1: Pre-built from GitHub Releases ---
-    $missingStagedDeps = @($AllDepNames | Where-Object { -not $DepPaths.ContainsKey($_) })
-    if ($missingStagedDeps.Count -gt 0 -and $GitHubRepo -ne "{{GITHUB_USER}}/{{GITHUB_REPO}}") {
+    # Priority 1: fetch prebuilt deps from luaskills-packages.
+    $MissingDeps = @($AllDepNames | Where-Object { -not $DepPaths.ContainsKey($_) })
+    if ($MissingDeps.Count -gt 0) {
         $PrebuiltResult = Download-Prebuilt-Deps
         if ($PrebuiltResult) {
-            # Pre-built deps are laid out as: deps/openssl/, deps/zlib/, deps/pcre2/, deps/libyaml/
-            foreach ($depName in $AllDepNames) {
+            foreach ($depName in $MissingDeps) {
                 $depDir = Join-Path $DepsDir $depName
-                if (Test-Path $depDir) {
+                if (Test-Path -LiteralPath $depDir) {
                     $DepPaths[$depName] = $depDir
                 }
             }
-            Write-Host "  ==> Using pre-built deps. No local compilation needed."
         }
     }
 
-    # --- Priority 2: vcpkg compile (if pre-built not available) ---
-    $stillMissing = $AllDepNames | Where-Object { -not $DepPaths.ContainsKey($_) }
-    if ($stillMissing.Count -gt 0 -and $VcpkgAvailable) {
-        $VcpkgInstallDir = Install-Deps-With-Vcpkg -DepNames $stillMissing
-        if ($VcpkgInstallDir) {
-            $tripletDir = Join-Path $VcpkgInstallDir "x64-windows-static"
-            if (Test-Path $tripletDir) {
-                foreach ($depName in $stillMissing) {
-                    $DepPaths[$depName] = $tripletDir
-                }
-            }
-        } else {
-            Write-Host "  ==> vcpkg install failed, falling back to source compilation..." -ForegroundColor Yellow
-            $VcpkgAvailable = $false
-        }
+    $StillMissingDeps = @($AllDepNames | Where-Object { -not $DepPaths.ContainsKey($_) })
+    if ($StillMissingDeps.Count -gt 0) {
+        $MissingDisplay = $StillMissingDeps -join ", "
+        throw "Native deps are no longer compiled in this repository. Missing staged or downloadable deps: $MissingDisplay. Expected lua-deps asset from $GitHubRepo@$ReleaseTag."
     }
 
-    # --- Priority 3: Source compile (if vcpkg not available or failed) ---
-    $stillMissing = $AllDepNames | Where-Object { -not $DepPaths.ContainsKey($_) }
-    if ($stillMissing.Count -gt 0) {
-        $PerlPath = Detect-Tool "perl" { Check-Perl } { Install-Perl } "perl"
-        $vsResult = Detect-Tool "vs" { Check-VsTools } { Install-VsTools } "VS BuildTools (nmake)"
-        if (-not $vsResult) {
-            throw "VS BuildTools is required for source compilation. Install it and re-run this script."
-        }
-        Activate-LocalTools
-
-        foreach ($depName in $stillMissing) {
-            $BuildDir = Join-Path $DepsDir "build\$depName"
-            # Find method and URL from lua_packages.txt
-            $method = $null; $url = $null
-            foreach ($pkg in $Packages) {
-                foreach ($dep in $Deps[$pkg]) {
-                    if ($dep.name -eq $depName) {
-                        $method = $dep.method; $url = $dep.url; break
-                    }
-                }
-                if ($method) { break }
-            }
-
-            Write-Host "==> Dependency: $depName ($method)"
-            switch ($method) {
-                "vcpkg" {
-                    $InstallDir = switch ($depName) {
-                        "openssl"  { Build-OpenSSL  -Url $url -BuildDir $BuildDir }
-                        "pcre2"    { Build-Pcre2    -Url $url -BuildDir $BuildDir }
-                        default    { throw "Unknown vcpkg dep: $depName" }
-                    }
-                    $DepPaths[$depName] = $InstallDir
-                }
-                "bundled" {
-                    $InstallDir = switch ($depName) {
-                        "zlib"    { Build-Zlib    -Url $url -BuildDir $BuildDir }
-                        "libyaml" { Build-LibYAML -Url $url -BuildDir $BuildDir }
-                        "curl"    { throw "curl must be provided by vcpkg, the prebuilt deps package, or workflow-staged deps." }
-                        default   { throw "Unknown bundled dep: $depName" }
-                    }
-                    $DepPaths[$depName] = $InstallDir
-                }
-                "none" {
-                    Write-Host "  ==> Pure Lua, no build needed"
-                    $DepPaths[$depName] = ""
-                }
-                default {
-                    Write-Host "  ==> Unknown method '$method' for $depName, skipping auto-build"
-                }
-            }
-        }
-    }
+    Write-Host "  ==> Using staged or prebuilt deps only. Local C dependency compilation is disabled."
 }
 
 # ============================================================

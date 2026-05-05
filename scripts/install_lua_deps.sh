@@ -4,7 +4,8 @@
 # Reuses LuaJIT source from cargo target — no network download needed.
 # Prefers one staged luaskills-packages bundle and falls back to scripts/lua_packages.txt only when no bundle is active.
 # 优先读取已暂存的 luaskills-packages bundle，仅在没有活动 bundle 时才回退到 scripts/lua_packages.txt。
-# All build tools are detected/installed to third_party/tools/ — system is NOT modified.
+# Only helper tools needed for archive extraction or LuaRocks module builds are installed locally when required.
+# 仅在需要解压归档或构建 LuaRocks 模块时，才会在本地安装辅助工具。
 # Usage: bash scripts/install_lua_deps.sh
 
 set -euo pipefail
@@ -307,32 +308,31 @@ install_curl() {
 }
 
 # ============================================================
-# Step 0: Detect and install build tools
+# Step 0: Detect archive helpers
 # ============================================================
 echo ""
-echo "=== Step 0: Detect Build Tools ==="
+echo "=== Step 0: Detect Archive Helpers ==="
 
 TOOLS_OK=true
 
-detect_tool "perl" "perl" "check_perl" "install_perl" || TOOLS_OK=false
 detect_tool "curl" "curl" "check_curl" "install_curl" || TOOLS_OK=false
-detect_tool "make" "make/gmake" "check_make" "install_make" || TOOLS_OK=false
-detect_tool "cmake" "cmake (for zlib/pcre2/libyaml builds)" "check_cmake" "install_cmake" || true
-# cmake is optional — only needed for cmake-based deps
+if ! command -v tar >/dev/null 2>&1; then
+    echo ""
+    echo "ERROR: tar is required to extract prebuilt dependency archives."
+    exit 1
+fi
 
 if [ "$TOOLS_OK" = false ]; then
     echo ""
-    echo "ERROR: Required build tools are not available. Please install them and re-run."
+    echo "ERROR: Required archive helpers are not available. Please install them and re-run."
     exit 1
 fi
 
 echo ""
-echo "  Active local tool dirs:"
-for dir in "${!LOCAL_TOOLS[@]}"; do
-    echo "    - $dir"
-done
-if [ "$LOCAL_TOOL_COUNT" -eq 0 ]; then
-    echo "    (all tools found in system PATH)"
+echo "  [INFO] Native C dependencies are no longer compiled in this repository."
+echo "         This script now reuses staged deps or downloads lua-deps assets from luaskills-packages."
+if [ -n "${runtime_bundle_repository:-}" ] && [ -n "${runtime_bundle_tag:-}" ]; then
+    echo "         Active bundle: ${runtime_bundle_repository}@${runtime_bundle_tag}"
 fi
 
 # ============================================================
@@ -874,7 +874,7 @@ variables = {
 LUAEOF
 
 # ============================================================
-# Step 3: C dependencies — pre-built → source compile
+# Step 3: C dependencies — staged or prebuilt download only
 # ============================================================
 echo ""
 echo "=== Step 3: C Dependencies ==="
@@ -892,7 +892,7 @@ for dep_name in "${REQUIRED_DEPS[@]}"; do
     fi
 done
 
-# Priority 1: Pre-built from GitHub Releases
+# Priority 1: prebuilt deps from luaskills-packages.
 PREBUILT_OK=false
 MISSING_STAGED_DEPS=false
 for dep_name in "${REQUIRED_DEPS[@]}"; do
@@ -911,34 +911,24 @@ if [ "$MISSING_STAGED_DEPS" = true ] && [ "$GITHUB_REPO" != "{{GITHUB_USER}}/{{G
                 PREBUILT_OK=true
             fi
         done
-        if [ "$PREBUILT_OK" = true ]; then
-            echo "  ==> Using pre-built deps. No local compilation needed."
-        fi
     fi
 fi
 
-# Priority 2: Source compile (skip deps already satisfied by pre-built)
+MISSING_DEPS=()
 for dep_name in "${REQUIRED_DEPS[@]}"; do
-    [ "${BUILT_DEPS[$dep_name]:-}" = "1" ] && continue
-    method="${DEP_METHODS[$dep_name]:-none}"
-    url="${DEP_URLS[$dep_name]:-}"
-    build_dir="$DEPS_DIR/build/$dep_name"
-
-    echo "==> Dependency: $dep_name ($method) — compiling from source"
-    install_dir=""
-    case "$dep_name" in
-        openssl)  install_dir=$(build_openssl "$url" "$build_dir") ;;
-        zlib)     install_dir=$(build_zlib "$url" "$build_dir") ;;
-        pcre2)    install_dir=$(build_pcre2 "$url" "$build_dir") ;;
-        libyaml)  install_dir=$(build_libyaml "$url" "$build_dir") ;;
-        curl)     echo "  ==> curl must be provided by the prebuilt deps package or workflow-staged deps." >&2; exit 1 ;;
-        *)        echo "  ==> Unknown dep: $dep_name" >&2; exit 1 ;;
-    esac
-    if [ -n "$install_dir" ]; then
-        DEP_INSTALLS["$dep_name"]="$install_dir"
-        BUILT_DEPS["$dep_name"]=1
+    if [ "${BUILT_DEPS[$dep_name]:-}" != "1" ]; then
+        MISSING_DEPS+=("$dep_name")
     fi
 done
+
+if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
+    echo "ERROR: Native deps are no longer compiled in this repository." >&2
+    echo "       Missing staged or downloadable deps: ${MISSING_DEPS[*]}" >&2
+    echo "       Expected lua-deps asset from ${GITHUB_REPO}@${RELEASE_TAG:-<unresolved>}." >&2
+    exit 1
+fi
+
+echo "  ==> Using staged or prebuilt deps only. Local C dependency compilation is disabled."
 
 # ============================================================
 # Step 4: Install Lua packages

@@ -1,40 +1,21 @@
-## Lua runtime and demo release packages
+## LuaSkills core release packages
 
-This Release publishes cross-platform luaskills Lua runtime packages, the FFI SDK, runnable demos, and native dependency bundles for build workflows. Each enabled platform emits a matching set of `.tar.gz` assets, such as `linux-x64`, `linux-arm64`, `macos-x64`, `macos-arm64`, and `windows-x64`.
+This Release now publishes only the main-repo artifacts that still belong to `luaskills`: the FFI SDK and the runnable demo packages. Lua runtime packages and native dependency bundles are published separately by [`LuaSkills/luaskills-packages`](https://github.com/LuaSkills/luaskills-packages).
 
 ### Assets
 
-- `lua-runtime-{platform}.tar.gz`: Default Lua runtime package for end users. It exports `lua_packages/lib/lua`, `lua_packages/share/lua`, `libs`, `resources`, and `licenses`, and includes the LuaRocks modules and native runtime libraries needed by LuaSkills. Windows packages include only `runtime-env.ps1`; Linux/macOS packages include only `runtime-env.sh`.
-- `lua-deps-{platform}.tar.gz`: Native dependency bundle for build workflows. It contains headers, libraries, and build outputs for OpenSSL, curl, zlib, pcre2, libyaml, and other dependencies used to compile LuaRocks C modules. This is mainly for CI, source builds, or advanced reuse, not the default runtime layout.
 - `luaskills-ffi-sdk-{platform}.tar.gz`: FFI SDK package for C ABI or dynamic-library host integration. It contains headers under `include/`, luaskills runtime/import libraries under `lib/`, and the project license.
-- `luaskills-demo-ffi-{platform}.tar.gz`: Runnable FFI-mode demo package that shows an external host loading luaskills through the dynamic library. It includes the full `examples/ffi/` tree for C, Go, Python, TypeScript, standard runtime, install smoke tests, and host-provider demos, plus platform-matching runner scripts, standalone dependency upgrade scripts, and dependency fetch scripts.
-- `luaskills-demo-rust-{platform}.tar.gz`: Runnable non-FFI Rust demo package that shows a Rust host using the default runtime root through the `luaskills` crate. It also includes platform-matching runner and dependency upgrade scripts.
+- `luaskills-demo-ffi-{platform}.tar.gz`: Runnable FFI-mode demo package that shows an external host loading luaskills through the dynamic library. It includes the full `examples/ffi/` tree for C, Go, Python, TypeScript, standard runtime, install smoke tests, and host-provider demos, plus platform-matching runner scripts and dependency fetch scripts.
+- `luaskills-demo-rust-{platform}.tar.gz`: Runnable non-FFI Rust demo package that shows a Rust host using the `luaskills` crate. It includes platform-matching runner scripts and dependency fetch scripts.
 
-### Bundled Lua Packages
+### Runtime dependencies
 
-- `lua-cjson`: JSON encoding and decoding.
-- `luafilesystem`: Cross-platform filesystem access.
-- `luasocket`: TCP, UDP, and basic networking support.
-- `luasec`: OpenSSL-backed TLS and HTTPS support.
-- `lua-curl`: libcurl-backed HTTP, HTTPS, and transfer support.
-- `lrexlib-pcre2`: PCRE2-backed regular expression support.
-- `luaossl`: OpenSSL bindings for cryptography, certificates, and security protocols.
-- `lyaml`: YAML parsing and generation.
-- `lua-toml`: TOML parsing.
-- `serpent`: Lua table serialization and debugging output.
-- `lua-zlib`: zlib compression and decompression.
+Demo packages no longer bundle `lua-runtime-{platform}.tar.gz` or `lua-deps-{platform}.tar.gz` from this repository. Instead, their bundled `fetch_runtime_deps.ps1` and `fetch_runtime_deps.sh` scripts download the runtime packages below from `LuaSkills/luaskills-packages`:
 
-### Native Libraries and Licenses
+- `lua-runtime-packages-{platform}.tar.gz`: Default Lua runtime package layout containing `lua_packages/`, `libs/`, `resources/`, and `licenses/`.
+- `lua-deps-{platform}.tar.gz`: Native dependency bundle used by advanced local builds or other package workflows.
 
-The runtime package includes the native libraries actually required by Lua C modules, with license materials under `licenses/`. Fixed native components include:
-
-- `OpenSSL 3.4.1`: TLS, certificates, and cryptography.
-- `curl 8.13.0`: HTTP and HTTPS transfer support.
-- `zlib 1.3.1`: Compression support.
-- `PCRE2 10.45`: Regular expression engine.
-- `libyaml 0.2.5`: YAML C parser library.
-
-### Demo Dependency Fetch Targets
+### Demo dependency fetch targets
 
 Demo packages provide standalone dependency upgrade scripts with three targets. The `run` script only runs the demo and does not download dependencies automatically. Windows packages include `upgrade_deps.bat`, `scripts/fetch_runtime_deps.ps1`, and `run.ps1`; Linux/macOS packages include `upgrade_deps.sh`, `scripts/fetch_runtime_deps.sh`, and `run.sh`.
 
@@ -44,45 +25,26 @@ Demo packages provide standalone dependency upgrade scripts with three targets. 
 
 In most demo scenarios, run `all` through `upgrade_deps.bat` or `upgrade_deps.sh` first. Use `lua` when you only need to validate Lua package capabilities. Use `vldb` when a runtime already exists and only vldb-controller is missing.
 
-## Lua runtime 与 demo 发布包说明
+## LuaSkills 主仓库发布资产说明
 
-本 Release 用于发布 luaskills 的跨平台 Lua runtime、FFI SDK、示例 demo 与构建期原生依赖包。每个平台会生成一组同名后缀的 `.tar.gz` 资产，例如 `linux-x64`、`linux-arm64`、`macos-x64`、`macos-arm64`、`windows-x64`。
+本 Release 现在只发布仍然属于 `luaskills` 主仓库的核心资产：FFI SDK 与可运行 demo 包。Lua runtime 包和原生依赖包已经拆分到 [`LuaSkills/luaskills-packages`](https://github.com/LuaSkills/luaskills-packages) 独立发布。
 
 ### 资产用途
 
-- `lua-runtime-{platform}.tar.gz`：面向最终运行期使用的 Lua runtime 默认目录包。它导出 `lua_packages/lib/lua`、`lua_packages/share/lua`、`libs`、`resources`、`licenses`，并包含运行 LuaSkills 常用 LuaRocks 模块及其原生运行库。Windows 包只携带 `runtime-env.ps1`，Linux/macOS 包只携带 `runtime-env.sh`。
-- `lua-deps-{platform}.tar.gz`：面向构建链路的原生依赖包，包含 OpenSSL、curl、zlib、pcre2、libyaml 等用于编译 LuaRocks C 模块的头文件、库文件和构建产物。这个包主要给 CI、源码构建或高级用户复用，不是 runtime 默认目录。
 - `luaskills-ffi-sdk-{platform}.tar.gz`：面向 C ABI / 动态库宿主集成的 FFI SDK 包，包含 `include/` 头文件、`lib/` 下的 luaskills 动态库或导入库，以及项目许可证。
-- `luaskills-demo-ffi-{platform}.tar.gz`：面向 FFI 模式的可运行 demo 包，演示外部宿主通过动态库加载 luaskills，并携带 `examples/ffi/` 下完整 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例，以及包内平台匹配的运行脚本、独立依赖升级脚本和依赖拉取脚本。
-- `luaskills-demo-rust-{platform}.tar.gz`：面向非 FFI / Rust 直连模式的可运行 demo 包，演示 Rust 宿主直接通过 `luaskills` crate 使用默认 runtime root，并同样只携带平台匹配的运行与依赖升级脚本。
+- `luaskills-demo-ffi-{platform}.tar.gz`：面向 FFI 模式的可运行 demo 包，演示外部宿主通过动态库加载 luaskills，并携带 `examples/ffi/` 下完整 C、Go、Python、TypeScript、标准 runtime、安装烟测和宿主 provider 示例，以及平台匹配的运行脚本与依赖拉取脚本。
+- `luaskills-demo-rust-{platform}.tar.gz`：面向非 FFI / Rust 直连模式的可运行 demo 包，演示 Rust 宿主通过 `luaskills` crate 使用运行时，并携带平台匹配的运行脚本与依赖拉取脚本。
 
-### Lua runtime 内置 Lua 包
+### Runtime 依赖来源
 
-- `lua-cjson`：JSON 编码与解码。
-- `luafilesystem`：跨平台文件系统访问。
-- `luasocket`：TCP、UDP 与基础网络能力。
-- `luasec`：基于 OpenSSL 的 TLS/HTTPS 支持。
-- `lua-curl`：基于 libcurl 的 HTTP、HTTPS 与传输能力。
-- `lrexlib-pcre2`：基于 PCRE2 的正则表达式能力。
-- `luaossl`：OpenSSL 加密、证书与安全协议绑定。
-- `lyaml`：YAML 解析与生成。
-- `lua-toml`：TOML 解析。
-- `serpent`：Lua 表序列化与调试输出。
-- `lua-zlib`：zlib 压缩与解压。
+demo 包不再从本仓库发布 `lua-runtime-{platform}.tar.gz` 或 `lua-deps-{platform}.tar.gz`。取而代之，包内自带的 `fetch_runtime_deps.ps1` 与 `fetch_runtime_deps.sh` 会从 `LuaSkills/luaskills-packages` 下载以下资产：
 
-### 原生运行库与授权
-
-runtime 包会携带 Lua C 模块实际需要的原生运行库，并在 `licenses/` 下带入授权材料。固定原生组件包括：
-
-- `OpenSSL 3.4.1`：TLS、证书、加密能力。
-- `curl 8.13.0`：HTTP/HTTPS 传输能力。
-- `zlib 1.3.1`：压缩能力。
-- `PCRE2 10.45`：正则表达式引擎。
-- `libyaml 0.2.5`：YAML C 解析库。
+- `lua-runtime-packages-{platform}.tar.gz`：默认 Lua runtime 目录结构，包含 `lua_packages/`、`libs/`、`resources/` 与 `licenses/`。
+- `lua-deps-{platform}.tar.gz`：供高级本地构建或其他 packages 工作流复用的原生依赖包。
 
 ### Demo 依赖拉取方式
 
-demo 包内的独立依赖升级脚本支持三个目标。`run` 脚本只负责运行 demo，不会自动下载依赖。Windows 包携带 `upgrade_deps.bat`、`scripts/fetch_runtime_deps.ps1` 和 `run.ps1`，Linux/macOS 包携带 `upgrade_deps.sh`、`scripts/fetch_runtime_deps.sh` 和 `run.sh`。
+demo 包内的独立依赖升级脚本支持三个目标。`run` 脚本只负责运行 demo，不会自动下载依赖。Windows 包携带 `upgrade_deps.bat`、`scripts/fetch_runtime_deps.ps1` 和 `run.ps1`；Linux/macOS 包携带 `upgrade_deps.sh`、`scripts/fetch_runtime_deps.sh` 和 `run.sh`。
 
 - `all`：同时拉取 `lua-runtime-packages-{platform}.tar.gz`、`luaskills-ffi-sdk-{platform}.tar.gz` 与 vldb-controller。
 - `lua`：只拉取并安装 `lua-runtime-packages-{platform}.tar.gz` 与 `luaskills-ffi-sdk-{platform}.tar.gz` 到 demo 的 `runtime/` 目录。

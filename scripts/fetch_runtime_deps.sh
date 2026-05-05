@@ -21,9 +21,13 @@ RUNTIME_ROOT="${RUNTIME_ROOT:-output}"
 # LuaRuntimeRepo 保存 Lua runtime packages 资产所在的 GitHub 仓库。
 LUA_RUNTIME_REPO="${LUA_RUNTIME_REPO:-LuaSkills/luaskills-packages}"
 
-# LuaRuntimeVersion stores the GitHub Release tag for Lua runtime packages assets.
-# LuaRuntimeVersion 保存 Lua runtime packages 资产的 GitHub Release 标签。
-LUA_RUNTIME_VERSION="${LUA_RUNTIME_VERSION:-v0.1.6}"
+# LuaRuntimeSeries stores the compatible major.minor series for Lua runtime packages assets.
+# LuaRuntimeSeries 保存 Lua runtime packages 资产的兼容 major.minor 协议线。
+LUA_RUNTIME_SERIES="${LUA_RUNTIME_SERIES:-0.1}"
+
+# LuaRuntimeVersion stores one optional exact GitHub Release tag override for Lua runtime packages assets.
+# LuaRuntimeVersion 保存 Lua runtime packages 资产的可选精确 GitHub Release 标签覆盖值。
+LUA_RUNTIME_VERSION="${LUA_RUNTIME_VERSION:-}"
 
 # LuaSkillsRepo stores the GitHub repository for LuaSkills FFI SDK assets.
 # LuaSkillsRepo 保存 LuaSkills FFI SDK 资产所在的 GitHub 仓库。
@@ -114,6 +118,42 @@ raise SystemExit(f"asset not found: {asset_name}")
 ' "$asset_name"
 }
 
+resolve_release_tag_for_series() {
+  # Resolve the newest published GitHub release tag inside one major.minor series.
+  # 解析一个 major.minor 协议线内最新的已发布 GitHub release 标签。
+  local repo="$1"
+  local series="$2"
+  curl -fsSL "https://api.github.com/repos/${repo}/releases?per_page=100" | python3 -c '
+import json
+import re
+import sys
+
+series = sys.argv[1]
+repo = sys.argv[2]
+if not re.fullmatch(r"\d+\.\d+", series):
+    raise SystemExit(f"unsupported packages series: {series}")
+
+matches = []
+for release in json.load(sys.stdin):
+    if release.get("draft") or release.get("prerelease"):
+        continue
+    tag = str(release.get("tag_name", ""))
+    normalized = tag[1:] if tag.startswith("v") else tag
+    if not re.fullmatch(r"\d+\.\d+\.\d+", normalized):
+        continue
+    major, minor, patch = (int(part) for part in normalized.split("."))
+    if f"{major}.{minor}" != series:
+        continue
+    matches.append(((major, minor, patch), tag))
+
+if not matches:
+    raise SystemExit(f"no published release found for {repo} series {series}")
+
+matches.sort(key=lambda item: item[0], reverse=True)
+print(matches[0][1])
+' "$series" "$repo"
+}
+
 save_release_asset_with_sha256() {
   # Download one GitHub Release asset and verify its .sha256 sidecar.
   # 下载单个 GitHub Release 资产并校验其 .sha256 旁路文件。
@@ -147,15 +187,19 @@ install_lua_runtime() {
   local platform
   platform="$(platform_key)"
   local asset_name="lua-runtime-packages-${platform}.tar.gz"
+  local resolved_lua_runtime_tag="${LUA_RUNTIME_VERSION:-}"
+  if [ -z "$resolved_lua_runtime_tag" ]; then
+    resolved_lua_runtime_tag="$(resolve_release_tag_for_series "$LUA_RUNTIME_REPO" "$LUA_RUNTIME_SERIES")"
+  fi
   local temp_dir
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' RETURN
   local archive="$temp_dir/$asset_name"
   local extract_dir="$temp_dir/extract"
   ensure_dir "$extract_dir"
-  if ! save_release_asset_with_sha256 "$LUA_RUNTIME_REPO" "$LUA_RUNTIME_VERSION" "$asset_name" "$archive"; then
+  if ! save_release_asset_with_sha256 "$LUA_RUNTIME_REPO" "$resolved_lua_runtime_tag" "$asset_name" "$archive"; then
     if [ -d "$RUNTIME_ROOT/skills" ] || [ -d "$RUNTIME_ROOT/lua_packages" ]; then
-      echo "WARNING: Lua runtime packages asset '$asset_name' was not found in $LUA_RUNTIME_REPO@$LUA_RUNTIME_VERSION. Existing packaged runtime content will be used." >&2
+      echo "WARNING: Lua runtime packages asset '$asset_name' was not found in $LUA_RUNTIME_REPO@$resolved_lua_runtime_tag. Existing packaged runtime content will be used." >&2
       return 0
     fi
     return 1
