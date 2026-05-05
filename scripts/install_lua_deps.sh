@@ -2,7 +2,8 @@
 # install_lua_deps.sh — Install Lua C modules via luarocks into third_party/lua_packages/
 # Developer/build use only. End users do not need luarocks.
 # Reuses LuaJIT source from cargo target — no network download needed.
-# Reads packages AND C dependencies from scripts/lua_packages.txt.
+# Prefers one staged luaskills-packages bundle and falls back to scripts/lua_packages.txt only when no bundle is active.
+# 优先读取已暂存的 luaskills-packages bundle，仅在没有活动 bundle 时才回退到 scripts/lua_packages.txt。
 # All build tools are detected/installed to third_party/tools/ — system is NOT modified.
 # Usage: bash scripts/install_lua_deps.sh
 
@@ -11,6 +12,31 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+load_runtime_packages_bundle_state() {
+    # Load one staged luaskills-packages bundle state file when it exists.
+    # 在暂存的 luaskills-packages bundle 状态文件存在时加载它。
+    local active_path="$PROJECT_DIR/target/runtime-packages/active.json"
+    [ -f "$active_path" ] || return 1
+    python3 - "$active_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+for key in (
+    "bundle_root",
+    "dist_root",
+    "compat_lua_packages",
+    "resolved_tag",
+    "repository",
+    "series",
+    "generation_mode",
+):
+    value = str(payload.get(key, ""))
+    print(f"{key}={value}")
+PY
+}
+
 THIRD_PARTY="$PROJECT_DIR/third_party"
 TOOLS_DIR="$THIRD_PARTY/tools"
 LUAJIT_DIR="$THIRD_PARTY/luajit"
@@ -18,6 +44,25 @@ LUA_PACKAGES="$THIRD_PARTY/lua_packages"
 LUAROCKS_DIR="$THIRD_PARTY/luarocks"
 DEPS_DIR="$THIRD_PARTY/deps"
 LIST_SEP=$'\036'
+RUNTIME_PACKAGES_CONFIG_ROOT="$PROJECT_DIR"
+PACKAGES_FILE="$SCRIPT_DIR/lua_packages.txt"
+PACKAGES_SOURCE_LABEL="repository-compat"
+
+if runtime_bundle_state="$(load_runtime_packages_bundle_state 2>/dev/null)"; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            bundle_root) runtime_bundle_root="$value" ;;
+            compat_lua_packages) runtime_bundle_packages="$value" ;;
+            resolved_tag) runtime_bundle_tag="$value" ;;
+            repository) runtime_bundle_repository="$value" ;;
+        esac
+    done <<< "$runtime_bundle_state"
+    if [ -n "${runtime_bundle_packages:-}" ] && [ -f "$runtime_bundle_packages" ]; then
+        RUNTIME_PACKAGES_CONFIG_ROOT="${runtime_bundle_root:-$PROJECT_DIR}"
+        PACKAGES_FILE="$runtime_bundle_packages"
+        PACKAGES_SOURCE_LABEL="bundle:${runtime_bundle_tag:-unknown}"
+    fi
+fi
 
 ensure_dir() { mkdir -p "$1"; }
 
@@ -87,7 +132,7 @@ resolve_config_ref() {
         return 0
     fi
     if [[ "$ref" =~ ^path:(.+)$ ]]; then
-        echo "$PROJECT_DIR/${BASH_REMATCH[1]}"
+        echo "$RUNTIME_PACKAGES_CONFIG_ROOT/${BASH_REMATCH[1]}"
         return 0
     fi
     echo "$ref"
@@ -270,9 +315,8 @@ if [ "$LOCAL_TOOL_COUNT" -eq 0 ]; then
 fi
 
 # ============================================================
-# Parse lua_packages.txt
+# Parse runtime packages config
 # ============================================================
-PACKAGES_FILE="$SCRIPT_DIR/lua_packages.txt"
 if [ ! -f "$PACKAGES_FILE" ]; then
     echo "ERROR: $PACKAGES_FILE not found" >&2
     exit 1
@@ -331,7 +375,7 @@ while IFS= read -r line; do
 done < "$PACKAGES_FILE"
 
 echo ""
-echo "==> Packages from $PACKAGES_FILE:"
+echo "==> Packages from $PACKAGES_FILE [$PACKAGES_SOURCE_LABEL]:"
 for pkg in "${PACKAGES[@]}"; do
     dep_list="${PKG_DEPS[$pkg]:-}"
     if [ -n "$dep_list" ]; then
@@ -382,6 +426,12 @@ download_extract() {
 
 GITHUB_REPO="LuaSkills/luaskills"
 RELEASE_TAG="v0.3.0"
+if [[ -n "${runtime_bundle_tag:-}" && "$runtime_bundle_tag" == v* ]]; then
+    RELEASE_TAG="$runtime_bundle_tag"
+fi
+if [[ -n "${runtime_bundle_repository:-}" && "$runtime_bundle_repository" == */* ]]; then
+    GITHUB_REPO="$runtime_bundle_repository"
+fi
 
 find_local_archive() {
     # Find a matching local archive under third_party and its direct child directories.

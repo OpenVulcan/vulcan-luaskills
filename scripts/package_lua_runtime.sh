@@ -361,7 +361,6 @@ copy_native_runtime_libraries "$THIRD_PARTY_DIR/deps" "$RUNTIME_ROOT"
 copy_linked_runtime_dependencies "$RUNTIME_ROOT" "$RUNTIME_ROOT/libs"
 copy_linked_runtime_dependencies "$PROJECT_ROOT/target/release" "$RUNTIME_ROOT/libs"
 
-cp -f "$PROJECT_ROOT/scripts/lua_packages.txt" "$RUNTIME_ROOT/resources/lua_packages.txt"
 write_loader_env_scripts
 copy_license_candidates "$PROJECT_ROOT" "$RUNTIME_ROOT/licenses/luaskills"
 
@@ -412,6 +411,7 @@ cat > "$RUNTIME_ROOT/resources/lua-runtime-manifest.json" <<JSON
   "platform": "${PLATFORM}",
   "layout": "luaskills-runtime-v1",
   "exports": ["lua_packages/lib/lua", "lua_packages/share/lua", "libs", "resources", "licenses"],
+  "packages_manifest": "resources/luaskills-packages-manifest.json",
   "loader_env": {
     "linux": "LD_LIBRARY_PATH=<runtime>/libs",
     "macos": "DYLD_LIBRARY_PATH=<runtime>/libs",
@@ -436,6 +436,17 @@ cat > "$RUNTIME_ROOT/licenses/manifest.json" <<JSON
   ]
 }
 JSON
+
+# Generate the runtime-facing luaskills-packages metadata tree after license manifests exist.
+# 在授权清单就绪后生成面向运行时的 luaskills-packages 元数据目录树。
+python3 "$PROJECT_ROOT/scripts/generate_runtime_packages_metadata.py" \
+  --project-root "$PROJECT_ROOT" \
+  --runtime-root "$RUNTIME_ROOT" \
+  --platform "$PLATFORM"
+
+# Keep the legacy top-level lua_packages.txt in sync with the runtime packages metadata tree.
+# 让 legacy 顶层 lua_packages.txt 与 runtime packages 元数据目录树保持一致。
+cp -f "$RUNTIME_ROOT/resources/luaskills-packages/lua_packages.txt" "$RUNTIME_ROOT/resources/lua_packages.txt"
 
 ARCHIVE_NAME="lua-runtime-${PLATFORM}.tar.gz"
 create_tar_from_dir "$RUNTIME_ROOT" "$OUTPUT_DIR/$ARCHIVE_NAME"

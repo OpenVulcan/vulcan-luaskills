@@ -36,6 +36,7 @@ examples/ffi/**/*.pyc
 # 忽略本地 Python 构建与缓存产物。
 **/__pycache__/
 **/*.pyc
+scripts/lua_packages.generated-from.json
 sdk/python/build/
 sdk/python/dist/
 sdk/python/*.egg-info/

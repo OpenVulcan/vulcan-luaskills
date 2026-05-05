@@ -744,7 +744,6 @@ Copy-NativeRuntimeLibraries -DepsDir (Join-Path $ThirdPartyPath "deps") -Runtime
 Copy-LinkedRuntimeDependencies -ScanRoot $RuntimeRoot -LibsDir (Join-Path $RuntimeRoot "libs")
 Copy-LinkedRuntimeDependencies -ScanRoot (Join-Path $ProjectRoot "target\release") -LibsDir (Join-Path $RuntimeRoot "libs")
 
-Copy-Item -Force -LiteralPath (Join-Path $ProjectRoot "scripts\lua_packages.txt") -Destination (Join-Path $RuntimeRoot "resources\lua_packages.txt")
 Write-RuntimeEnvScripts -RuntimeRoot $RuntimeRoot -Platform $Platform
 Copy-LicenseCandidates -ComponentName "luaskills" -SearchRoots @($ProjectRoot) -LicenseRoot (Join-Path $RuntimeRoot "licenses")
 
@@ -792,6 +791,7 @@ $RuntimeManifest = [ordered]@{
     platform = $Platform
     layout = "luaskills-runtime-v1"
     exports = @("lua_packages/lib/lua", "lua_packages/share/lua", "libs", "resources", "licenses")
+    packages_manifest = "resources/luaskills-packages-manifest.json"
     loader_env = [ordered]@{
         linux = "LD_LIBRARY_PATH=<runtime>/libs"
         macos = "DYLD_LIBRARY_PATH=<runtime>/libs"
@@ -817,6 +817,19 @@ $LicenseManifest = [ordered]@{
 Write-JsonFile -Path (Join-Path $RuntimeRoot "resources\lua-runtime-manifest.json") -Value $RuntimeManifest
 Write-JsonFile -Path (Join-Path $RuntimeRoot "resources\bundled-libs.json") -Value @($script:BundledLibraries | Sort-Object name, component, source_path -Unique)
 Write-JsonFile -Path (Join-Path $RuntimeRoot "licenses\manifest.json") -Value $LicenseManifest
+
+# Generate the runtime-facing luaskills-packages metadata tree after license manifests exist.
+# 在授权清单就绪后生成面向运行时的 luaskills-packages 元数据目录树。
+python (Join-Path $ProjectRoot "scripts\generate_runtime_packages_metadata.py") `
+    --project-root $ProjectRoot `
+    --runtime-root $RuntimeRoot `
+    --platform $Platform
+
+# Keep the legacy top-level lua_packages.txt in sync with the runtime packages metadata tree.
+# 让 legacy 顶层 lua_packages.txt 与 runtime packages 元数据目录树保持一致。
+Copy-Item -Force `
+    -LiteralPath (Join-Path $RuntimeRoot "resources\luaskills-packages\lua_packages.txt") `
+    -Destination (Join-Path $RuntimeRoot "resources\lua_packages.txt")
 
 $ArchiveName = "lua-runtime-$Platform.tar.gz"
 $ArchivePath = Join-Path $OutputDir $ArchiveName

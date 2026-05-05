@@ -185,6 +185,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch luaskills-packages bundle
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/fetch_runtime_packages_bundle.py --project-root .
+
       - name: Setup Rust 1.94
         shell: pwsh
         run: |

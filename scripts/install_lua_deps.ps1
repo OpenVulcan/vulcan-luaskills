@@ -1,7 +1,8 @@
 # install_lua_deps.ps1 - Install Lua C modules via luarocks into third_party/lua_packages/
 # Developer/build use only. End users do not need luarocks.
 # Reuses LuaJIT source from luajit-src cargo crate - no network download needed.
-# Reads package list AND C dependencies from scripts/lua_packages.txt.
+# Prefers one staged luaskills-packages bundle and falls back to scripts/lua_packages.txt only when no bundle is active.
+# 优先读取已暂存的 luaskills-packages bundle，仅在没有活动 bundle 时才回退到 scripts/lua_packages.txt。
 # All build tools are downloaded to third_party/tools/ - system environment is NOT modified.
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/install_lua_deps.ps1
 
@@ -46,6 +47,39 @@ function Resolve-ProjectRoot {
     throw "Unable to resolve project root from script or current directory."
 }
 
+function Resolve-RuntimePackagesBundleState {
+    <#
+    .SYNOPSIS
+    Resolve one staged luaskills-packages bundle state file when it exists.
+    在暂存的 luaskills-packages bundle 状态文件存在时解析它。
+
+    .PARAMETER RootPath
+    Repository root used to resolve default state locations.
+    用于解析默认状态文件位置的仓库根目录。
+
+    .OUTPUTS
+    Hashtable that contains bundle_root, dist_root, and compat_lua_packages when available.
+    在可用时返回包含 bundle_root、dist_root 与 compat_lua_packages 的哈希表。
+    #>
+    param([string]$RootPath)
+
+    $ActivePath = Join-Path $RootPath "target\runtime-packages\active.json"
+    if (-not (Test-Path -LiteralPath $ActivePath)) {
+        return $null
+    }
+
+    $Payload = Get-Content -Raw -LiteralPath $ActivePath | ConvertFrom-Json
+    return @{
+        bundle_root = [string]$Payload.bundle_root
+        dist_root = [string]$Payload.dist_root
+        compat_lua_packages = [string]$Payload.compat_lua_packages
+        resolved_tag = [string]$Payload.resolved_tag
+        repository = [string]$Payload.repository
+        series = [string]$Payload.series
+        generation_mode = [string]$Payload.generation_mode
+    }
+}
+
 # ScriptDir points at the current script directory when PowerShell exposes it.
 # ScriptDir 在 PowerShell 提供脚本路径时指向当前脚本目录。
 $ScriptDir = ""
@@ -65,6 +99,21 @@ if ($PSScriptRoot) {
 # ProjectDir 指向仓库根目录，避免调用方当前位置影响路径解析。
 $ProjectDir = Resolve-ProjectRoot -ScriptDirectory $ScriptDir
 Set-Location $ProjectDir
+
+# RuntimePackagesState stores the staged luaskills-packages bundle metadata when one bundle is active.
+# RuntimePackagesState 在存在活动 bundle 时保存暂存的 luaskills-packages bundle 元数据。
+$RuntimePackagesState = Resolve-RuntimePackagesBundleState -RootPath $ProjectDir
+$script:RuntimePackagesConfigBase = $ProjectDir
+$PackagesFile = Join-Path $ProjectDir "scripts\lua_packages.txt"
+$PackagesSourceLabel = "repository-compat"
+if ($RuntimePackagesState) {
+    $BundlePackagesFile = $RuntimePackagesState.compat_lua_packages
+    if ($BundlePackagesFile -and (Test-Path -LiteralPath $BundlePackagesFile)) {
+        $script:RuntimePackagesConfigBase = $RuntimePackagesState.bundle_root
+        $PackagesFile = $BundlePackagesFile
+        $PackagesSourceLabel = "bundle:$($RuntimePackagesState.resolved_tag)"
+    }
+}
 
 # Use RuntimeInformation for platform detection so the script behaves consistently on Windows PowerShell 5.1 and PowerShell 7+.
 $script:IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
@@ -657,7 +706,7 @@ function Resolve-ConfigReference {
     }
 
     if ($Reference -match '^path:(.+)$') {
-        return Join-BaseWithRelativePath -BasePath $ProjectDir -RelativePath $Matches[1]
+        return Join-BaseWithRelativePath -BasePath $script:RuntimePackagesConfigBase -RelativePath $Matches[1]
     }
 
     return $Reference
@@ -731,7 +780,15 @@ function Run-With-LocalPath {
 # Pre-built C deps from GitHub Releases
 # ============================================================
 
-$ReleaseTag = "v0.3.0"  # matches the workflow release tag
+$ReleaseTag = "v0.3.0"  # legacy fallback when no runtime packages bundle is active
+if ($RuntimePackagesState) {
+    if ($RuntimePackagesState.repository -and $RuntimePackagesState.repository -match '/') {
+        $GitHubRepo = $RuntimePackagesState.repository
+    }
+    if ($RuntimePackagesState.resolved_tag -and $RuntimePackagesState.resolved_tag -match '^v') {
+        $ReleaseTag = $RuntimePackagesState.resolved_tag
+    }
+}
 
 function Download-Prebuilt-Deps {
     $Platform = Get-PrebuiltDepsPlatform
@@ -822,9 +879,8 @@ Write-Host "`n  Activating project-local tool paths..."
 Activate-LocalTools
 
 # ============================================================
-# Parse lua_packages.txt
+# Parse runtime packages config
 # ============================================================
-$PackagesFile = Join-Path $ProjectDir "scripts\lua_packages.txt"
 $Packages = @()
 $Deps = @{}
 $PackageConfigs = @{}
@@ -896,7 +952,7 @@ if (Test-Path $PackagesFile) {
             }
         }
     }
-    Write-Host "`n==> Packages from $PackagesFile"
+    Write-Host "`n==> Packages from $PackagesFile [$PackagesSourceLabel]"
     foreach ($pkg in $Packages) {
         $depList = $Deps[$pkg]
         $pkgConfig = $PackageConfigs[$pkg]

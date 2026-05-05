@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "repository": "LuaSkills/luaskills-packages",
+  "series": "0.1",
+  "bundle_asset_template": "luaskills-packages-bundle-{tag}.zip",
+  "bundle_sha256_template": "luaskills-packages-bundle-{tag}.sha256"
+}

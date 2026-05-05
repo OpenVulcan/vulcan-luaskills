@@ -131,6 +131,162 @@ fn normalize_runtime_root_path(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Structured path table stored in `resources/luaskills-packages-manifest.json`.
+/// 存储在 `resources/luaskills-packages-manifest.json` 中的结构化路径表。
+#[derive(Debug, Deserialize)]
+struct RuntimePackagesManifestPaths {
+    install_manifest: String,
+    compat_lua_packages_txt: String,
+    platform_support: String,
+    third_party_licenses: String,
+    third_party_notices: String,
+    help_index: String,
+    package_help_root: String,
+    module_help_root: String,
+    license_index: String,
+}
+
+/// Runtime-facing luaskills-packages manifest embedded inside one packaged runtime.
+/// 嵌入在一个打包运行时中的面向运行时的 luaskills-packages 清单。
+#[derive(Debug, Deserialize)]
+struct RuntimePackagesManifest {
+    schema_version: u32,
+    layout: String,
+    paths: RuntimePackagesManifestPaths,
+}
+
+/// Require one runtime-relative path string and reject absolute or traversal-only payloads.
+/// 要求一个运行时相对路径字符串，并拒绝绝对路径或纯穿越型载荷。
+fn validate_runtime_relative_manifest_path(label: &str, relative_path: &str) -> Result<(), String> {
+    let candidate = Path::new(relative_path);
+    if candidate.is_absolute() {
+        return Err(format!(
+            "packaged runtime is invalid: {} must be runtime-relative, got '{}'",
+            label, relative_path
+        ));
+    }
+    if candidate.components().next().is_none() {
+        return Err(format!(
+            "packaged runtime is invalid: {} is empty",
+            label
+        ));
+    }
+    Ok(())
+}
+
+/// Validate one required manifest target path inside a packaged runtime root.
+/// 校验打包运行时根目录中的一个必需清单目标路径。
+fn validate_packaged_runtime_target(
+    runtime_root: &Path,
+    label: &str,
+    relative_path: &str,
+) -> Result<(), String> {
+    validate_runtime_relative_manifest_path(label, relative_path)?;
+    let candidate = runtime_root.join(relative_path);
+    if !candidate.exists() {
+        return Err(format!(
+            "packaged runtime is invalid: missing {}",
+            render_log_friendly_path(&candidate)
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the luaskills-packages metadata layout embedded under one packaged runtime resources directory.
+/// 校验一个打包运行时 resources 目录下嵌入的 luaskills-packages 元数据布局。
+fn validate_packaged_runtime_packages_layout(resources_dir: &Path) -> Result<(), String> {
+    let runtime_manifest_path = resources_dir.join("lua-runtime-manifest.json");
+    if !runtime_manifest_path.exists() {
+        return Ok(());
+    }
+
+    let runtime_root = resources_dir.parent().ok_or_else(|| {
+        format!(
+            "packaged runtime is invalid: resources directory has no parent: {}",
+            render_log_friendly_path(resources_dir)
+        )
+    })?;
+    let packages_manifest_path = resources_dir.join("luaskills-packages-manifest.json");
+    if !packages_manifest_path.exists() {
+        return Err(format!(
+            "packaged runtime is incomplete: missing {}",
+            render_log_friendly_path(&packages_manifest_path)
+        ));
+    }
+
+    let manifest_text = fs::read_to_string(&packages_manifest_path).map_err(|error| {
+        format!(
+            "packaged runtime is invalid: failed to read {}: {}",
+            render_log_friendly_path(&packages_manifest_path),
+            error
+        )
+    })?;
+    let manifest: RuntimePackagesManifest =
+        serde_json::from_str(&manifest_text).map_err(|error| {
+            format!(
+                "packaged runtime is invalid: failed to parse {}: {}",
+                render_log_friendly_path(&packages_manifest_path),
+                error
+            )
+        })?;
+
+    if manifest.schema_version != 1 {
+        return Err(format!(
+            "packaged runtime is invalid: unsupported luaskills-packages manifest schema_version {}",
+            manifest.schema_version
+        ));
+    }
+    if manifest.layout != "luaskills-packages-runtime-v1" {
+        return Err(format!(
+            "packaged runtime is invalid: unsupported luaskills-packages layout '{}'",
+            manifest.layout
+        ));
+    }
+
+    validate_packaged_runtime_target(
+        runtime_root,
+        "install_manifest",
+        &manifest.paths.install_manifest,
+    )?;
+    validate_packaged_runtime_target(
+        runtime_root,
+        "compat_lua_packages_txt",
+        &manifest.paths.compat_lua_packages_txt,
+    )?;
+    validate_packaged_runtime_target(
+        runtime_root,
+        "platform_support",
+        &manifest.paths.platform_support,
+    )?;
+    validate_packaged_runtime_target(
+        runtime_root,
+        "third_party_licenses",
+        &manifest.paths.third_party_licenses,
+    )?;
+    validate_packaged_runtime_target(
+        runtime_root,
+        "third_party_notices",
+        &manifest.paths.third_party_notices,
+    )?;
+    validate_packaged_runtime_target(runtime_root, "help_index", &manifest.paths.help_index)?;
+    validate_packaged_runtime_target(
+        runtime_root,
+        "package_help_root",
+        &manifest.paths.package_help_root,
+    )?;
+    validate_packaged_runtime_target(
+        runtime_root,
+        "module_help_root",
+        &manifest.paths.module_help_root,
+    )?;
+    validate_packaged_runtime_target(
+        runtime_root,
+        "license_index",
+        &manifest.paths.license_index,
+    )?;
+    Ok(())
+}
+
 /// Pool sizing configuration for Lua virtual machines.
 /// Lua 虚拟机池的容量配置。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -3820,6 +3976,34 @@ impl LuaEngine {
             .unwrap_or_else(|| skill_root.skills_dir.clone())
     }
 
+    /// Collect the resources directories that may represent packaged runtime layouts for the active root chain.
+    /// 收集当前根目录链中可能代表打包运行时布局的 resources 目录。
+    fn packaged_runtime_resources_dirs(&self, skill_roots: &[RuntimeSkillRoot]) -> Vec<PathBuf> {
+        let mut deduped = BTreeSet::new();
+        if let Some(resources_dir) = self.host_options.resources_dir.as_ref() {
+            deduped.insert(normalize_runtime_root_path(resources_dir));
+        } else {
+            for skill_root in skill_roots {
+                deduped.insert(normalize_runtime_root_path(
+                    &self.runtime_root_for(skill_root).join("resources"),
+                ));
+            }
+        }
+        deduped.into_iter().collect()
+    }
+
+    /// Validate the embedded luaskills-packages metadata whenever one packaged runtime layout is detected.
+    /// 在检测到打包运行时布局时校验其内嵌的 luaskills-packages 元数据。
+    fn validate_packaged_runtime_resources(
+        &self,
+        skill_roots: &[RuntimeSkillRoot],
+    ) -> Result<(), String> {
+        for resources_dir in self.packaged_runtime_resources_dirs(skill_roots) {
+            validate_packaged_runtime_packages_layout(&resources_dir)?;
+        }
+        Ok(())
+    }
+
     /// Build the sibling state root for one named skill root.
     /// 为单个命名技能根构造同级状态根目录。
     fn state_root_for(&self, skill_root: &RuntimeSkillRoot) -> PathBuf {
@@ -4312,6 +4496,8 @@ impl LuaEngine {
         self.runtime_skill_roots = skill_roots.to_vec();
         if !skill_roots.is_empty() {
             self.refresh_skill_config_runtime_root(skill_roots)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            self.validate_packaged_runtime_resources(skill_roots)
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         }
         if skill_roots.iter().all(|root| !root.skills_dir.exists()) {
@@ -8867,6 +9053,70 @@ mod tests {
         }
     }
 
+    /// Write one minimal packaged-runtime luaskills-packages metadata tree for runtime validation tests.
+    /// 为运行时校验测试写入一个最小打包运行时 luaskills-packages 元数据目录树。
+    fn write_runtime_packages_test_metadata(runtime_root: &Path) {
+        let resources_dir = runtime_root.join("resources");
+        let packages_root = resources_dir.join("luaskills-packages");
+        let help_packages_dir = packages_root.join("help").join("packages");
+        let help_modules_dir = packages_root.join("help").join("modules");
+        let packages_licenses_dir = runtime_root.join("licenses").join("luaskills-packages");
+        fs::create_dir_all(&help_packages_dir).expect("create package help test dir");
+        fs::create_dir_all(&help_modules_dir).expect("create module help test dir");
+        fs::create_dir_all(&packages_licenses_dir).expect("create package license test dir");
+
+        fs::write(
+            resources_dir.join("lua-runtime-manifest.json"),
+            "{\n  \"schema_version\": 1,\n  \"layout\": \"luaskills-runtime-v1\"\n}\n",
+        )
+        .expect("write runtime manifest test file");
+        fs::write(
+            packages_root.join("lua_packages.txt"),
+            "pkg demo-package 0.1.0\n",
+        )
+        .expect("write package compatibility file");
+        fs::write(
+            packages_root.join("install-manifest.json"),
+            "{\n  \"schema_version\": 1,\n  \"packages\": []\n}\n",
+        )
+        .expect("write package install manifest");
+        fs::write(
+            packages_root.join("platform-support.json"),
+            "{\n  \"schema_version\": 1,\n  \"supported_targets\": [\"windows-x64\", \"linux-x64\", \"linux-arm64\", \"macos-x64\", \"macos-arm64\"]\n}\n",
+        )
+        .expect("write package platform support");
+        fs::write(
+            packages_root.join("THIRD_PARTY_LICENSES.json"),
+            "{\n  \"schema_version\": 1,\n  \"luarocks_packages\": []\n}\n",
+        )
+        .expect("write package third-party licenses");
+        fs::write(
+            packages_root.join("THIRD_PARTY_NOTICES.md"),
+            "# Third-Party Notices\n",
+        )
+        .expect("write package third-party notices");
+        fs::write(
+            packages_root.join("help").join("index.json"),
+            "{\n  \"schema_version\": 1,\n  \"packages\": [],\n  \"modules\": []\n}\n",
+        )
+        .expect("write package help index");
+        fs::write(
+            help_packages_dir.join("demo-package.json"),
+            "{\n  \"schema_version\": 1,\n  \"package_name\": \"demo-package\"\n}\n",
+        )
+        .expect("write package help document");
+        fs::write(
+            packages_licenses_dir.join("index.json"),
+            "{\n  \"schema_version\": 1,\n  \"luarocks_packages\": []\n}\n",
+        )
+        .expect("write package license index");
+        fs::write(
+            resources_dir.join("luaskills-packages-manifest.json"),
+            "{\n  \"schema_version\": 1,\n  \"layout\": \"luaskills-packages-runtime-v1\",\n  \"paths\": {\n    \"install_manifest\": \"resources/luaskills-packages/install-manifest.json\",\n    \"compat_lua_packages_txt\": \"resources/luaskills-packages/lua_packages.txt\",\n    \"platform_support\": \"resources/luaskills-packages/platform-support.json\",\n    \"third_party_licenses\": \"resources/luaskills-packages/THIRD_PARTY_LICENSES.json\",\n    \"third_party_notices\": \"resources/luaskills-packages/THIRD_PARTY_NOTICES.md\",\n    \"help_index\": \"resources/luaskills-packages/help/index.json\",\n    \"package_help_root\": \"resources/luaskills-packages/help/packages\",\n    \"module_help_root\": \"resources/luaskills-packages/help/modules\",\n    \"license_index\": \"licenses/luaskills-packages/index.json\"\n  }\n}\n",
+        )
+        .expect("write runtime packages manifest");
+    }
+
     /// Write one minimal skill fixture that reads one value from `vulcan.config`.
     /// 写入一个最小技能夹具，用于从 `vulcan.config` 读取单个值。
     fn write_skill_config_test_skill(runtime_root: &Path, skill_id: &str) -> PathBuf {
@@ -8974,6 +9224,112 @@ mod tests {
             .call_skill("vulcan-codekit-ping", &json!({}), None)
             .expect("call root-priority skill");
         assert_eq!(result.content, "root");
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify one packaged runtime loads successfully when the embedded luaskills-packages metadata tree is complete.
+    /// 验证在内嵌 luaskills-packages 元数据目录树完整时，一个打包运行时能够成功加载。
+    #[test]
+    fn load_from_roots_accepts_packaged_runtime_with_packages_metadata() {
+        let runtime_root = make_temp_runtime_root("packaged-runtime-packages-ok");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+        write_runtime_packages_test_metadata(&runtime_root);
+        write_minimal_skill_to_root(&runtime_root.join("skills"), "demo-packaged-skill");
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.resources_dir = Some(runtime_root.join("resources"));
+        host_options.lua_packages_dir = Some(runtime_root.join("lua_packages"));
+        host_options.host_provided_lua_root = Some(runtime_root.join("lua_packages"));
+        let mut engine = make_runtime_test_engine_with_host_options(host_options);
+        engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("skills"),
+            }])
+            .expect("packaged runtime with package metadata should load");
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify one packaged runtime fails with a clear error when the top-level luaskills-packages manifest is missing.
+    /// 验证当顶层 luaskills-packages 清单缺失时，一个打包运行时会给出清晰错误并加载失败。
+    #[test]
+    fn load_from_roots_rejects_packaged_runtime_without_packages_manifest() {
+        let runtime_root = make_temp_runtime_root("packaged-runtime-missing-manifest");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+        fs::write(
+            runtime_root.join("resources").join("lua-runtime-manifest.json"),
+            "{\n  \"schema_version\": 1,\n  \"layout\": \"luaskills-runtime-v1\"\n}\n",
+        )
+        .expect("write runtime manifest trigger file");
+        write_minimal_skill_to_root(&runtime_root.join("skills"), "demo-missing-manifest");
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.resources_dir = Some(runtime_root.join("resources"));
+        host_options.lua_packages_dir = Some(runtime_root.join("lua_packages"));
+        host_options.host_provided_lua_root = Some(runtime_root.join("lua_packages"));
+        let mut engine = make_runtime_test_engine_with_host_options(host_options);
+        let error_text = engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("skills"),
+            }])
+            .expect_err("packaged runtime without package manifest should fail")
+            .to_string();
+        assert!(
+            error_text.contains("luaskills-packages-manifest.json"),
+            "unexpected error text: {}",
+            error_text
+        );
+
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+
+    /// Verify one packaged runtime fails with a clear error when one manifest-declared packages file is missing.
+    /// 验证当清单声明的某个 packages 文件缺失时，一个打包运行时会给出清晰错误并加载失败。
+    #[test]
+    fn load_from_roots_rejects_packaged_runtime_when_declared_packages_file_is_missing() {
+        let runtime_root = make_temp_runtime_root("packaged-runtime-missing-help-index");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        create_runtime_test_layout(&runtime_root);
+        write_runtime_packages_test_metadata(&runtime_root);
+        fs::remove_file(
+            runtime_root
+                .join("resources")
+                .join("luaskills-packages")
+                .join("help")
+                .join("index.json"),
+        )
+        .expect("remove package help index");
+        write_minimal_skill_to_root(&runtime_root.join("skills"), "demo-missing-help-index");
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.resources_dir = Some(runtime_root.join("resources"));
+        host_options.lua_packages_dir = Some(runtime_root.join("lua_packages"));
+        host_options.host_provided_lua_root = Some(runtime_root.join("lua_packages"));
+        let mut engine = make_runtime_test_engine_with_host_options(host_options);
+        let error_text = engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: "ROOT".to_string(),
+                skills_dir: runtime_root.join("skills"),
+            }])
+            .expect_err("packaged runtime with missing declared file should fail")
+            .to_string();
+        assert!(
+            error_text.contains("luaskills-packages\\help\\index.json")
+                || error_text.contains("luaskills-packages/help/index.json"),
+            "unexpected error text: {}",
+            error_text
+        );
 
         let _ = fs::remove_dir_all(&runtime_root);
     }
