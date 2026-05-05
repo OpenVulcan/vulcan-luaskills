@@ -424,7 +424,7 @@ function Write-PackagedDemoReadme {
         "",
         "## Package Contents",
         "",
-        "- runtime/: default demo runtime root; fetch scripts can install lua-runtime-$Platform.tar.gz into it.",
+        "- runtime/: default demo runtime root; fetch scripts install lua-runtime-packages-$Platform.tar.gz and luaskills-ffi-sdk-$Platform.tar.gz into it.",
         "- scripts/: dependency fetch scripts for the current platform only.",
         "- licenses/: project and bundled component license files.",
         "- demo-manifest.json: package mode, platform, runtime root, and supported fetch targets."

@@ -17,13 +17,21 @@ DATABASE="${2:-${DATABASE:-vldb-controller}}"
 # RuntimeRoot 接收安装后的运行期文件。
 RUNTIME_ROOT="${RUNTIME_ROOT:-output}"
 
-# LuaRuntimeRepo stores the GitHub repository for Lua runtime assets.
-# LuaRuntimeRepo 保存 Lua runtime 资产所在的 GitHub 仓库。
-LUA_RUNTIME_REPO="${LUA_RUNTIME_REPO:-LuaSkills/luaskills}"
+# LuaRuntimeRepo stores the GitHub repository for Lua runtime packages assets.
+# LuaRuntimeRepo 保存 Lua runtime packages 资产所在的 GitHub 仓库。
+LUA_RUNTIME_REPO="${LUA_RUNTIME_REPO:-LuaSkills/luaskills-packages}"
 
-# LuaRuntimeVersion stores the GitHub Release tag for Lua runtime assets.
-# LuaRuntimeVersion 保存 Lua runtime 资产的 GitHub Release 标签。
-LUA_RUNTIME_VERSION="${LUA_RUNTIME_VERSION:-v0.3.0}"
+# LuaRuntimeVersion stores the GitHub Release tag for Lua runtime packages assets.
+# LuaRuntimeVersion 保存 Lua runtime packages 资产的 GitHub Release 标签。
+LUA_RUNTIME_VERSION="${LUA_RUNTIME_VERSION:-v0.1.6}"
+
+# LuaSkillsRepo stores the GitHub repository for LuaSkills FFI SDK assets.
+# LuaSkillsRepo 保存 LuaSkills FFI SDK 资产所在的 GitHub 仓库。
+LUASKILLS_REPO="${LUASKILLS_REPO:-LuaSkills/luaskills}"
+
+# LuaSkillsVersion stores the GitHub Release tag for LuaSkills FFI SDK assets.
+# LuaSkillsVersion 保存 LuaSkills FFI SDK 资产的 GitHub Release 标签。
+LUASKILLS_VERSION="${LUASKILLS_VERSION:-v0.3.0}"
 
 # VldbControllerRepo stores the GitHub repository for vldb-controller assets.
 # VldbControllerRepo 保存 vldb-controller 资产所在的 GitHub 仓库。
@@ -134,11 +142,11 @@ PY
 }
 
 install_lua_runtime() {
-  # Download and install one luaskills Lua runtime package.
-  # 下载并安装一个 luaskills Lua runtime 包。
+  # Download and install one luaskills runtime-packages archive.
+  # 下载并安装一个 luaskills runtime-packages 归档。
   local platform
   platform="$(platform_key)"
-  local asset_name="lua-runtime-${platform}.tar.gz"
+  local asset_name="lua-runtime-packages-${platform}.tar.gz"
   local temp_dir
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' RETURN
@@ -147,7 +155,7 @@ install_lua_runtime() {
   ensure_dir "$extract_dir"
   if ! save_release_asset_with_sha256 "$LUA_RUNTIME_REPO" "$LUA_RUNTIME_VERSION" "$asset_name" "$archive"; then
     if [ -d "$RUNTIME_ROOT/skills" ] || [ -d "$RUNTIME_ROOT/lua_packages" ]; then
-      echo "WARNING: Lua runtime asset '$asset_name' was not found in $LUA_RUNTIME_REPO@$LUA_RUNTIME_VERSION. Existing packaged runtime content will be used." >&2
+      echo "WARNING: Lua runtime packages asset '$asset_name' was not found in $LUA_RUNTIME_REPO@$LUA_RUNTIME_VERSION. Existing packaged runtime content will be used." >&2
       return 0
     fi
     return 1
@@ -161,9 +169,81 @@ install_lua_runtime() {
     fi
   done
   if [ -d "$extract_dir/licenses" ]; then
-    ensure_dir "$RUNTIME_ROOT/licenses/lua-runtime"
-    cp -a "$extract_dir/licenses"/. "$RUNTIME_ROOT/licenses/lua-runtime"/
+    ensure_dir "$RUNTIME_ROOT/licenses"
+    cp -a "$extract_dir/licenses"/. "$RUNTIME_ROOT/licenses"/
   fi
+  [ -f "$RUNTIME_ROOT/resources/lua-runtime-manifest.json" ] || {
+    echo "Lua runtime manifest was not found after installing $asset_name" >&2
+    return 1
+  }
+  [ -f "$RUNTIME_ROOT/resources/luaskills-packages-manifest.json" ] || {
+    echo "LuaSkills packages manifest was not found after installing $asset_name" >&2
+    return 1
+  }
+}
+
+luaskills_library_candidates() {
+  # Return candidate LuaSkills dynamic library names for the current platform.
+  # 返回当前平台对应的 LuaSkills 动态库候选名称。
+  local platform
+  platform="$(platform_key)"
+  case "$platform" in
+    windows-x64) printf '%s\n' "luaskills.dll" "libluaskills.dll" ;;
+    linux-x64|linux-arm64) printf '%s\n' "libluaskills.so" "luaskills.so" ;;
+    macos-x64|macos-arm64) printf '%s\n' "libluaskills.dylib" "luaskills.dylib" ;;
+    *) echo "Unsupported LuaSkills runtime platform: $platform" >&2; return 1 ;;
+  esac
+}
+
+has_existing_luaskills_ffi_content() {
+  # Check whether the runtime root already contains one LuaSkills core dynamic library.
+  # 检查运行根目录是否已经包含一个 LuaSkills core 动态库。
+  local candidate=""
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    if [ -f "$RUNTIME_ROOT/libs/$candidate" ]; then
+      return 0
+    fi
+  done < <(luaskills_library_candidates)
+  return 1
+}
+
+install_luaskills_ffi() {
+  # Download and install one luaskills FFI SDK archive into the runtime root.
+  # 下载并安装一个 luaskills FFI SDK 归档到运行根目录。
+  local platform
+  platform="$(platform_key)"
+  local asset_name="luaskills-ffi-sdk-${platform}.tar.gz"
+  local temp_dir
+  temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' RETURN
+  local archive="$temp_dir/$asset_name"
+  local extract_dir="$temp_dir/extract"
+  ensure_dir "$extract_dir"
+  if ! save_release_asset_with_sha256 "$LUASKILLS_REPO" "$LUASKILLS_VERSION" "$asset_name" "$archive"; then
+    if has_existing_luaskills_ffi_content; then
+      echo "WARNING: LuaSkills FFI SDK asset '$asset_name' was not found in $LUASKILLS_REPO@$LUASKILLS_VERSION. Existing packaged LuaSkills core content will be used." >&2
+      return 0
+    fi
+    return 1
+  fi
+  tar -xzf "$archive" -C "$extract_dir"
+  if [ -d "$extract_dir/include" ]; then
+    ensure_dir "$RUNTIME_ROOT/include"
+    cp -a "$extract_dir/include"/. "$RUNTIME_ROOT/include"/
+  fi
+  if [ -d "$extract_dir/lib" ]; then
+    ensure_dir "$RUNTIME_ROOT/libs"
+    cp -a "$extract_dir/lib"/. "$RUNTIME_ROOT/libs"/
+  fi
+  if [ -d "$extract_dir/licenses" ]; then
+    ensure_dir "$RUNTIME_ROOT/licenses/luaskills-ffi"
+    cp -a "$extract_dir/licenses"/. "$RUNTIME_ROOT/licenses/luaskills-ffi"/
+  fi
+  has_existing_luaskills_ffi_content || {
+    echo "LuaSkills dynamic library was not found after installing $asset_name" >&2
+    return 1
+  }
 }
 
 install_vldb_controller() {
@@ -265,6 +345,7 @@ esac
 case "$TARGET" in
   all)
     install_lua_runtime
+    install_luaskills_ffi
     if [ "$DATABASE" = "vldb-controller" ]; then
       install_vldb_controller
     elif [ "$DATABASE" = "vldb-direct" ]; then
@@ -273,6 +354,7 @@ case "$TARGET" in
     ;;
   lua)
     install_lua_runtime
+    install_luaskills_ffi
     ;;
   vldb)
     if [ "$DATABASE" = "vldb-controller" ]; then

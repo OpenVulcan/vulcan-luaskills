@@ -4,8 +4,10 @@ param(
     [ValidateSet("none", "vldb-controller", "vldb-direct", "host-callback")]
     [string]$Database = "vldb-controller",
     [string]$RuntimeRoot = "output",
-    [string]$LuaRuntimeRepo = "LuaSkills/luaskills",
-    [string]$LuaRuntimeVersion = "v0.3.0",
+    [string]$LuaRuntimeRepo = "LuaSkills/luaskills-packages",
+    [string]$LuaRuntimeVersion = "v0.1.6",
+    [string]$LuaSkillsRepo = "LuaSkills/luaskills",
+    [string]$LuaSkillsVersion = "v0.3.0",
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",
     [string]$VldbControllerVersion = "v0.2.1",
     [string]$VldbSQLiteRepo = "OpenVulcan/vldb-sqlite",
@@ -278,11 +280,57 @@ function Test-ExistingRuntimeContent {
     return (Test-Path -LiteralPath $SkillsDir) -or (Test-Path -LiteralPath $LuaPackagesDir)
 }
 
+function Get-LuaSkillsLibraryCandidates {
+    <#
+    .SYNOPSIS
+    Resolve the candidate LuaSkills dynamic library names for the current platform.
+    解析当前平台对应的 LuaSkills 动态库候选名称。
+
+    .OUTPUTS
+    Ordered string array of candidate dynamic library file names.
+    按顺序返回候选动态库文件名字符串数组。
+    #>
+    $Platform = Get-PlatformKey
+    switch ($Platform) {
+        "windows-x64" { return @("luaskills.dll", "libluaskills.dll") }
+        "linux-x64" { return @("libluaskills.so", "luaskills.so") }
+        "linux-arm64" { return @("libluaskills.so", "luaskills.so") }
+        "macos-x64" { return @("libluaskills.dylib", "luaskills.dylib") }
+        "macos-arm64" { return @("libluaskills.dylib", "luaskills.dylib") }
+        default { throw "Unsupported LuaSkills runtime platform: $Platform" }
+    }
+}
+
+function Test-ExistingLuaSkillsFfiContent {
+    <#
+    .SYNOPSIS
+    Check whether the runtime root already contains one LuaSkills core dynamic library.
+    检查运行根目录是否已经包含一个 LuaSkills core 动态库。
+
+    .PARAMETER RuntimeRootPath
+    Runtime root to inspect for installed LuaSkills libraries.
+    需要检查已安装 LuaSkills 动态库的运行根目录。
+
+    .OUTPUTS
+    Boolean value that indicates whether one candidate library already exists.
+    表示候选动态库是否已存在的布尔值。
+    #>
+    param([string]$RuntimeRootPath)
+
+    $LibsDir = Join-Path $RuntimeRootPath "libs"
+    foreach ($Candidate in Get-LuaSkillsLibraryCandidates) {
+        if (Test-Path -LiteralPath (Join-Path $LibsDir $Candidate)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Install-LuaRuntime {
     <#
     .SYNOPSIS
-    Download and install one luaskills Lua runtime package.
-    下载并安装一个 luaskills Lua runtime 包。
+    Download and install one luaskills runtime-packages archive.
+    下载并安装一个 luaskills runtime-packages 归档。
 
     .PARAMETER RuntimeRootPath
     Runtime root that receives lua_packages, libs, resources, and licenses.
@@ -291,7 +339,7 @@ function Install-LuaRuntime {
     param([string]$RuntimeRootPath)
 
     $Platform = Get-PlatformKey
-    $AssetName = "lua-runtime-$Platform.tar.gz"
+    $AssetName = "lua-runtime-packages-$Platform.tar.gz"
     $TempDir = Join-Path $env:TEMP "luaskills_lua_runtime_$PID"
     $ArchivePath = Join-Path $TempDir $AssetName
     $ExtractDir = Join-Path $TempDir "extract"
@@ -306,7 +354,7 @@ function Install-LuaRuntime {
             Save-ReleaseAssetWithSha256 -Repo $LuaRuntimeRepo -Tag $LuaRuntimeVersion -AssetName $AssetName -Destination $ArchivePath
         } catch {
             if (Test-ExistingRuntimeContent -RuntimeRootPath $RuntimeRootPath) {
-                Write-Warning "Lua runtime asset '$AssetName' was not found in $LuaRuntimeRepo@$LuaRuntimeVersion. Existing packaged runtime content will be used."
+                Write-Warning "Lua runtime packages asset '$AssetName' was not found in $LuaRuntimeRepo@$LuaRuntimeVersion. Existing packaged runtime content will be used."
                 return
             }
             throw
@@ -323,9 +371,82 @@ function Install-LuaRuntime {
 
         $LicenseSource = Join-Path $ExtractDir "licenses"
         if (Test-Path -LiteralPath $LicenseSource) {
-            $LicenseDest = Join-Path $RuntimeRootPath "licenses\lua-runtime"
+            $LicenseDest = Join-Path $RuntimeRootPath "licenses"
             Ensure-Dir $LicenseDest
             Copy-Item -Recurse -Force -Path (Join-Path $LicenseSource "*") -Destination $LicenseDest -ErrorAction SilentlyContinue
+        }
+
+        $RuntimeManifestPath = Join-Path $RuntimeRootPath "resources\lua-runtime-manifest.json"
+        $PackagesManifestPath = Join-Path $RuntimeRootPath "resources\luaskills-packages-manifest.json"
+        if (-not (Test-Path -LiteralPath $RuntimeManifestPath)) {
+            throw "Lua runtime manifest was not found after installing $AssetName"
+        }
+        if (-not (Test-Path -LiteralPath $PackagesManifestPath)) {
+            throw "LuaSkills packages manifest was not found after installing $AssetName"
+        }
+    } finally {
+        Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-LuaSkillsFfi {
+    <#
+    .SYNOPSIS
+    Download and install one luaskills FFI SDK archive into the runtime root.
+    下载并安装一个 luaskills FFI SDK 归档到运行根目录。
+
+    .PARAMETER RuntimeRootPath
+    Runtime root that receives include, libs, and luaskills-ffi license material.
+    接收 include、libs 与 luaskills-ffi 授权材料的运行根目录。
+    #>
+    param([string]$RuntimeRootPath)
+
+    $Platform = Get-PlatformKey
+    $AssetName = "luaskills-ffi-sdk-$Platform.tar.gz"
+    $TempDir = Join-Path $env:TEMP "luaskills_ffi_sdk_$PID"
+    $ArchivePath = Join-Path $TempDir $AssetName
+    $ExtractDir = Join-Path $TempDir "extract"
+
+    if (Test-Path -LiteralPath $TempDir) {
+        Remove-Item -LiteralPath $TempDir -Recurse -Force
+    }
+    Ensure-Dir $TempDir
+
+    try {
+        try {
+            Save-ReleaseAssetWithSha256 -Repo $LuaSkillsRepo -Tag $LuaSkillsVersion -AssetName $AssetName -Destination $ArchivePath
+        } catch {
+            if (Test-ExistingLuaSkillsFfiContent -RuntimeRootPath $RuntimeRootPath) {
+                Write-Warning "LuaSkills FFI SDK asset '$AssetName' was not found in $LuaSkillsRepo@$LuaSkillsVersion. Existing packaged LuaSkills core content will be used."
+                return
+            }
+            throw
+        }
+        Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
+
+        $IncludeSource = Join-Path $ExtractDir "include"
+        if (Test-Path -LiteralPath $IncludeSource) {
+            $IncludeDest = Join-Path $RuntimeRootPath "include"
+            Ensure-Dir $IncludeDest
+            Copy-Item -Recurse -Force -Path (Join-Path $IncludeSource "*") -Destination $IncludeDest -ErrorAction SilentlyContinue
+        }
+
+        $LibrarySource = Join-Path $ExtractDir "lib"
+        if (Test-Path -LiteralPath $LibrarySource) {
+            $LibraryDest = Join-Path $RuntimeRootPath "libs"
+            Ensure-Dir $LibraryDest
+            Copy-Item -Recurse -Force -Path (Join-Path $LibrarySource "*") -Destination $LibraryDest -ErrorAction SilentlyContinue
+        }
+
+        $LicenseSource = Join-Path $ExtractDir "licenses"
+        if (Test-Path -LiteralPath $LicenseSource) {
+            $LicenseDest = Join-Path $RuntimeRootPath "licenses\luaskills-ffi"
+            Ensure-Dir $LicenseDest
+            Copy-Item -Recurse -Force -Path (Join-Path $LicenseSource "*") -Destination $LicenseDest -ErrorAction SilentlyContinue
+        }
+
+        if (-not (Test-ExistingLuaSkillsFfiContent -RuntimeRootPath $RuntimeRootPath)) {
+            throw "LuaSkills dynamic library was not found after installing $AssetName"
         }
     } finally {
         Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -483,6 +604,7 @@ Ensure-Dir (Join-Path $RuntimeRoot "resources")
 
 if ($Target -eq "all" -or $Target -eq "lua") {
     Install-LuaRuntime -RuntimeRootPath $RuntimeRoot
+    Install-LuaSkillsFfi -RuntimeRootPath $RuntimeRoot
 }
 
 if (($Target -eq "all" -and $Database -eq "vldb-controller") -or ($Target -eq "vldb" -and $Database -eq "vldb-controller") -or $Target -eq "vldb-controller") {

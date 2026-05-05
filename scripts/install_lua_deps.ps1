@@ -80,6 +80,66 @@ function Resolve-RuntimePackagesBundleState {
     }
 }
 
+function Resolve-PythonCommand {
+    <#
+    .SYNOPSIS
+    Resolve one available Python launcher for helper scripts.
+    为辅助脚本解析一个可用的 Python 启动命令。
+
+    .OUTPUTS
+    Executable name such as python or py, or null when Python is unavailable.
+    当 Python 可用时返回 python 或 py 之类的可执行命令；否则返回 null。
+    #>
+    foreach ($Candidate in @("python", "py")) {
+        if (Get-Command $Candidate -ErrorAction SilentlyContinue) {
+            return $Candidate
+        }
+    }
+    return $null
+}
+
+function Ensure-RuntimePackagesBundleState {
+    <#
+    .SYNOPSIS
+    Ensure one staged luaskills-packages bundle state exists when helper scripts can fetch it.
+    在辅助脚本可用时确保已暂存一个 luaskills-packages bundle 状态文件。
+
+    .PARAMETER RootPath
+    Repository root used to resolve helper scripts and bundle state files.
+    用于解析辅助脚本与 bundle 状态文件的仓库根目录。
+
+    .OUTPUTS
+    Hashtable bundle state when one bundle is available, or null when staging is unavailable.
+    当 bundle 可用时返回哈希表状态；若暂存不可用则返回 null。
+    #>
+    param([string]$RootPath)
+
+    $ExistingState = Resolve-RuntimePackagesBundleState -RootPath $RootPath
+    if ($ExistingState) {
+        return $ExistingState
+    }
+
+    $FetchScript = Join-Path $RootPath "scripts\fetch_runtime_packages_bundle.py"
+    if (-not (Test-Path -LiteralPath $FetchScript)) {
+        return $null
+    }
+
+    $PythonCommand = Resolve-PythonCommand
+    if (-not $PythonCommand) {
+        Write-Warning "Python is not available, so luaskills-packages bundle staging will be skipped."
+        return $null
+    }
+
+    try {
+        & $PythonCommand $FetchScript --project-root $RootPath
+    } catch {
+        Write-Warning "Failed to stage luaskills-packages bundle automatically: $_"
+        return $null
+    }
+
+    return Resolve-RuntimePackagesBundleState -RootPath $RootPath
+}
+
 # ScriptDir points at the current script directory when PowerShell exposes it.
 # ScriptDir 在 PowerShell 提供脚本路径时指向当前脚本目录。
 $ScriptDir = ""
@@ -102,7 +162,7 @@ Set-Location $ProjectDir
 
 # RuntimePackagesState stores the staged luaskills-packages bundle metadata when one bundle is active.
 # RuntimePackagesState 在存在活动 bundle 时保存暂存的 luaskills-packages bundle 元数据。
-$RuntimePackagesState = Resolve-RuntimePackagesBundleState -RootPath $ProjectDir
+$RuntimePackagesState = Ensure-RuntimePackagesBundleState -RootPath $ProjectDir
 $script:RuntimePackagesConfigBase = $ProjectDir
 $PackagesFile = Join-Path $ProjectDir "scripts\lua_packages.txt"
 $PackagesSourceLabel = "repository-compat"
@@ -131,7 +191,8 @@ $LuarocksDir = Join-Path $ThirdParty "luarocks"
 $DepsDir    = Join-Path $ThirdParty "deps"
 
 # GitHub repo for pre-built deps (format: owner/repo)
-$GitHubRepo = "LuaSkills/luaskills"
+# 预编译依赖包所在的 GitHub 仓库（owner/repo 格式）
+$GitHubRepo = "LuaSkills/luaskills-packages"
 
 # ============================================================
 # Helpers: directory / download / extract
@@ -780,7 +841,7 @@ function Run-With-LocalPath {
 # Pre-built C deps from GitHub Releases
 # ============================================================
 
-$ReleaseTag = "v0.3.0"  # legacy fallback when no runtime packages bundle is active
+$ReleaseTag = if ($env:LUASKILLS_PACKAGES_VERSION -match '^v') { $env:LUASKILLS_PACKAGES_VERSION } else { "" }
 if ($RuntimePackagesState) {
     if ($RuntimePackagesState.repository -and $RuntimePackagesState.repository -match '/') {
         $GitHubRepo = $RuntimePackagesState.repository
@@ -810,6 +871,10 @@ function Download-Prebuilt-Deps {
         # Ensure we have curl
         if (-not (Get-Command "curl.exe" -ErrorAction SilentlyContinue)) {
             Write-Host "  ==> curl not found, cannot download pre-built deps." -ForegroundColor Yellow
+            return $null
+        }
+        if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
+            Write-Host "  ==> No luaskills-packages release tag is resolved, so pre-built deps will be skipped and local compilation will continue." -ForegroundColor Yellow
             return $null
         }
 

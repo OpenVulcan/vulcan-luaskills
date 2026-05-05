@@ -286,7 +286,7 @@ write_packaged_demo_readme() {
     printf '这是 `luaskills-demo-%s-%s.tar.gz` 解压后的发布包说明，路径与命令均按包根目录设计，不依赖仓库源码布局。\n\n' "$mode" "$PLATFORM"
     printf 'This README describes the extracted `luaskills-demo-%s-%s.tar.gz` package. Paths and commands are package-root based and do not require the source repository layout.\n\n' "$mode" "$PLATFORM"
     printf '## 包内容 / Package Contents\n\n'
-    printf -- '- `runtime/`：demo 默认 runtime 根目录，可由拉取脚本安装 `lua-runtime-%s.tar.gz`。\n' "$PLATFORM"
+    printf -- '- `runtime/`：demo 默认 runtime 根目录，可由拉取脚本安装 `lua-runtime-packages-%s.tar.gz` 与 `luaskills-ffi-sdk-%s.tar.gz`。\n' "$PLATFORM" "$PLATFORM"
     printf -- '- `scripts/`：仅包含当前平台可用的依赖拉取脚本。\n'
     printf -- '- `licenses/`：项目与随包组件授权材料。\n'
     printf -- '- `demo-manifest.json`：包模式、平台、runtime 根和可拉取目标清单。\n'

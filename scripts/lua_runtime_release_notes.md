@@ -38,8 +38,8 @@ The runtime package includes the native libraries actually required by Lua C mod
 
 Demo packages provide standalone dependency upgrade scripts with three targets. The `run` script only runs the demo and does not download dependencies automatically. Windows packages include `upgrade_deps.bat`, `scripts/fetch_runtime_deps.ps1`, and `run.ps1`; Linux/macOS packages include `upgrade_deps.sh`, `scripts/fetch_runtime_deps.sh`, and `run.sh`.
 
-- `all`: Fetch both the Lua runtime and vldb-controller.
-- `lua`: Fetch only `lua-runtime-{platform}.tar.gz` and install it into the demo `runtime/` directory.
+- `all`: Fetch `lua-runtime-packages-{platform}.tar.gz`, `luaskills-ffi-sdk-{platform}.tar.gz`, and vldb-controller.
+- `lua`: Fetch `lua-runtime-packages-{platform}.tar.gz` plus `luaskills-ffi-sdk-{platform}.tar.gz` and install them into the demo `runtime/` directory.
 - `vldb`: Fetch only vldb-controller and place it under the demo runtime `bin/` directory.
 
 In most demo scenarios, run `all` through `upgrade_deps.bat` or `upgrade_deps.sh` first. Use `lua` when you only need to validate Lua package capabilities. Use `vldb` when a runtime already exists and only vldb-controller is missing.
@@ -84,8 +84,8 @@ runtime 包会携带 Lua C 模块实际需要的原生运行库，并在 `licens
 
 demo 包内的独立依赖升级脚本支持三个目标。`run` 脚本只负责运行 demo，不会自动下载依赖。Windows 包携带 `upgrade_deps.bat`、`scripts/fetch_runtime_deps.ps1` 和 `run.ps1`，Linux/macOS 包携带 `upgrade_deps.sh`、`scripts/fetch_runtime_deps.sh` 和 `run.sh`。
 
-- `all`：同时拉取 Lua runtime 与 vldb-controller。
-- `lua`：只拉取并安装 `lua-runtime-{platform}.tar.gz` 到 demo 的 `runtime/` 目录。
+- `all`：同时拉取 `lua-runtime-packages-{platform}.tar.gz`、`luaskills-ffi-sdk-{platform}.tar.gz` 与 vldb-controller。
+- `lua`：只拉取并安装 `lua-runtime-packages-{platform}.tar.gz` 与 `luaskills-ffi-sdk-{platform}.tar.gz` 到 demo 的 `runtime/` 目录。
 - `vldb`：只拉取 vldb-controller，并放入 demo runtime 的 `bin/` 目录。
 
 一般使用 demo 时先通过 `upgrade_deps.bat` 或 `upgrade_deps.sh` 执行 `all`；只验证 Lua 包能力时执行 `lua`；已有 runtime、只缺 vldb-controller 时执行 `vldb`。

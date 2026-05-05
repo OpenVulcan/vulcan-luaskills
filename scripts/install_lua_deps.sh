@@ -37,6 +37,27 @@ for key in (
 PY
 }
 
+ensure_runtime_packages_bundle_state() {
+    # Ensure one staged luaskills-packages bundle state exists when helper scripts can fetch it.
+    # 在辅助脚本可用时确保已暂存一个 luaskills-packages bundle 状态文件。
+    local fetch_script="$PROJECT_DIR/scripts/fetch_runtime_packages_bundle.py"
+    local state_output=""
+    if state_output="$(load_runtime_packages_bundle_state 2>/dev/null)"; then
+        printf '%s\n' "$state_output"
+        return 0
+    fi
+    [ -f "$fetch_script" ] || return 1
+    command -v python3 >/dev/null 2>&1 || {
+        echo "WARNING: python3 is not available, so luaskills-packages bundle staging will be skipped." >&2
+        return 1
+    }
+    if ! python3 "$fetch_script" --project-root "$PROJECT_DIR"; then
+        echo "WARNING: failed to stage luaskills-packages bundle automatically." >&2
+        return 1
+    fi
+    load_runtime_packages_bundle_state 2>/dev/null
+}
+
 THIRD_PARTY="$PROJECT_DIR/third_party"
 TOOLS_DIR="$THIRD_PARTY/tools"
 LUAJIT_DIR="$THIRD_PARTY/luajit"
@@ -48,7 +69,7 @@ RUNTIME_PACKAGES_CONFIG_ROOT="$PROJECT_DIR"
 PACKAGES_FILE="$SCRIPT_DIR/lua_packages.txt"
 PACKAGES_SOURCE_LABEL="repository-compat"
 
-if runtime_bundle_state="$(load_runtime_packages_bundle_state 2>/dev/null)"; then
+if runtime_bundle_state="$(ensure_runtime_packages_bundle_state 2>/dev/null)"; then
     while IFS='=' read -r key value; do
         case "$key" in
             bundle_root) runtime_bundle_root="$value" ;;
@@ -424,8 +445,8 @@ download_extract() {
 # Pre-built C deps from GitHub Releases
 # ============================================================
 
-GITHUB_REPO="LuaSkills/luaskills"
-RELEASE_TAG="v0.3.0"
+GITHUB_REPO="LuaSkills/luaskills-packages"
+RELEASE_TAG="${LUASKILLS_PACKAGES_VERSION:-}"
 if [[ -n "${runtime_bundle_tag:-}" && "$runtime_bundle_tag" == v* ]]; then
     RELEASE_TAG="$runtime_bundle_tag"
 fi
@@ -485,6 +506,10 @@ download_prebuilt_deps() {
         echo "  ==> Using local pre-built deps package: $local_archive"
         cp "$local_archive" "$archive"
     else
+        if [ -z "$RELEASE_TAG" ]; then
+            echo "  ==> No luaskills-packages release tag is resolved, so pre-built deps will be skipped and local compilation will continue."
+            return 1
+        fi
         echo "  ==> Checking GitHub Releases for pre-built deps ($asset_name)..."
 
         local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
