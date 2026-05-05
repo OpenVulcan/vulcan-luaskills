@@ -23,7 +23,7 @@ LUA_RUNTIME_REPO="${LUA_RUNTIME_REPO:-LuaSkills/luaskills}"
 
 # LuaRuntimeVersion stores the GitHub Release tag for Lua runtime assets.
 # LuaRuntimeVersion 保存 Lua runtime 资产的 GitHub Release 标签。
-LUA_RUNTIME_VERSION="${LUA_RUNTIME_VERSION:-v0.2.2}"
+LUA_RUNTIME_VERSION="${LUA_RUNTIME_VERSION:-v0.3.0}"
 
 # VldbControllerRepo stores the GitHub repository for vldb-controller assets.
 # VldbControllerRepo 保存 vldb-controller 资产所在的 GitHub 仓库。

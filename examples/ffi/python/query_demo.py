@@ -129,6 +129,8 @@ def main() -> None:
     host.ignored_skill_ids = None
     host.ignored_skill_ids_len = 0
     host.enable_skill_management_bridge = 0
+    host.default_text_encoding = None
+    host.disable_managed_io_compat = 0
 
     options = FfiLuaEngineOptions(
         pool=FfiLuaVmPoolConfig(min_size=1, max_size=1, idle_ttl_secs=30),

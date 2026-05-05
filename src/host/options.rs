@@ -84,7 +84,11 @@ impl Default for LuaRuntimeSpaceControllerOptions {
 pub struct LuaRuntimeCapabilityOptions {
     /// Whether `vulcan.runtime.skills.*` management bridges are exposed to Lua.
     /// 是否将 `vulcan.runtime.skills.*` 管理桥接暴露给 Lua。
+    #[serde(default)]
     pub enable_skill_management_bridge: bool,
+    /// Whether luaexec and runtime sessions replace Lua's global `io` table with managed IO.
+    /// luaexec 与持久运行时会话是否使用托管 IO 替换 Lua 全局 `io` 表。
+    pub enable_managed_io_compat: bool,
 }
 
 impl Default for LuaRuntimeCapabilityOptions {
@@ -93,6 +97,7 @@ impl Default for LuaRuntimeCapabilityOptions {
     fn default() -> Self {
         Self {
             enable_skill_management_bridge: false,
+            enable_managed_io_compat: true,
         }
     }
 }
@@ -170,6 +175,10 @@ pub struct LuaRuntimeHostOptions {
     /// Optional GitHub API base URL override used to resolve release metadata.
     /// 可选的 GitHub API 基址覆盖，用于解析 release 元数据。
     pub github_api_base_url: Option<String>,
+    /// Optional default text encoding label used by managed IO and process APIs.
+    /// 托管 IO 与进程 API 使用的可选默认文本编码标签。
+    #[serde(default)]
+    pub default_text_encoding: Option<String>,
     /// Explicit SQLite dynamic-library path owned by the host.
     /// 由宿主显式提供的 SQLite 动态库路径。
     pub sqlite_library_path: Option<PathBuf>,
@@ -268,6 +277,26 @@ pub struct ClientBudgetSnapshot {
     /// Tool-scoped host configuration snapshot.
     /// 工具作用域下的宿主配置快照。
     pub tool_config: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LuaRuntimeCapabilityOptions;
+    use serde_json::json;
+
+    /// Verify capability payloads now require an explicit managed io compatibility flag.
+    /// 验证 capability 载荷现在必须显式提供 managed io 兼容标记。
+    #[test]
+    fn capability_options_require_explicit_managed_io_compat_flag() {
+        let error = serde_json::from_value::<LuaRuntimeCapabilityOptions>(json!({
+            "enable_skill_management_bridge": true
+        }))
+        .expect_err("partial capability options should fail without managed io flag");
+        assert!(
+            error.to_string().contains("enable_managed_io_compat"),
+            "missing-field error should mention enable_managed_io_compat, got: {error}"
+        );
+    }
 }
 
 impl LuaInvocationContext {

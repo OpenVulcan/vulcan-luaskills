@@ -187,7 +187,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 一个 `engine_id` 的推荐生命周期：
 
 1. `engine_new`
-2. `load_from_roots` 或 `load_from_dirs`
+2. `load_from_roots`
 3. 若干：
    - `list_entries`
    - `list_skill_help`
@@ -635,6 +635,8 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `ignored_skill_ids`
 - `skill_config_file_path`
 - `enable_skill_management_bridge`
+- `default_text_encoding`
+- `disable_managed_io_compat`
 
 已取消字段：
 
@@ -669,6 +671,14 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
   - 真正执行仍依赖宿主已注册运行时技能管理回调
 - 如果宿主打开了开关但没有注册回调，Lua 会得到明确错误：
   - `Runtime skill management bridge is enabled but no host callback is registered`
+- `default_text_encoding`
+  - 可填 `utf-8`、`system`、`oem`、`gbk`、`gb18030`、`latin1`、`base64`
+  - 影响 `vulcan.io`、托管 `io` 兼容层、`vulcan.process.exec` 与 `vulcan.process.session` 的省略编码路径
+  - 未配置时 Windows 默认 `system`，其他平台默认 `utf-8`
+- `disable_managed_io_compat = 0`
+  - `luaexec` 与持久运行时会话会把全局 `io` 替换为 Rust 托管兼容层
+- `disable_managed_io_compat != 0`
+  - 保留 Lua 原生全局 `io`；`vulcan.io` 仍然注册，AI 代码可以显式调用
 
 宿主强制忽略规则：
 
@@ -837,20 +847,21 @@ runtime-config(action, skill_id?, key?, value?)
 - `luaskills_ffi_engine_new_json`
 - `luaskills_ffi_engine_free_json`
 
+说明：
+
+- `describe_json` 会返回当前动态库实际导出的 `_json` 入口列表，SDK 或宿主 wrapper 应优先用它做能力探测，而不是只按文档假定某个入口一定存在。
+- 当前部署约束只支持最新正式协议；`system_runtime_session_*_json`、`load_from_roots`、`reload_from_roots` 与正式 lifecycle 入口都应被视为必需导出。
+
 ### 9.2 加载与重载接口
 
 标准 C ABI 接口：
 
-- `luaskills_ffi_load_from_dirs`
 - `luaskills_ffi_load_from_roots`
-- `luaskills_ffi_reload_from_dirs`
 - `luaskills_ffi_reload_from_roots`
 
 公共 `_json` FFI 接口：
 
-- `luaskills_ffi_load_from_dirs_json`
 - `luaskills_ffi_load_from_roots_json`
-- `luaskills_ffi_reload_from_dirs_json`
 - `luaskills_ffi_reload_from_roots_json`
 
 ### 9.3 描述与帮助接口
@@ -890,21 +901,70 @@ runtime-config(action, skill_id?, key?, value?)
 
 - `luaskills_ffi_call_skill_json`
 - `luaskills_ffi_run_lua_json`
+- `luaskills_ffi_runtime_session_create_json`
+- `luaskills_ffi_runtime_session_eval_json`
+- `luaskills_ffi_runtime_session_status_json`
+- `luaskills_ffi_runtime_session_list_json`
+- `luaskills_ffi_runtime_session_close_json`
+- `luaskills_ffi_system_runtime_session_create_json`
+- `luaskills_ffi_system_runtime_session_eval_json`
+- `luaskills_ffi_system_runtime_session_status_json`
+- `luaskills_ffi_system_runtime_session_list_json`
+- `luaskills_ffi_system_runtime_session_close_json`
 
 说明：
 
-- 调用接口不接收 authority，也不作为 root 可见性或技能管理权限边界。
+- 普通 `call_skill / run_lua / runtime_session_*_json` 不接收 authority，也不作为 root 可见性或技能管理权限边界。
 - `call_skill` 调用当前已激活运行时视图中的 skill，包括已加载的 `ROOT / PROJECT / USER` skill。
 - `run_lua` 执行当前运行时环境中的 Lua 代码；如果宿主不希望普通用户执行任意 Lua，应在工具封装层单独限制或不暴露该接口。
+- `runtime_session_*_json` 与 `system_runtime_session_*_json` 都是持久运行时租约接口，同一 `lease_id` 的多次 `eval` 会复用同一个 Lua VM 并保留全局状态；宿主应使用稳定的 `sid` 绑定对话、任务或工作区，并在不需要时显式 close。
+- `system_runtime_session_*_json` 必须由宿主注入 `authority`；当前接受 `"system"` 与 `"delegated_tool"` 两种值，推荐对外 wrapper 固定注入 `"delegated_tool"`，把公共 `runtime_session_*_json` 留给可信宿主内部链路。
+- `eval / status / close` 请求可选回传 `sid` 与 `generation`；推荐宿主 wrapper 始终把 `create` 返回的两项一并带回，提前发现串线或陈旧句柄。
+- 推荐宿主把 `lease_id + sid + generation` 物化成一个本地 session handle 对象，而不是在业务代码中散落传递三个字段。
+- `runtime_session_list_json` 仅列出当前仍然活跃的租约；已 `close`、已过期或已被同 SID 新租约替换的旧 `lease_id` 不会出现在列表中。
+- 旧 `lease_id` 在被关闭、过期或替换后会返回稳定错误码，例如 `lease_closed`、`lease_expired`、`lease_replaced`，便于宿主或 AI wrapper 做恢复与重建。
+- 如果 wrapper 回传的 `sid` 或 `generation` 与当前租约不一致，会返回 `lease_sid_mismatch` 或 `lease_generation_mismatch`。
 - `DelegatedTool` 对 ROOT 的隐藏只适用于管理、查询与 prompt completion 面，不限制运行时 skill 调用。
+
+持久运行时最小调用示例：
+
+```json
+{
+  "engine_id": 1,
+  "sid": "conversation-123",
+  "ttl_sec": 600,
+  "replace": false
+}
+```
+
+后续执行：
+
+```json
+{
+  "engine_id": 1,
+  "lease_id": "rt_...",
+  "sid": "conversation-123",
+  "generation": 1,
+  "code": "counter = (counter or 0) + 1; return counter",
+  "args": {},
+  "timeout_ms": 60000
+}
+```
+
+列出当前活跃租约：
+
+```json
+{
+  "engine_id": 1,
+  "sid": "conversation-123"
+}
+```
 
 ### 9.5 生命周期接口
 
 标准 C ABI 接口：
 
-- `luaskills_ffi_disable_skill_in_dirs`
 - `luaskills_ffi_disable_skill`
-- `luaskills_ffi_system_disable_skill_in_dirs`
 - `luaskills_ffi_system_disable_skill`
 - `luaskills_ffi_enable_skill`
 - `luaskills_ffi_system_enable_skill`
@@ -922,9 +982,7 @@ system 版本的标准 C ABI 生命周期接口，以及可见性查询、prompt
 
 公共 `_json` FFI 接口：
 
-- `luaskills_ffi_disable_skill_in_dirs_json`
 - `luaskills_ffi_disable_skill_json`
-- `luaskills_ffi_system_disable_skill_in_dirs_json`
 - `luaskills_ffi_system_disable_skill_json`
 - `luaskills_ffi_enable_skill_json`
 - `luaskills_ffi_system_enable_skill_json`
@@ -1201,7 +1259,7 @@ SDK 对接入口：
 1. 从注册表删除句柄
 2. 丢弃引擎实例
 
-### 10.4 `load_from_dirs` / `load_from_roots`
+### 10.4 `load_from_roots`
 
 作用：
 
@@ -1211,16 +1269,10 @@ SDK 对接入口：
 - 解析 skill manifest
 - 注入 provider 绑定
 
-差异：
-
-- `dirs` 是旧目录风格
-- `roots` 是当前正式模型
-
 推荐：
 
-- 优先使用 `roots`
+- `roots` 是当前唯一正式模型
 - `roots` 必须至少包含 `ROOT`；`ROOT` 可以暂时为空，但不能缺失
-- `dirs` 旧接口会把 `base_dir` 映射为 `ROOT`，把可选 `override_dir` 映射为 `PROJECT`
 
 ### 10.5 `reload_*`
 

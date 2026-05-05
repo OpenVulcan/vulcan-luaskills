@@ -9,12 +9,14 @@
 - 让 [Python demo](/D:/projects/luaskills/examples/ffi/python/demo.py)
 - 让 [Python lifecycle demo](/D:/projects/luaskills/examples/ffi/python/lifecycle_demo.py)
 - 让 [Python query demo](/D:/projects/luaskills/examples/ffi/python/query_demo.py)
+- 让 [Python runtime-session demo](/D:/projects/vulcan-luaskills/examples/ffi/python/runtime_session_demo.py)
 - 让 [Go demo](/D:/projects/luaskills/examples/ffi/go/demo.go)
 - 让 [Go lifecycle demo](/D:/projects/luaskills/examples/ffi/go/lifecycle_demo/main.go)
 - 让 [Go query demo](/D:/projects/luaskills/examples/ffi/go/query_demo/main.go)
 - 让 [TypeScript demo](/D:/projects/luaskills/examples/ffi/typescript/demo.ts)
 - 让 [TypeScript lifecycle demo](/D:/projects/luaskills/examples/ffi/typescript/lifecycle_demo.ts)
 - 让 [TypeScript query demo](/D:/projects/luaskills/examples/ffi/typescript/query_demo.ts)
+- 让 [TypeScript runtime-session demo](/D:/projects/vulcan-luaskills/examples/ffi/typescript/runtime_session_demo.ts)
 - 让 [C demo](/D:/projects/luaskills/examples/ffi/c/demo.c)
 
 都能稳定演示：
@@ -24,6 +26,7 @@
 - `list_entries`
 - `call_skill`
 - `run_lua`
+- `runtime_session_create / eval / status / list / close`
 - `disable_skill / enable_skill`
 - `is_skill / skill_name_for_tool / prompt_argument_completions`
 - 结构化结果读取

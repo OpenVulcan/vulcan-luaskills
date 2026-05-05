@@ -67,6 +67,8 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("ignored_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
         ("ignored_skill_ids_len", ctypes.c_size_t),
         ("enable_skill_management_bridge", ctypes.c_uint8),
+        ("default_text_encoding", ctypes.c_char_p),
+        ("disable_managed_io_compat", ctypes.c_uint8),
     ]
 
 
@@ -342,8 +344,6 @@ class VldbSqliteJsonBridge:
         database_path = self.resolve_database_path(binding)
         database_path.parent.mkdir(parents=True, exist_ok=True)
         payload["db_path"] = database_path.as_posix()
-        if "params" in payload and "params_json" not in payload:
-            payload["params_json"] = json.dumps(payload.pop("params"), ensure_ascii=False)
 
         if action == "execute_script":
             result = self._call_json("vldb_sqlite_execute_script_json", payload)
@@ -479,6 +479,8 @@ def main() -> None:
     host.ignored_skill_ids = None
     host.ignored_skill_ids_len = 0
     host.enable_skill_management_bridge = 0
+    host.default_text_encoding = None
+    host.disable_managed_io_compat = 0
 
     engine_request = {
         "options": {
@@ -502,6 +504,7 @@ def main() -> None:
                 "allow_network_download": False,
                 "github_base_url": None,
                 "github_api_base_url": None,
+                "default_text_encoding": None,
                 "sqlite_library_path": None,
                 "sqlite_provider_mode": "host_callback",
                 "sqlite_callback_mode": "json",
@@ -513,6 +516,7 @@ def main() -> None:
                 "ignored_skill_ids": [],
                 "capabilities": {
                     "enable_skill_management_bridge": False,
+                    "enable_managed_io_compat": True,
                 },
             },
         }

@@ -6,9 +6,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, TryLockError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::dependency::manager::{DependencyManager, DependencyManagerConfig, ensure_directory};
 use crate::entry_descriptor::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
@@ -25,6 +26,11 @@ use crate::host::database::RuntimeDatabaseProviderCallbacks;
 use crate::lancedb_host::{LanceDbSkillBinding, LanceDbSkillHost, disabled_skill_status_json};
 use crate::lua_skill::{SkillMeta, validate_luaskills_identifier, validate_luaskills_version};
 use crate::runtime::config::{SkillConfigEntry, SkillConfigStore};
+use crate::runtime::encoding::{
+    RuntimeTextEncoding, decode_runtime_text, default_runtime_text_encoding, encode_runtime_text,
+};
+use crate::runtime::managed_io::{create_vulcan_io_table, install_managed_io_compat};
+use crate::runtime::process_session::create_process_session_table;
 use crate::runtime_context::{RuntimeClientInfo, RuntimeRequestContext};
 use crate::runtime_help::{
     RuntimeHelpDetail, RuntimeHelpNodeDescriptor, RuntimeSkillHelpDescriptor,
@@ -197,6 +203,7 @@ pub struct LuaEngine {
     runtime_skill_roots: Vec<RuntimeSkillRoot>,
     pool: Arc<LuaVmPool>,
     runlua_pool: Arc<LuaVmPool>,
+    runtime_sessions: Arc<RuntimeSessionManager>,
     skill_config_store: Arc<SkillConfigStore>,
     lancedb_host: Option<Arc<LanceDbSkillHost>>,
     sqlite_host: Option<Arc<SqliteSkillHost>>,
@@ -860,10 +867,213 @@ struct RunLuaExecRequest {
     caller_tool_name: Option<String>,
 }
 
+/// Runtime session creation request accepted by the host-facing JSON API.
+/// 面向宿主 JSON API 的运行时会话创建请求。
+#[derive(Debug, Deserialize)]
+struct RuntimeSessionCreateRequest {
+    /// Stable session identifier supplied by the host or AI task.
+    /// 宿主或 AI 任务提供的稳定会话标识。
+    sid: String,
+    /// Requested lease TTL in seconds.
+    /// 请求的租约有效期秒数。
+    #[serde(default = "default_runtime_session_ttl_sec")]
+    ttl_sec: u64,
+    /// Whether an existing session with the same SID should be replaced.
+    /// 是否替换同一 SID 下已经存在的会话。
+    #[serde(default)]
+    replace: bool,
+}
+
+/// Runtime session eval request accepted by the host-facing JSON API.
+/// 面向宿主 JSON API 的运行时会话执行请求。
+#[derive(Debug, Deserialize)]
+struct RuntimeSessionEvalRequest {
+    /// Opaque lease identifier returned by create.
+    /// create 返回的不透明租约标识。
+    lease_id: String,
+    /// Optional stable session identifier echoed by the host wrapper.
+    /// 由宿主包装层回传的可选稳定会话标识。
+    #[serde(default)]
+    sid: Option<String>,
+    /// Optional SID-local generation echoed by the host wrapper.
+    /// 由宿主包装层回传的可选 SID 内 generation。
+    #[serde(default)]
+    generation: Option<u64>,
+    /// Inline Lua source code executed inside the persistent VM.
+    /// 在持久 VM 内执行的内联 Lua 源码。
+    code: String,
+    /// Structured arguments exposed to Lua as `args`.
+    /// 以 `args` 形式暴露给 Lua 的结构化参数。
+    #[serde(default = "default_runlua_exec_args")]
+    args: Value,
+    /// Maximum execution time in milliseconds.
+    /// 最大执行时长（毫秒）。
+    #[serde(default = "default_runlua_timeout_ms")]
+    timeout_ms: u64,
+}
+
+/// Runtime session identifier request accepted by status and close APIs.
+/// status 与 close API 接收的运行时会话标识请求。
+#[derive(Debug, Deserialize)]
+struct RuntimeSessionLeaseRequest {
+    /// Opaque lease identifier returned by create.
+    /// create 返回的不透明租约标识。
+    lease_id: String,
+    /// Optional stable session identifier echoed by the host wrapper.
+    /// 由宿主包装层回传的可选稳定会话标识。
+    #[serde(default)]
+    sid: Option<String>,
+    /// Optional SID-local generation echoed by the host wrapper.
+    /// 由宿主包装层回传的可选 SID 内 generation。
+    #[serde(default)]
+    generation: Option<u64>,
+}
+
+/// Runtime session list request accepted by the host-facing JSON API.
+/// 面向宿主 JSON API 的运行时会话列表请求。
+#[derive(Debug, Deserialize)]
+struct RuntimeSessionListRequest {
+    /// Optional stable session identifier used to filter the active lease list.
+    /// 用于过滤活跃租约列表的可选稳定会话标识。
+    #[serde(default)]
+    sid: Option<String>,
+}
+
+/// Manager for persistent runtime sessions owned by one LuaEngine.
+/// 单个 LuaEngine 拥有的持久运行时会话管理器。
+struct RuntimeSessionManager {
+    /// Mutable lease maps protected for cross-call coordination.
+    /// 用于跨调用协调的可变租约映射。
+    state: Mutex<RuntimeSessionManagerState>,
+}
+
+/// Mutable state inside the runtime session manager.
+/// 运行时会话管理器内部的可变状态。
+struct RuntimeSessionManagerState {
+    /// Active or recently closed leases keyed by opaque lease id.
+    /// 按不透明租约 id 索引的活跃或刚关闭租约。
+    leases: HashMap<String, RuntimeSessionEntry>,
+    /// Current lease id keyed by stable SID.
+    /// 按稳定 SID 索引的当前租约 id。
+    sid_index: HashMap<String, String>,
+    /// Terminal lease tombstones retained for stable post-close and post-replace errors.
+    /// 为关闭后与替换后稳定错误而保留的终态租约墓碑。
+    tombstones: HashMap<String, RuntimeSessionTombstone>,
+    /// Last issued generation for each SID.
+    /// 每个 SID 已签发的最新 generation。
+    generations: HashMap<String, u64>,
+    /// Monotonic local sequence used to build lease ids.
+    /// 用于构造租约 id 的本地单调序号。
+    next_sequence: u64,
+}
+
+/// One persistent Lua VM runtime session.
+/// 单个持久 Lua VM 运行时会话。
+struct RuntimeSession {
+    /// Stable session identifier supplied by the caller.
+    /// 调用方提供的稳定会话标识。
+    sid: String,
+    /// Opaque lease identifier used for subsequent calls.
+    /// 后续调用使用的不透明租约标识。
+    lease_id: String,
+    /// SID-local generation number.
+    /// SID 内部的 generation 编号。
+    generation: u64,
+    /// Lease TTL in seconds refreshed by successful calls.
+    /// 成功调用会刷新的租约 TTL 秒数。
+    ttl_sec: u64,
+    /// Monotonic expiration timestamp used for local cleanup.
+    /// 用于本地清理的单调过期时间戳。
+    expires_at: Instant,
+    /// Host-visible expiration timestamp in Unix milliseconds.
+    /// 面向宿主可见的 Unix 毫秒过期时间戳。
+    expires_at_unix_ms: u128,
+    /// Persistent Lua VM retained by this session.
+    /// 此会话保留的持久 Lua VM。
+    vm: LuaVm,
+    /// Shared terminal-state marker visible across stale handles and manager retirement paths.
+    /// 在陈旧句柄与管理器退役路径之间共享可见的终态状态标记。
+    terminal_state: Arc<AtomicU8>,
+    /// Whether the lease has been explicitly closed.
+    /// 租约是否已经被显式关闭。
+    closed: bool,
+}
+
+/// Active runtime-session entry stored in the manager table.
+/// 存储在管理器表中的活跃运行时会话条目。
+struct RuntimeSessionEntry {
+    /// Locked runtime session state and retained VM.
+    /// 已加锁的运行时会话状态与保留 VM。
+    session: Arc<Mutex<RuntimeSession>>,
+    /// Shared terminal-state marker that can be flipped without taking the session VM lock.
+    /// 可在不获取会话 VM 锁的前提下切换的共享终态状态标记。
+    terminal_state: Arc<AtomicU8>,
+    /// Lock-free snapshot used by list operations.
+    /// 供列表操作使用的无锁快照。
+    snapshot: Value,
+}
+
+/// Stable runtime-session terminal states stored in the shared atomic marker.
+/// 存储在共享原子标记中的稳定运行时会话终态状态。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+enum RuntimeSessionTerminalState {
+    /// Lease is still active.
+    /// 租约仍然处于活跃状态。
+    Active = 0,
+    /// Lease has been explicitly closed.
+    /// 租约已被显式关闭。
+    Closed = 1,
+    /// Lease has expired.
+    /// 租约已经过期。
+    Expired = 2,
+    /// Lease has been replaced by a newer SID generation.
+    /// 租约已被同 SID 的更新 generation 替换。
+    Replaced = 3,
+}
+
+/// Runtime session operation error with a stable code.
+/// 带稳定错误码的运行时会话操作错误。
+#[derive(Debug)]
+struct RuntimeSessionError {
+    /// Stable error code for host recovery logic.
+    /// 供宿主恢复逻辑使用的稳定错误码。
+    code: &'static str,
+    /// Human-readable error message.
+    /// 面向人的错误消息。
+    message: String,
+}
+
+/// Terminal lease record retained after one session leaves the active pool.
+/// 单个会话离开活跃池后保留的终态租约记录。
+struct RuntimeSessionTombstone {
+    /// Stable session identifier originally bound to the lease.
+    /// 原本绑定到该租约的稳定会话标识。
+    sid: String,
+    /// Opaque lease identifier preserved for post-terminal lookups.
+    /// 为终态后续查询保留的不透明租约标识。
+    lease_id: String,
+    /// SID-local generation number preserved for diagnostics.
+    /// 用于诊断的 SID 内 generation 编号。
+    generation: u64,
+    /// Stable terminal error code reported after the lease leaves the active pool.
+    /// 租约离开活跃池后返回的稳定终态错误码。
+    code: &'static str,
+    /// Monotonic retirement timestamp used to evict stale tombstones.
+    /// 用于清理陈旧墓碑的单调退役时间戳。
+    retired_at: Instant,
+}
+
 /// Return the default empty args object for runlua execution.
 /// 返回 runlua 执行默认使用的空参数对象。
 fn default_runlua_exec_args() -> Value {
     Value::Object(serde_json::Map::new())
+}
+
+/// Return the default TTL used by persistent runtime sessions.
+/// 返回持久运行时会话使用的默认 TTL。
+fn default_runtime_session_ttl_sec() -> u64 {
+    600
 }
 
 /// Return the default timeout for runlua execution in milliseconds.
@@ -1045,23 +1255,74 @@ enum ExecMode {
 /// Parsed process execution request from Lua.
 /// 从 Lua 解析得到的进程执行请求。
 struct ExecRequest {
+    /// Process launch mode requested by Lua.
+    /// Lua 请求的进程启动模式。
     mode: ExecMode,
+    /// Optional process working directory.
+    /// 可选的进程工作目录。
     cwd: Option<String>,
+    /// Environment variables applied to the child process.
+    /// 应用到子进程的环境变量。
     env: HashMap<String, String>,
+    /// Optional text written to child process stdin.
+    /// 可选的子进程标准输入文本。
     stdin: Option<String>,
+    /// Optional process timeout in milliseconds.
+    /// 可选的进程超时时间（毫秒）。
     timeout_ms: Option<u64>,
+    /// Encoding used to decode captured stdout bytes.
+    /// 用于解码已捕获 stdout 字节的编码。
+    stdout_encoding: RuntimeTextEncoding,
+    /// Encoding used to decode captured stderr bytes.
+    /// 用于解码已捕获 stderr 字节的编码。
+    stderr_encoding: RuntimeTextEncoding,
+    /// Encoding used to encode stdin text bytes.
+    /// 用于编码 stdin 文本字节的编码。
+    stdin_encoding: RuntimeTextEncoding,
 }
 
 /// Process execution result returned back to Lua.
 /// 返回给 Lua 的进程执行结果。
 struct ExecResult {
+    /// Whether the process completed successfully.
+    /// 进程是否成功完成。
     ok: bool,
+    /// Whether the process completed successfully without timeout.
+    /// 进程是否未超时且成功完成。
     success: bool,
+    /// Process exit code when available.
+    /// 可用时的进程退出码。
     code: Option<i32>,
+    /// Decoded stdout text or Base64 text in byte-preserving mode.
+    /// 已解码 stdout 文本，或字节保留模式下的 Base64 文本。
     stdout: String,
+    /// Decoded stderr text or Base64 text in byte-preserving mode.
+    /// 已解码 stderr 文本，或字节保留模式下的 Base64 文本。
     stderr: String,
+    /// Whether the process timed out.
+    /// 进程是否超时。
     timed_out: bool,
+    /// Process-level error summary when execution failed.
+    /// 执行失败时的进程级错误摘要。
     error: Option<String>,
+    /// Actual stdout encoding used by the decoder.
+    /// 解码器实际使用的 stdout 编码。
+    stdout_encoding: String,
+    /// Actual stderr encoding used by the decoder.
+    /// 解码器实际使用的 stderr 编码。
+    stderr_encoding: String,
+    /// Whether stdout decoding used replacement or fallback behavior.
+    /// stdout 解码是否使用了替换或兜底行为。
+    stdout_lossy: bool,
+    /// Whether stderr decoding used replacement or fallback behavior.
+    /// stderr 解码是否使用了替换或兜底行为。
+    stderr_lossy: bool,
+    /// Byte-preserving stdout payload when available.
+    /// 可用时的 stdout 字节保留载荷。
+    stdout_base64: Option<String>,
+    /// Byte-preserving stderr payload when available.
+    /// 可用时的 stderr 字节保留载荷。
+    stderr_base64: Option<String>,
 }
 
 /// Require a scalar text-like value for exec arguments and environment values.
@@ -1150,6 +1411,21 @@ fn table_get_optional_timeout_field(
     }
 }
 
+/// Read an optional runtime text encoding field from a Lua table.
+/// 从 Lua table 中读取可选的运行时文本编码字段。
+fn table_get_optional_encoding_field(
+    table: &Table,
+    fn_name: &str,
+    field_name: &str,
+) -> mlua::Result<Option<RuntimeTextEncoding>> {
+    let Some(label) = table_get_optional_string_field(table, fn_name, field_name, false)? else {
+        return Ok(None);
+    };
+    RuntimeTextEncoding::parse(&label)
+        .map(Some)
+        .map_err(|error| mlua::Error::runtime(format!("{fn_name}: {field_name}: {error}")))
+}
+
 /// Read an optional string-like array field from a Lua table.
 /// 从 Lua table 中读取可选的字符串类数组字段。
 fn table_get_string_list_field(
@@ -1216,9 +1492,24 @@ fn table_get_string_map_field(
     }
 }
 
+/// Resolve the host-configured default runtime text encoding.
+/// 解析宿主配置的默认运行时文本编码。
+fn resolve_host_default_text_encoding(
+    host_options: &LuaRuntimeHostOptions,
+) -> Result<RuntimeTextEncoding, String> {
+    match host_options.default_text_encoding.as_deref() {
+        Some(label) if !label.trim().is_empty() => RuntimeTextEncoding::parse(label),
+        _ => Ok(default_runtime_text_encoding()),
+    }
+}
+
 /// Parse Lua input into an executable process request.
 /// 将 Lua 输入解析为可执行的进程请求。
-fn parse_exec_request(value: LuaValue, fn_name: &str) -> mlua::Result<ExecRequest> {
+fn parse_exec_request(
+    value: LuaValue,
+    fn_name: &str,
+    default_encoding: RuntimeTextEncoding,
+) -> mlua::Result<ExecRequest> {
     match value {
         LuaValue::String(command_text) => Ok(ExecRequest {
             mode: ExecMode::Shell {
@@ -1233,6 +1524,9 @@ fn parse_exec_request(value: LuaValue, fn_name: &str) -> mlua::Result<ExecReques
             env: HashMap::new(),
             stdin: None,
             timeout_ms: None,
+            stdout_encoding: default_encoding,
+            stderr_encoding: default_encoding,
+            stdin_encoding: default_encoding,
         }),
         LuaValue::Table(spec) => {
             let command = table_get_optional_string_field(&spec, fn_name, "command", false)?;
@@ -1243,6 +1537,17 @@ fn parse_exec_request(value: LuaValue, fn_name: &str) -> mlua::Result<ExecReques
             let stdin = table_get_optional_string_field(&spec, fn_name, "stdin", true)?;
             let timeout_ms = table_get_optional_timeout_field(&spec, fn_name, "timeout_ms")?;
             let shell_override = table_get_optional_bool_field(&spec, fn_name, "shell")?;
+            let encoding = table_get_optional_encoding_field(&spec, fn_name, "encoding")?
+                .unwrap_or(default_encoding);
+            let stdout_encoding =
+                table_get_optional_encoding_field(&spec, fn_name, "stdout_encoding")?
+                    .unwrap_or(encoding);
+            let stderr_encoding =
+                table_get_optional_encoding_field(&spec, fn_name, "stderr_encoding")?
+                    .unwrap_or(encoding);
+            let stdin_encoding =
+                table_get_optional_encoding_field(&spec, fn_name, "stdin_encoding")?
+                    .unwrap_or(encoding);
 
             if let Some(current_dir) = cwd.as_deref() {
                 validate_path_text(current_dir, fn_name, "cwd")?;
@@ -1293,6 +1598,9 @@ fn parse_exec_request(value: LuaValue, fn_name: &str) -> mlua::Result<ExecReques
                 env,
                 stdin,
                 timeout_ms,
+                stdout_encoding,
+                stderr_encoding,
+                stdin_encoding,
             })
         }
         other => Err(mlua::Error::runtime(format!(
@@ -1316,34 +1624,65 @@ fn default_shell_launcher() -> (&'static str, &'static str) {
     ("sh", "-c")
 }
 
-/// Spawn a background reader for a child process output pipe.
-/// 为子进程输出管道启动后台读取线程。
-fn spawn_pipe_reader<R>(mut reader: R) -> thread::JoinHandle<String>
+/// Spawn a background reader for a child process output pipe as raw bytes.
+/// 为子进程输出管道启动后台读取线程，并以原始字节形式返回。
+fn spawn_pipe_reader<R>(mut reader: R) -> thread::JoinHandle<Vec<u8>>
 where
     R: Read + Send + 'static,
 {
     thread::spawn(move || {
         let mut buffer = Vec::new();
         let _ = reader.read_to_end(&mut buffer);
-        String::from_utf8_lossy(&buffer).to_string()
+        buffer
     })
 }
 
 /// Spawn a background writer for a child process stdin pipe.
 /// 为子进程标准输入管道启动后台写入线程。
-fn spawn_stdin_writer<W>(mut writer: W, input: String) -> thread::JoinHandle<()>
+fn spawn_stdin_writer<W>(mut writer: W, input: Vec<u8>) -> thread::JoinHandle<()>
 where
     W: Write + Send + 'static,
 {
     thread::spawn(move || {
-        let _ = writer.write_all(input.as_bytes());
+        let _ = writer.write_all(&input);
         let _ = writer.flush();
     })
+}
+
+/// Build a structured process error result before stdout/stderr bytes are available.
+/// 在 stdout/stderr 字节可用之前构建结构化进程错误结果。
+fn exec_error_result(error_text: String, request: &ExecRequest, timed_out: bool) -> ExecResult {
+    ExecResult {
+        ok: false,
+        success: false,
+        code: None,
+        stdout: String::new(),
+        stderr: error_text.clone(),
+        timed_out,
+        error: Some(error_text),
+        stdout_encoding: request.stdout_encoding.requested_label().to_string(),
+        stderr_encoding: request.stderr_encoding.requested_label().to_string(),
+        stdout_lossy: false,
+        stderr_lossy: false,
+        stdout_base64: None,
+        stderr_base64: None,
+    }
 }
 
 /// Execute a process request and capture its structured result.
 /// 执行进程请求并捕获结构化结果。
 fn execute_exec_request(request: ExecRequest) -> ExecResult {
+    let stdin_bytes = match request.stdin.as_deref() {
+        Some(input) => match encode_runtime_text(input, request.stdin_encoding) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                let error_text = format!("failed to encode process stdin: {error}");
+                return exec_error_result(error_text, &request, false);
+            }
+        },
+        None => None,
+    };
+
     let mut command = match &request.mode {
         ExecMode::Shell { command } => {
             let (shell_program, shell_flag) = default_shell_launcher();
@@ -1366,7 +1705,7 @@ fn execute_exec_request(request: ExecRequest) -> ExecResult {
     }
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    command.stdin(if request.stdin.is_some() {
+    command.stdin(if stdin_bytes.is_some() {
         Stdio::piped()
     } else {
         Stdio::null()
@@ -1376,21 +1715,13 @@ fn execute_exec_request(request: ExecRequest) -> ExecResult {
         Ok(child) => child,
         Err(error) => {
             let error_text = format!("failed to spawn process: {}", error);
-            return ExecResult {
-                ok: false,
-                success: false,
-                code: None,
-                stdout: String::new(),
-                stderr: error_text.clone(),
-                timed_out: false,
-                error: Some(error_text),
-            };
+            return exec_error_result(error_text, &request, false);
         }
     };
 
     let stdout_handle = child.stdout.take().map(spawn_pipe_reader);
     let stderr_handle = child.stderr.take().map(spawn_pipe_reader);
-    let stdin_handle = match (request.stdin.clone(), child.stdin.take()) {
+    let stdin_handle = match (stdin_bytes, child.stdin.take()) {
         (Some(input), Some(stdin)) => Some(spawn_stdin_writer(stdin, input)),
         _ => None,
     };
@@ -1416,15 +1747,7 @@ fn execute_exec_request(request: ExecRequest) -> ExecResult {
             }
             Err(error) => {
                 let error_text = format!("failed to wait for process: {}", error);
-                return ExecResult {
-                    ok: false,
-                    success: false,
-                    code: None,
-                    stdout: String::new(),
-                    stderr: error_text.clone(),
-                    timed_out,
-                    error: Some(error_text),
-                };
+                return exec_error_result(error_text, &request, timed_out);
             }
         }
     };
@@ -1433,12 +1756,16 @@ fn execute_exec_request(request: ExecRequest) -> ExecResult {
         let _ = handle.join();
     }
 
-    let stdout = stdout_handle
+    let stdout_bytes = stdout_handle
         .map(|handle| handle.join().unwrap_or_default())
         .unwrap_or_default();
-    let mut stderr = stderr_handle
+    let stderr_bytes = stderr_handle
         .map(|handle| handle.join().unwrap_or_default())
         .unwrap_or_default();
+    let decoded_stdout = decode_runtime_text(&stdout_bytes, request.stdout_encoding);
+    let decoded_stderr = decode_runtime_text(&stderr_bytes, request.stderr_encoding);
+    let stdout = decoded_stdout.text;
+    let mut stderr = decoded_stderr.text;
 
     let status = match final_status {
         Some(status) => status,
@@ -1452,6 +1779,12 @@ fn execute_exec_request(request: ExecRequest) -> ExecResult {
                 stderr: error_text.clone(),
                 timed_out,
                 error: Some(error_text),
+                stdout_encoding: decoded_stdout.encoding,
+                stderr_encoding: decoded_stderr.encoding,
+                stdout_lossy: decoded_stdout.lossy,
+                stderr_lossy: decoded_stderr.lossy,
+                stdout_base64: decoded_stdout.base64,
+                stderr_base64: decoded_stderr.base64,
             };
         }
     };
@@ -1483,6 +1816,12 @@ fn execute_exec_request(request: ExecRequest) -> ExecResult {
         stderr,
         timed_out,
         error,
+        stdout_encoding: decoded_stdout.encoding,
+        stderr_encoding: decoded_stderr.encoding,
+        stdout_lossy: decoded_stdout.lossy,
+        stderr_lossy: decoded_stderr.lossy,
+        stdout_base64: decoded_stdout.base64,
+        stderr_base64: decoded_stderr.base64,
     }
 }
 
@@ -1494,6 +1833,18 @@ fn exec_result_to_lua_table(lua: &Lua, result: ExecResult) -> mlua::Result<Table
     table.set("success", result.success)?;
     table.set("stdout", result.stdout)?;
     table.set("stderr", result.stderr)?;
+    table.set("stdout_encoding", result.stdout_encoding)?;
+    table.set("stderr_encoding", result.stderr_encoding)?;
+    table.set("stdout_lossy", result.stdout_lossy)?;
+    table.set("stderr_lossy", result.stderr_lossy)?;
+    match result.stdout_base64 {
+        Some(stdout_base64) => table.set("stdout_base64", stdout_base64)?,
+        None => table.set("stdout_base64", LuaValue::Nil)?,
+    }
+    match result.stderr_base64 {
+        Some(stderr_base64) => table.set("stderr_base64", stderr_base64)?,
+        None => table.set("stderr_base64", LuaValue::Nil)?,
+    }
     table.set("timed_out", result.timed_out)?;
     match result.code {
         Some(code) => table.set("code", code)?,
@@ -1942,6 +2293,7 @@ struct VulcanCoreModuleState {
     runtime_internal: Table,
     runtime_lua: Table,
     fs: Table,
+    io: Table,
     path: Table,
     process: Table,
     os: Table,
@@ -1974,6 +2326,9 @@ impl VulcanCoreModuleState {
             fs: vulcan
                 .get("fs")
                 .map_err(|error| format!("Failed to get vulcan.fs: {}", error))?,
+            io: vulcan
+                .get("io")
+                .map_err(|error| format!("Failed to get vulcan.io: {}", error))?,
             path: vulcan
                 .get("path")
                 .map_err(|error| format!("Failed to get vulcan.path: {}", error))?,
@@ -2024,6 +2379,9 @@ impl VulcanCoreModuleState {
         self.vulcan
             .set("fs", self.fs.clone())
             .map_err(|error| format!("Failed to restore vulcan.fs: {}", error))?;
+        self.vulcan
+            .set("io", self.io.clone())
+            .map_err(|error| format!("Failed to restore vulcan.io: {}", error))?;
         self.vulcan
             .set("path", self.path.clone())
             .map_err(|error| format!("Failed to restore vulcan.path: {}", error))?;
@@ -2527,6 +2885,639 @@ impl LuaVmPool {
     }
 }
 
+impl RuntimeSessionManager {
+    /// Create an empty persistent runtime session manager.
+    /// 创建空的持久运行时会话管理器。
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(RuntimeSessionManagerState {
+                leases: HashMap::new(),
+                sid_index: HashMap::new(),
+                tombstones: HashMap::new(),
+                generations: HashMap::new(),
+                next_sequence: 0,
+            }),
+        }
+    }
+
+    /// Insert one new runtime session while enforcing SID uniqueness.
+    /// 插入一个新的运行时会话并强制 SID 唯一。
+    fn insert(
+        &self,
+        sid: String,
+        ttl_sec: u64,
+        replace: bool,
+        vm: LuaVm,
+    ) -> Result<Value, RuntimeSessionError> {
+        let mut state = self.lock_state()?;
+        Self::prune_inactive_locked(&mut state);
+        if let Some(existing_lease_id) = state.sid_index.get(&sid).cloned() {
+            if let Some(existing_session) = state
+                .leases
+                .get(&existing_lease_id)
+                .map(|entry| Arc::clone(&entry.session))
+            {
+                match existing_session.try_lock() {
+                    Ok(existing_session) => {
+                        if let Some(error) = existing_session.inactive_error() {
+                            Self::retire_active_lease_locked(
+                                &mut state,
+                                &existing_lease_id,
+                                error.code,
+                            );
+                        } else if !replace {
+                            return Err(RuntimeSessionError {
+                                code: "lease_exists",
+                                message: format!(
+                                    "runtime session SID `{sid}` already has lease `{existing_lease_id}`"
+                                ),
+                            });
+                        } else {
+                            Self::retire_active_lease_locked(
+                                &mut state,
+                                &existing_lease_id,
+                                "lease_replaced",
+                            );
+                        }
+                    }
+                    Err(TryLockError::WouldBlock) => {
+                        if replace {
+                            return Err(RuntimeSessionError {
+                                code: "lease_busy",
+                                message: format!(
+                                    "runtime session SID `{sid}` cannot replace busy lease `{existing_lease_id}`"
+                                ),
+                            });
+                        }
+                        return Err(RuntimeSessionError {
+                            code: "lease_exists",
+                            message: format!(
+                                "runtime session SID `{sid}` already has lease `{existing_lease_id}`"
+                            ),
+                        });
+                    }
+                    Err(TryLockError::Poisoned(_)) => {
+                        return Err(RuntimeSessionError {
+                            code: "lease_busy",
+                            message: format!(
+                                "runtime session lease `{existing_lease_id}` is unavailable because its lock is poisoned"
+                            ),
+                        });
+                    }
+                }
+            } else {
+                state.sid_index.remove(&sid);
+            }
+        }
+        if state.leases.len() >= 8 {
+            return Err(RuntimeSessionError {
+                code: "lease_limit_exceeded",
+                message: "runtime session lease limit exceeded".to_string(),
+            });
+        }
+
+        state.next_sequence = state.next_sequence.saturating_add(1);
+        let generation = state
+            .generations
+            .get(&sid)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
+        state.generations.insert(sid.clone(), generation);
+        let lease_id = format!("rt_{}_{}", unix_time_millis(), state.next_sequence);
+        let ttl_sec = ttl_sec.clamp(1, 3_600);
+        let (expires_at, expires_at_unix_ms) = runtime_session_expiry(ttl_sec);
+        let terminal_state = Arc::new(AtomicU8::new(RuntimeSessionTerminalState::Active as u8));
+        let session = RuntimeSession {
+            sid: sid.clone(),
+            lease_id: lease_id.clone(),
+            generation,
+            ttl_sec,
+            expires_at,
+            expires_at_unix_ms,
+            vm,
+            terminal_state: Arc::clone(&terminal_state),
+            closed: false,
+        };
+        let snapshot = session.status_payload();
+        state.leases.insert(
+            lease_id.clone(),
+            RuntimeSessionEntry {
+                session: Arc::new(Mutex::new(session)),
+                terminal_state,
+                snapshot,
+            },
+        );
+        state.sid_index.insert(sid.clone(), lease_id.clone());
+
+        Ok(json!({
+            "ok": true,
+            "sid": sid,
+            "lease_id": lease_id,
+            "generation": generation,
+            "ttl_sec": ttl_sec,
+            "expires_at_unix_ms": expires_at_unix_ms
+        }))
+    }
+
+    /// Get one session handle by lease id.
+    /// 按租约 id 获取一个会话句柄。
+    fn get(
+        &self,
+        lease_id: &str,
+        expected_sid: Option<&str>,
+        expected_generation: Option<u64>,
+    ) -> Result<Arc<Mutex<RuntimeSession>>, RuntimeSessionError> {
+        let mut state = self.lock_state()?;
+        Self::prune_inactive_locked(&mut state);
+        if let Some(entry) = state.leases.get(lease_id) {
+            let session = Arc::clone(&entry.session);
+            let session_guard = session.try_lock().map_err(|_| RuntimeSessionError {
+                code: "lease_busy",
+                message: format!("runtime session lease `{lease_id}` is busy"),
+            })?;
+            Self::validate_session_identity(&session_guard, expected_sid, expected_generation)?;
+            drop(session_guard);
+            return Ok(session);
+        }
+        if let Some(tombstone) = state.tombstones.get(lease_id) {
+            Self::validate_tombstone_identity(tombstone, expected_sid, expected_generation)?;
+            return Err(tombstone.as_error());
+        }
+        Err(RuntimeSessionError {
+            code: "lease_not_found",
+            message: format!("runtime session lease `{lease_id}` was not found"),
+        })
+    }
+
+    /// Return a compact status payload for one runtime session.
+    /// 返回单个运行时会话的紧凑状态载荷。
+    fn status(
+        &self,
+        lease_id: &str,
+        expected_sid: Option<&str>,
+        expected_generation: Option<u64>,
+    ) -> Result<Value, RuntimeSessionError> {
+        let session = self.get(lease_id, expected_sid, expected_generation)?;
+        let session = session.try_lock().map_err(|_| RuntimeSessionError {
+            code: "lease_busy",
+            message: format!("runtime session lease `{lease_id}` is busy"),
+        })?;
+        if let Some(error) = session.inactive_error() {
+            return Err(error);
+        }
+        Ok(session.status_payload())
+    }
+
+    /// Return a stable active-lease listing payload.
+    /// 返回稳定的活跃租约列表载荷。
+    fn list(&self, sid: Option<&str>) -> Result<Value, RuntimeSessionError> {
+        let mut state = self.lock_state()?;
+        Self::prune_inactive_locked(&mut state);
+        let mut leases = Vec::new();
+        for entry in state.leases.values() {
+            if sid.is_some_and(|expected_sid| entry.snapshot["sid"].as_str() != Some(expected_sid))
+            {
+                continue;
+            }
+            leases.push(entry.snapshot.clone());
+        }
+        leases.sort_by(compare_runtime_session_payloads);
+        Ok(json!({
+            "ok": true,
+            "leases": leases,
+        }))
+    }
+
+    /// Mark one runtime session closed.
+    /// 将一个运行时会话标记为已关闭。
+    fn close(
+        &self,
+        lease_id: &str,
+        expected_sid: Option<&str>,
+        expected_generation: Option<u64>,
+    ) -> Result<Value, RuntimeSessionError> {
+        let mut state = self.lock_state()?;
+        Self::prune_inactive_locked(&mut state);
+        let Some((session, terminal_state)) = state.leases.get(lease_id).map(|entry| {
+            (
+                Arc::clone(&entry.session),
+                Arc::clone(&entry.terminal_state),
+            )
+        }) else {
+            if let Some(tombstone) = state.tombstones.get(lease_id) {
+                Self::validate_tombstone_identity(tombstone, expected_sid, expected_generation)?;
+                return Err(tombstone.as_error());
+            }
+            return Err(RuntimeSessionError {
+                code: "lease_not_found",
+                message: format!("runtime session lease `{lease_id}` was not found"),
+            });
+        };
+        let mut session = session.try_lock().map_err(|_| RuntimeSessionError {
+            code: "lease_busy",
+            message: format!("runtime session lease `{lease_id}` is busy"),
+        })?;
+        Self::validate_session_identity(&session, expected_sid, expected_generation)?;
+        terminal_state.store(RuntimeSessionTerminalState::Closed as u8, Ordering::Release);
+        session.closed = true;
+        let payload = session.close_payload();
+        let tombstone = RuntimeSessionTombstone::from_session(&session, "lease_closed");
+        let sid = session.sid.clone();
+        drop(session);
+        state.leases.remove(lease_id);
+        if state
+            .sid_index
+            .get(&sid)
+            .is_some_and(|current| current == lease_id)
+        {
+            state.sid_index.remove(&sid);
+        }
+        state.tombstones.insert(lease_id.to_string(), tombstone);
+        Ok(payload)
+    }
+
+    /// Update the cached active snapshot for one runtime session lease when it is still active.
+    /// 当运行时会话租约仍然活跃时更新其缓存快照。
+    fn update_active_snapshot(
+        &self,
+        lease_id: &str,
+        snapshot: Value,
+    ) -> Result<(), RuntimeSessionError> {
+        let mut state = self.lock_state()?;
+        if let Some(entry) = state.leases.get_mut(lease_id) {
+            entry.snapshot = snapshot;
+        }
+        Ok(())
+    }
+
+    /// Lock the manager state with a stable runtime error.
+    /// 使用稳定运行时错误锁定管理器状态。
+    fn lock_state(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, RuntimeSessionManagerState>, RuntimeSessionError> {
+        self.state.lock().map_err(|_| RuntimeSessionError {
+            code: "lease_manager_poisoned",
+            message: "runtime session manager lock poisoned".to_string(),
+        })
+    }
+
+    /// Remove expired or closed sessions from the active indexes.
+    /// 从活跃索引中移除已过期或已关闭的会话。
+    fn prune_inactive_locked(state: &mut RuntimeSessionManagerState) {
+        let now = Instant::now();
+        let mut removed = Vec::new();
+        for (lease_id, entry) in &state.leases {
+            let should_remove = entry
+                .session
+                .try_lock()
+                .map(|session| now >= session.expires_at)
+                .unwrap_or(false);
+            if should_remove {
+                removed.push(lease_id.clone());
+            }
+        }
+        for lease_id in removed {
+            Self::retire_active_lease_locked(state, &lease_id, "lease_expired");
+        }
+        let tombstone_ttl = runtime_session_tombstone_ttl();
+        state
+            .tombstones
+            .retain(|_, tombstone| now.duration_since(tombstone.retired_at) < tombstone_ttl);
+    }
+
+    /// Move one active lease into the terminal tombstone table.
+    /// 将单个活跃租约移动到终态墓碑表中。
+    fn retire_active_lease_locked(
+        state: &mut RuntimeSessionManagerState,
+        lease_id: &str,
+        code: &'static str,
+    ) {
+        if let Some(entry) = state.leases.get(lease_id) {
+            entry.terminal_state.store(
+                runtime_session_terminal_state_from_code(code) as u8,
+                Ordering::Release,
+            );
+        }
+        let Some(entry) = state.leases.remove(lease_id) else {
+            return;
+        };
+        let tombstone = RuntimeSessionTombstone::from_snapshot(&entry.snapshot, code);
+        if state
+            .sid_index
+            .get(&tombstone.sid)
+            .is_some_and(|current| current == lease_id)
+        {
+            state.sid_index.remove(&tombstone.sid);
+        }
+        state.tombstones.insert(lease_id.to_string(), tombstone);
+    }
+
+    /// Validate one active runtime session against optional host-echoed identity fields.
+    /// 使用可选宿主回传身份字段校验单个活跃运行时会话。
+    fn validate_session_identity(
+        session: &RuntimeSession,
+        expected_sid: Option<&str>,
+        expected_generation: Option<u64>,
+    ) -> Result<(), RuntimeSessionError> {
+        Self::validate_identity_parts(
+            &session.lease_id,
+            &session.sid,
+            session.generation,
+            expected_sid,
+            expected_generation,
+        )
+    }
+
+    /// Validate one terminal runtime-session tombstone against optional host-echoed identity fields.
+    /// 使用可选宿主回传身份字段校验单个终态运行时会话墓碑。
+    fn validate_tombstone_identity(
+        tombstone: &RuntimeSessionTombstone,
+        expected_sid: Option<&str>,
+        expected_generation: Option<u64>,
+    ) -> Result<(), RuntimeSessionError> {
+        Self::validate_identity_parts(
+            &tombstone.lease_id,
+            &tombstone.sid,
+            tombstone.generation,
+            expected_sid,
+            expected_generation,
+        )
+    }
+
+    /// Validate the stable SID and generation of one runtime-session record.
+    /// 校验单个运行时会话记录的稳定 SID 与 generation。
+    fn validate_identity_parts(
+        lease_id: &str,
+        actual_sid: &str,
+        actual_generation: u64,
+        expected_sid: Option<&str>,
+        expected_generation: Option<u64>,
+    ) -> Result<(), RuntimeSessionError> {
+        if let Some(expected_sid) = expected_sid {
+            if actual_sid != expected_sid {
+                return Err(RuntimeSessionError {
+                    code: "lease_sid_mismatch",
+                    message: format!(
+                        "runtime session lease `{lease_id}` belongs to sid `{actual_sid}`, not `{expected_sid}`"
+                    ),
+                });
+            }
+        }
+        if let Some(expected_generation) = expected_generation {
+            if actual_generation != expected_generation {
+                return Err(RuntimeSessionError {
+                    code: "lease_generation_mismatch",
+                    message: format!(
+                        "runtime session lease `{lease_id}` generation mismatch: expected {expected_generation}, actual {actual_generation}"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RuntimeSession {
+    /// Return the stable non-active error when this session can no longer serve host calls.
+    /// 当当前会话不再能够服务宿主调用时返回稳定的非活跃错误。
+    fn inactive_error(&self) -> Option<RuntimeSessionError> {
+        if let Some(code) =
+            runtime_session_terminal_code_from_state(self.terminal_state.load(Ordering::Acquire))
+        {
+            return Some(RuntimeSessionError {
+                code,
+                message: format!(
+                    "{} (sid `{}`, generation {})",
+                    runtime_session_terminal_message(code, &self.lease_id),
+                    self.sid,
+                    self.generation
+                ),
+            });
+        }
+        if self.closed {
+            return Some(RuntimeSessionError {
+                code: "lease_closed",
+                message: format!("runtime session lease `{}` is closed", self.lease_id),
+            });
+        }
+        if self.is_expired() {
+            return Some(RuntimeSessionError {
+                code: "lease_expired",
+                message: format!("runtime session lease `{}` is expired", self.lease_id),
+            });
+        }
+        None
+    }
+
+    /// Refresh the lease expiration after one accepted operation.
+    /// 在一次已接受操作后刷新租约过期时间。
+    fn refresh(&mut self) {
+        let (expires_at, expires_at_unix_ms) = runtime_session_expiry(self.ttl_sec);
+        self.expires_at = expires_at;
+        self.expires_at_unix_ms = expires_at_unix_ms;
+    }
+
+    /// Return whether this runtime session is expired.
+    /// 返回此运行时会话是否已经过期。
+    fn is_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
+    }
+
+    /// Return a JSON status payload for this runtime session.
+    /// 返回此运行时会话的 JSON 状态载荷。
+    fn status_payload(&self) -> Value {
+        json!({
+            "ok": runtime_session_terminal_code_from_state(
+                self.terminal_state.load(Ordering::Acquire),
+            ).is_none() && !self.closed && !self.is_expired(),
+            "sid": self.sid.clone(),
+            "lease_id": self.lease_id.clone(),
+            "generation": self.generation,
+            "ttl_sec": self.ttl_sec,
+            "expires_at_unix_ms": self.expires_at_unix_ms,
+            "closed": self.closed,
+            "expired": self.is_expired()
+        })
+    }
+
+    /// Return a JSON payload for one successful close operation.
+    /// 返回一次成功关闭操作的 JSON 载荷。
+    fn close_payload(&self) -> Value {
+        json!({
+            "ok": true,
+            "sid": self.sid.clone(),
+            "lease_id": self.lease_id.clone(),
+            "generation": self.generation,
+            "ttl_sec": self.ttl_sec,
+            "expires_at_unix_ms": self.expires_at_unix_ms,
+            "closed": self.closed,
+            "expired": self.is_expired()
+        })
+    }
+}
+
+impl RuntimeSessionTombstone {
+    /// Build one terminal tombstone from one active runtime session snapshot.
+    /// 基于单个活跃运行时会话快照构建终态墓碑。
+    fn from_session(session: &RuntimeSession, code: &'static str) -> Self {
+        Self {
+            sid: session.sid.clone(),
+            lease_id: session.lease_id.clone(),
+            generation: session.generation,
+            code,
+            retired_at: Instant::now(),
+        }
+    }
+
+    /// Build one terminal tombstone from one cached active snapshot.
+    /// 基于一份缓存的活跃快照构建终态墓碑。
+    fn from_snapshot(snapshot: &Value, code: &'static str) -> Self {
+        Self {
+            sid: snapshot
+                .get("sid")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            lease_id: snapshot
+                .get("lease_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            generation: snapshot
+                .get("generation")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            code,
+            retired_at: Instant::now(),
+        }
+    }
+
+    /// Convert this tombstone into one stable runtime-session error.
+    /// 将当前墓碑转换为稳定的运行时会话错误。
+    fn as_error(&self) -> RuntimeSessionError {
+        RuntimeSessionError {
+            code: self.code,
+            message: format!(
+                "{} (sid `{}`, generation {})",
+                runtime_session_terminal_message(self.code, &self.lease_id),
+                self.sid,
+                self.generation
+            ),
+        }
+    }
+}
+
+/// Return the current Unix timestamp in milliseconds.
+/// 返回当前 Unix 毫秒时间戳。
+fn unix_time_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+/// Calculate monotonic and host-visible expiration timestamps.
+/// 计算单调时间与宿主可见的过期时间戳。
+fn runtime_session_expiry(ttl_sec: u64) -> (Instant, u128) {
+    let ttl = Duration::from_secs(ttl_sec);
+    (
+        Instant::now() + ttl,
+        unix_time_millis().saturating_add(ttl.as_millis()),
+    )
+}
+
+/// Return the tombstone retention window for terminal runtime session records.
+/// 返回终态运行时会话记录的墓碑保留时间窗口。
+fn runtime_session_tombstone_ttl() -> Duration {
+    Duration::from_secs(3_600)
+}
+
+/// Convert one stable terminal error code into its shared atomic terminal-state value.
+/// 将稳定终态错误码转换为共享原子终态状态值。
+fn runtime_session_terminal_state_from_code(code: &'static str) -> RuntimeSessionTerminalState {
+    match code {
+        "lease_closed" => RuntimeSessionTerminalState::Closed,
+        "lease_expired" => RuntimeSessionTerminalState::Expired,
+        "lease_replaced" => RuntimeSessionTerminalState::Replaced,
+        _ => RuntimeSessionTerminalState::Active,
+    }
+}
+
+/// Convert one shared atomic terminal-state value back into its stable terminal error code.
+/// 将共享原子终态状态值转换回稳定终态错误码。
+fn runtime_session_terminal_code_from_state(state: u8) -> Option<&'static str> {
+    match state {
+        value if value == RuntimeSessionTerminalState::Closed as u8 => Some("lease_closed"),
+        value if value == RuntimeSessionTerminalState::Expired as u8 => Some("lease_expired"),
+        value if value == RuntimeSessionTerminalState::Replaced as u8 => Some("lease_replaced"),
+        _ => None,
+    }
+}
+
+/// Compare two runtime-session payloads for stable host-visible listing order.
+/// 比较两个运行时会话载荷以生成稳定的宿主可见列表顺序。
+fn compare_runtime_session_payloads(left: &Value, right: &Value) -> std::cmp::Ordering {
+    let left_sid = left.get("sid").and_then(Value::as_str).unwrap_or_default();
+    let right_sid = right.get("sid").and_then(Value::as_str).unwrap_or_default();
+    left_sid
+        .cmp(right_sid)
+        .then_with(|| {
+            left.get("generation")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .cmp(&right.get("generation").and_then(Value::as_u64).unwrap_or(0))
+        })
+        .then_with(|| {
+            left.get("lease_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .cmp(
+                    right
+                        .get("lease_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+        })
+}
+
+/// Build one stable human-readable message for one terminal runtime-session state.
+/// 为单个运行时会话终态构建稳定的人类可读消息。
+fn runtime_session_terminal_message(code: &'static str, lease_id: &str) -> String {
+    match code {
+        "lease_closed" => format!("runtime session lease `{lease_id}` is closed"),
+        "lease_expired" => format!("runtime session lease `{lease_id}` is expired"),
+        "lease_replaced" => format!("runtime session lease `{lease_id}` was replaced"),
+        _ => format!("runtime session lease `{lease_id}` is not active"),
+    }
+}
+
+/// Build a stable JSON error payload for runtime session operations.
+/// 为运行时会话操作构建稳定 JSON 错误载荷。
+fn runtime_session_error_payload(error: RuntimeSessionError) -> Value {
+    json!({
+        "ok": false,
+        "error_code": error.code,
+        "message": error.message
+    })
+}
+
+/// Validate and normalize one runtime session SID.
+/// 校验并归一化单个运行时会话 SID。
+fn normalize_runtime_session_sid(value: &str) -> Result<String, String> {
+    let sid = value.trim();
+    if sid.is_empty() {
+        return Err("runtime session sid must not be empty".to_string());
+    }
+    if sid.len() > 128 {
+        return Err("runtime session sid must not exceed 128 bytes".to_string());
+    }
+    if sid.contains('\0') {
+        return Err("runtime session sid must not contain NUL bytes".to_string());
+    }
+    Ok(sid.to_string())
+}
+
 /// Parse Lua multi-return values into the host's unified string-result protocol.
 /// 把 Lua 工具的多返回值解析为宿主统一字符串结果协议。
 fn parse_tool_call_output(
@@ -2624,25 +3615,6 @@ fn parse_tool_call_output(
 }
 
 impl LuaEngine {
-    /// Build the formal root chain used by legacy base/override directory APIs.
-    /// 为旧版 base/override 目录 API 构造正式 root 链。
-    fn skill_roots_from_dirs(
-        base_dir: &Path,
-        override_dir: Option<&Path>,
-    ) -> Vec<RuntimeSkillRoot> {
-        let mut skill_roots = vec![RuntimeSkillRoot {
-            name: "ROOT".to_string(),
-            skills_dir: base_dir.to_path_buf(),
-        }];
-        if let Some(override_dir) = override_dir {
-            skill_roots.push(RuntimeSkillRoot {
-                name: "PROJECT".to_string(),
-                skills_dir: override_dir.to_path_buf(),
-            });
-        }
-        skill_roots
-    }
-
     /// Return the normalized formal label for one raw runtime skill root name.
     /// 返回单个原始运行时技能根名称的规范化正式标签。
     fn normalized_skill_root_name(root_name: &str) -> String {
@@ -2798,6 +3770,8 @@ impl LuaEngine {
 
     /// Create a new LuaEngine with LuaJIT VM and registered globals.
     pub fn new(options: LuaEngineOptions) -> Result<Self, Box<dyn std::error::Error>> {
+        let _default_text_encoding = resolve_host_default_text_encoding(&options.host_options)
+            .map_err(std::io::Error::other)?;
         let runlua_pool_config = options
             .host_options
             .runlua_pool_config
@@ -2824,6 +3798,7 @@ impl LuaEngine {
             runtime_skill_roots: Vec::new(),
             pool: Arc::new(LuaVmPool::new(options.pool_config)),
             runlua_pool: Arc::new(LuaVmPool::new(runlua_pool_config)),
+            runtime_sessions: Arc::new(RuntimeSessionManager::new()),
             skill_config_store: Arc::new(
                 SkillConfigStore::new(options.host_options.skill_config_file_path.clone())
                     .map_err(std::io::Error::other)?,
@@ -2907,6 +3882,7 @@ impl LuaEngine {
             runtime_skill_roots: Vec::new(),
             pool: Arc::new(LuaVmPool::new(self.pool.config)),
             runlua_pool: Arc::new(LuaVmPool::new(self.runlua_pool.config)),
+            runtime_sessions: Arc::new(RuntimeSessionManager::new()),
             skill_config_store: Arc::new(
                 SkillConfigStore::new(explicit_skill_config_file_path)
                     .map_err(std::io::Error::other)?,
@@ -2926,6 +3902,7 @@ impl LuaEngine {
         self.runtime_skill_roots = next.runtime_skill_roots;
         self.pool = next.pool;
         self.runlua_pool = next.runlua_pool;
+        self.runtime_sessions = next.runtime_sessions;
         self.skill_config_store = next.skill_config_store;
         self.lancedb_host = next.lancedb_host;
         self.sqlite_host = next.sqlite_host;
@@ -3324,17 +4301,6 @@ impl LuaEngine {
         Ok(())
     }
 
-    /// Load skills from legacy directories, mapping base to ROOT and override to PROJECT.
-    /// 从旧目录接口加载技能，将 base 映射为 ROOT，将 override 映射为 PROJECT。
-    pub fn load_from_dirs(
-        &mut self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
-        self.load_from_roots(&skill_roots)
-    }
-
     /// Load skills from an ordered root chain where earlier roots override later roots.
     /// 从有序根目录覆盖链加载技能，前面的根目录会覆盖后面的同名技能。
     pub fn load_from_roots(
@@ -3418,17 +4384,6 @@ impl LuaEngine {
 
         log_info(format!("[LuaSkill] {} skills loaded", self.skills.len()));
         Ok(())
-    }
-
-    /// Reload all skills from the given directories and rebuild runtime state from scratch.
-    /// 从给定目录重新加载全部技能，并从零重建运行时状态。
-    pub fn reload_from_dirs(
-        &mut self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
-        self.reload_from_roots(&skill_roots)
     }
 
     /// Reload all skills from one ordered root chain and rebuild runtime state from scratch.
@@ -4034,19 +4989,6 @@ impl LuaEngine {
         Ok(result)
     }
 
-    /// Mark one skill disabled through the ordinary skills plane and immediately reload the runtime view.
-    /// 通过普通 skills 平面将单个技能标记为停用，并立即重载运行时视图。
-    pub fn disable_skill(
-        &mut self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
-        skill_id: &str,
-        reason: Option<&str>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
-        self.disable_skill_in_roots(&skill_roots, skill_id, reason)
-    }
-
     /// Mark one skill disabled through the ordinary skills plane using an ordered root chain and immediately reload the runtime view.
     /// 通过普通 skills 平面使用有序根目录链将单个技能标记为停用，并立即重载运行时视图。
     pub fn disable_skill_in_roots(
@@ -4062,20 +5004,6 @@ impl LuaEngine {
             skill_id,
             reason,
         )
-    }
-
-    /// Mark one skill disabled through the host-controlled system plane and immediately reload the runtime view.
-    /// 通过宿主控制的 system 平面将单个技能标记为停用，并立即重载运行时视图。
-    pub fn system_disable_skill(
-        &mut self,
-        base_dir: &Path,
-        override_dir: Option<&Path>,
-        authority: SkillManagementAuthority,
-        skill_id: &str,
-        reason: Option<&str>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let skill_roots = Self::skill_roots_from_dirs(base_dir, override_dir);
-        self.system_disable_skill_in_roots(&skill_roots, authority, skill_id, reason)
     }
 
     /// Mark one skill disabled through the host-controlled system plane using an ordered root chain and immediately reload the runtime view.
@@ -6110,6 +7038,249 @@ impl LuaEngine {
         self.run_lua_with_lease(&mut lease, code, args, invocation_context)
     }
 
+    /// Create one persistent runtime session and return a stable JSON response.
+    /// 创建一个持久运行时会话并返回稳定 JSON 响应。
+    pub fn create_runtime_session_json(&self, request_json: &str) -> Result<String, String> {
+        let mut request: RuntimeSessionCreateRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("Invalid runtime session create JSON: {}", error))?;
+        request.sid = normalize_runtime_session_sid(&request.sid)?;
+        let vm = Self::create_runlua_vm(
+            &self.skills,
+            &self.entry_registry,
+            self.host_options.clone(),
+            self.skill_config_store.clone(),
+            self.runtime_skill_roots.clone(),
+            self.lancedb_host.clone(),
+            self.sqlite_host.clone(),
+        )?;
+        Self::install_managed_io_compat_for_runtime(&vm.lua, self.host_options.as_ref())?;
+        let payload = self
+            .runtime_sessions
+            .insert(request.sid, request.ttl_sec, request.replace, vm)
+            .unwrap_or_else(runtime_session_error_payload);
+        serde_json::to_string(&payload)
+            .map_err(|error| format!("Runtime session create JSON encode failed: {}", error))
+    }
+
+    /// Evaluate Lua code inside one persistent runtime session and return a stable JSON response.
+    /// 在一个持久运行时会话中执行 Lua 代码并返回稳定 JSON 响应。
+    pub fn eval_runtime_session_json(&self, request_json: &str) -> Result<String, String> {
+        let mut request: RuntimeSessionEvalRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("Invalid runtime session eval JSON: {}", error))?;
+        if let Some(sid) = request.sid.as_mut() {
+            *sid = normalize_runtime_session_sid(sid)?;
+        }
+        if request.timeout_ms == 0 {
+            return Err("runtime session eval timeout_ms must be greater than 0".to_string());
+        }
+        let session = match self.runtime_sessions.get(
+            &request.lease_id,
+            request.sid.as_deref(),
+            request.generation,
+        ) {
+            Ok(session) => session,
+            Err(error) => {
+                return serde_json::to_string(&runtime_session_error_payload(error)).map_err(
+                    |encode_error| {
+                        format!("Runtime session eval JSON encode failed: {}", encode_error)
+                    },
+                );
+            }
+        };
+        let mut session = match session.try_lock() {
+            Ok(session) => session,
+            Err(_) => {
+                let payload = runtime_session_error_payload(RuntimeSessionError {
+                    code: "lease_busy",
+                    message: format!("runtime session lease `{}` is busy", request.lease_id),
+                });
+                return serde_json::to_string(&payload).map_err(|error| {
+                    format!("Runtime session eval JSON encode failed: {}", error)
+                });
+            }
+        };
+        let (payload, refreshed_snapshot) = match Self::ensure_runtime_session_active(&mut session)
+        {
+            Ok(()) => match self.eval_runtime_session_locked(&mut session, &request) {
+                Ok(result) => {
+                    session.refresh();
+                    (
+                        json!({
+                            "ok": true,
+                            "sid": session.sid.clone(),
+                            "lease_id": session.lease_id.clone(),
+                            "generation": session.generation,
+                            "expires_at_unix_ms": session.expires_at_unix_ms,
+                            "result": result
+                        }),
+                        Some(session.status_payload()),
+                    )
+                }
+                Err(message) => (
+                    runtime_session_error_payload(RuntimeSessionError {
+                        code: "eval_failed",
+                        message,
+                    }),
+                    Some(session.status_payload()),
+                ),
+            },
+            Err(error) => (runtime_session_error_payload(error), None),
+        };
+        drop(session);
+        if let Some(snapshot) = refreshed_snapshot {
+            let _ = self
+                .runtime_sessions
+                .update_active_snapshot(&request.lease_id, snapshot);
+        }
+        serde_json::to_string(&payload)
+            .map_err(|error| format!("Runtime session eval JSON encode failed: {}", error))
+    }
+
+    /// Return status for one persistent runtime session as JSON.
+    /// 以 JSON 返回一个持久运行时会话的状态。
+    pub fn runtime_session_status_json(&self, request_json: &str) -> Result<String, String> {
+        let mut request: RuntimeSessionLeaseRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("Invalid runtime session status JSON: {}", error))?;
+        if let Some(sid) = request.sid.as_mut() {
+            *sid = normalize_runtime_session_sid(sid)?;
+        }
+        let payload = self
+            .runtime_sessions
+            .status(
+                &request.lease_id,
+                request.sid.as_deref(),
+                request.generation,
+            )
+            .unwrap_or_else(runtime_session_error_payload);
+        serde_json::to_string(&payload)
+            .map_err(|error| format!("Runtime session status JSON encode failed: {}", error))
+    }
+
+    /// List active persistent runtime sessions and return a stable JSON response.
+    /// 列出活跃的持久运行时会话并返回稳定 JSON 响应。
+    pub fn list_runtime_sessions_json(&self, request_json: &str) -> Result<String, String> {
+        let mut request: RuntimeSessionListRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("Invalid runtime session list JSON: {}", error))?;
+        if let Some(sid) = request.sid.as_mut() {
+            *sid = normalize_runtime_session_sid(sid)?;
+        }
+        let payload = self
+            .runtime_sessions
+            .list(request.sid.as_deref())
+            .unwrap_or_else(runtime_session_error_payload);
+        serde_json::to_string(&payload)
+            .map_err(|error| format!("Runtime session list JSON encode failed: {}", error))
+    }
+
+    /// Close one persistent runtime session and return its final status as JSON.
+    /// 关闭一个持久运行时会话并以 JSON 返回其最终状态。
+    pub fn close_runtime_session_json(&self, request_json: &str) -> Result<String, String> {
+        let mut request: RuntimeSessionLeaseRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("Invalid runtime session close JSON: {}", error))?;
+        if let Some(sid) = request.sid.as_mut() {
+            *sid = normalize_runtime_session_sid(sid)?;
+        }
+        let payload = self
+            .runtime_sessions
+            .close(
+                &request.lease_id,
+                request.sid.as_deref(),
+                request.generation,
+            )
+            .unwrap_or_else(runtime_session_error_payload);
+        serde_json::to_string(&payload)
+            .map_err(|error| format!("Runtime session close JSON encode failed: {}", error))
+    }
+
+    /// Install the managed Lua `io` compatibility table in a persistent runtime VM.
+    /// 在持久运行时 VM 中安装托管 Lua `io` 兼容表。
+    fn install_managed_io_compat_for_runtime(
+        lua: &Lua,
+        host_options: &LuaRuntimeHostOptions,
+    ) -> Result<(), String> {
+        if !host_options.capabilities.enable_managed_io_compat {
+            return Ok(());
+        }
+        let default_encoding = resolve_host_default_text_encoding(host_options)?;
+        let vulcan = get_vulcan_table(lua)?;
+        let vulcan_io = vulcan
+            .get::<Table>("io")
+            .map_err(|error| format!("Failed to get vulcan.io: {}", error))?;
+        install_managed_io_compat(lua, &vulcan_io, default_encoding).map_err(|error| {
+            format!(
+                "Failed to install managed io compatibility for runtime session: {}",
+                error
+            )
+        })
+    }
+
+    /// Ensure one locked runtime session can still execute.
+    /// 确保一个已锁定运行时会话仍可执行。
+    fn ensure_runtime_session_active(
+        session: &mut RuntimeSession,
+    ) -> Result<(), RuntimeSessionError> {
+        if let Some(error) = session.inactive_error() {
+            return Err(error);
+        }
+        session.refresh();
+        Ok(())
+    }
+
+    /// Evaluate one request while holding the selected runtime session lock.
+    /// 持有所选运行时会话锁时执行一个请求。
+    fn eval_runtime_session_locked(
+        &self,
+        session: &mut RuntimeSession,
+        request: &RuntimeSessionEvalRequest,
+    ) -> Result<Value, String> {
+        reset_pooled_vm_request_scope(&session.vm.lua, self.host_options.as_ref())?;
+        Self::populate_vulcan_request_context(&session.vm.lua, None)?;
+        populate_vulcan_internal_execution_context(
+            &session.vm.lua,
+            &VulcanInternalExecutionContext {
+                tool_name: None,
+                skill_name: None,
+                entry_name: None,
+                root_name: None,
+                luaexec_active: true,
+                luaexec_caller_tool_name: None,
+            },
+        )?;
+        populate_vulcan_file_context(&session.vm.lua, None, None)?;
+        populate_vulcan_dependency_context(
+            &session.vm.lua,
+            self.host_options.as_ref(),
+            None,
+            None,
+        )?;
+        Self::populate_vulcan_lancedb_context(&session.vm.lua, None, None)?;
+        Self::populate_vulcan_sqlite_context(&session.vm.lua, None, None)?;
+
+        let args_table = json_to_lua_table(&session.vm.lua, &request.args)?;
+        session
+            .vm
+            .lua
+            .globals()
+            .set("__runlua_args", args_table)
+            .map_err(|error| format!("Failed to set runtime session args: {}", error))?;
+        let wrapper = format!(
+            "return (function()\n  local args = __runlua_args\n  {}\nend)()",
+            request.code
+        );
+        Self::install_runlua_timeout_guard(&session.vm.lua, request.timeout_ms)
+            .map_err(|error| error.to_string())?;
+        let eval_result = session.vm.lua.load(&wrapper).eval::<LuaValue>();
+        Self::remove_runlua_timeout_guard(&session.vm.lua);
+        let result = eval_result.map_err(|error| {
+            let msg = format!("Runtime session eval error: {}", error);
+            log_error(format!("[LuaSkill:error] {}", msg));
+            msg
+        })?;
+        let json_result = lua_value_to_json(&result)?;
+        clear_runlua_args_global(&session.vm.lua)?;
+        Ok(json_result)
+    }
+
     /// Acquire one isolated runlua VM from the dedicated pool.
     /// 从独立池中获取一个隔离 runlua 虚拟机。
     fn acquire_runlua_vm(
@@ -6187,7 +7358,11 @@ impl LuaEngine {
         Self::populate_vulcan_sqlite_context(lua, None, None)?;
 
         let captured_output: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        Self::configure_runlua_execution_environment(lua, captured_output.clone())?;
+        Self::configure_runlua_execution_environment(
+            lua,
+            captured_output.clone(),
+            host_options.as_ref(),
+        )?;
 
         let args_table = json_to_lua_table(lua, &request.args)?;
         lua.globals()
@@ -6344,12 +7519,17 @@ impl LuaEngine {
     fn configure_runlua_execution_environment(
         lua: &Lua,
         captured_output: Arc<Mutex<Vec<String>>>,
+        host_options: &LuaRuntimeHostOptions,
     ) -> Result<(), String> {
         let runtime = get_vulcan_runtime_table(lua)?;
         let runtime_lua = get_vulcan_runtime_lua_table(lua)?;
-        let cache = get_vulcan_table(lua)?
+        let vulcan = get_vulcan_table(lua)?;
+        let cache = vulcan
             .get::<Table>("cache")
             .map_err(|error| format!("Failed to get vulcan.cache: {}", error))?;
+        let vulcan_io = vulcan
+            .get::<Table>("io")
+            .map_err(|error| format!("Failed to get vulcan.io: {}", error))?;
 
         let print_capture = captured_output.clone();
         let print_fn = lua
@@ -6400,6 +7580,15 @@ end
                 error
             )
         })?;
+        if host_options.capabilities.enable_managed_io_compat {
+            let default_encoding = resolve_host_default_text_encoding(host_options)?;
+            install_managed_io_compat(lua, &vulcan_io, default_encoding).map_err(|error| {
+                format!(
+                    "Failed to install managed io compatibility for runlua: {}",
+                    error
+                )
+            })?;
+        }
         Ok(())
     }
 
@@ -6981,6 +8170,8 @@ end
         let models = lua.create_table()?;
         let context = lua.create_table()?;
         let deps = lua.create_table()?;
+        let default_text_encoding = resolve_host_default_text_encoding(host_options)?;
+        let vulcan_io = create_vulcan_io_table(lua, default_text_encoding)?;
 
         let runtime_log_fn = lua.create_function(|_, (level, msg): (LuaValue, LuaValue)| {
             let level = require_string_arg(level, "runtime.log", "level", false)?;
@@ -7098,12 +8289,17 @@ end
             None => runtime.set("resources_dir", LuaValue::Nil)?,
         }
 
-        let exec_fn = lua.create_function(|lua, spec: LuaValue| {
-            let request = parse_exec_request(spec, "process.exec")?;
+        let exec_default_encoding = default_text_encoding;
+        let exec_fn = lua.create_function(move |lua, spec: LuaValue| {
+            let request = parse_exec_request(spec, "process.exec", exec_default_encoding)?;
             let result = execute_exec_request(request);
             exec_result_to_lua_table(lua, result)
         })?;
         process.set("exec", exec_fn)?;
+        process.set(
+            "session",
+            create_process_session_table(lua, default_text_encoding)?,
+        )?;
 
         let os_info_fn = lua.create_function(|lua, ()| {
             let current_os = match std::env::consts::OS {
@@ -7372,6 +8568,7 @@ end
         vulcan.set("call", call_stub)?;
         vulcan.set("runtime", runtime)?;
         vulcan.set("fs", fs)?;
+        vulcan.set("io", vulcan_io)?;
         vulcan.set("path", path)?;
         vulcan.set("process", process)?;
         vulcan.set("os", os)?;
@@ -7492,15 +8689,16 @@ fn lua_table_to_object(t: &Table) -> Result<Value, String> {
 mod tests {
     use super::{
         LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState, LuaVmRequestScopeGuard,
-        SkillConfigStore, VulcanInternalExecutionContext, default_runlua_vm_pool_config,
-        get_vulcan_context_table, get_vulcan_deps_table, get_vulcan_runtime_internal_table,
-        get_vulcan_table, json_to_lua_table, normalize_host_visible_path_text,
-        populate_vulcan_dependency_context, populate_vulcan_file_context,
-        populate_vulcan_internal_execution_context, runlua_cwd_guard,
+        RuntimeSessionManager, SkillConfigStore, VulcanInternalExecutionContext,
+        default_runlua_vm_pool_config, get_vulcan_context_table, get_vulcan_deps_table,
+        get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
+        normalize_host_visible_path_text, populate_vulcan_dependency_context,
+        populate_vulcan_file_context, populate_vulcan_internal_execution_context, runlua_cwd_guard,
     };
     use crate::host::callbacks::runtime_model_callback_test_guard;
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
     use crate::lua_skill::SkillMeta;
+    use crate::runtime::encoding::{RuntimeTextEncoding, encode_runtime_text};
     use crate::runtime_options::LuaRuntimeRunLuaPoolConfig;
     use crate::{
         LuaEngineOptions, LuaRuntimeHostOptions, RuntimeClientInfo, RuntimeHostToolAction,
@@ -7609,6 +8807,7 @@ mod tests {
                 condvar: Condvar::new(),
             }),
             runlua_pool: Arc::new(LuaVmPool::new(default_runlua_vm_pool_config())),
+            runtime_sessions: Arc::new(RuntimeSessionManager::new()),
             skill_config_store: Arc::new(
                 SkillConfigStore::new(None).expect("create runtime test skill config store"),
             ),
@@ -7622,8 +8821,16 @@ mod tests {
     /// Build one minimal runtime engine that can execute pooled-VM isolation tests.
     /// 构造一个可用于池化虚拟机隔离测试的最小运行时引擎。
     fn make_runtime_test_engine() -> LuaEngine {
+        make_runtime_test_engine_with_host_options(LuaRuntimeHostOptions::default())
+    }
+
+    /// Build one minimal runtime engine with explicit host options.
+    /// 使用显式宿主选项构造一个最小运行时引擎。
+    fn make_runtime_test_engine_with_host_options(
+        host_options: LuaRuntimeHostOptions,
+    ) -> LuaEngine {
         LuaEngine::new(LuaEngineOptions {
-            host_options: LuaRuntimeHostOptions::default(),
+            host_options,
             pool_config: LuaVmPoolConfig {
                 min_size: 1,
                 max_size: 1,
@@ -10000,6 +11207,648 @@ return {
             .expect("second inline runlua should succeed");
         assert!(!second.trim().is_empty());
         assert_eq!(engine.runlua_pool.total_count(), 1);
+    }
+
+    /// Verify isolated runlua redirects Lua `io.open` to the Rust-backed managed IO table.
+    /// 验证隔离 runlua 会把 Lua `io.open` 重定向到 Rust 托管 IO 表。
+    #[test]
+    fn execute_runlua_request_inline_uses_managed_io_open() {
+        let engine = make_runtime_test_engine();
+        let path = std::env::temp_dir().join(format!(
+            "luaskills_runlua_managed_io_{}.txt",
+            std::process::id()
+        ));
+        fs::write(&path, "managed-io-ok").expect("write managed io test file");
+        let request = json!({
+            "code": "local f = io.open(args.path, 'r'); local value = f:read('*a'); f:close(); return value",
+            "args": {
+                "path": path.to_string_lossy().to_string()
+            }
+        });
+
+        let result = engine
+            .execute_runlua_request_json_inline(&request.to_string())
+            .expect("inline runlua should read through managed io");
+
+        assert!(result.contains("SUCCESS"));
+        assert!(result.contains("managed-io-ok"));
+        let _ = fs::remove_file(path);
+    }
+
+    /// Verify isolated runlua supports default managed `io.input` and `io.read`.
+    /// 验证隔离 runlua 支持托管默认 `io.input` 与 `io.read`。
+    #[test]
+    fn execute_runlua_request_inline_uses_managed_io_default_input() {
+        let engine = make_runtime_test_engine();
+        let path = std::env::temp_dir().join(format!(
+            "luaskills_runlua_managed_io_input_{}.txt",
+            std::process::id()
+        ));
+        fs::write(&path, "managed-default-input").expect("write managed input test file");
+        let request = json!({
+            "code": "io.input(args.path); return io.read('*a')",
+            "args": {
+                "path": path.to_string_lossy().to_string()
+            }
+        });
+
+        let result = engine
+            .execute_runlua_request_json_inline(&request.to_string())
+            .expect("inline runlua should read through managed default input");
+
+        assert!(result.contains("SUCCESS"));
+        assert!(result.contains("managed-default-input"));
+        let _ = fs::remove_file(path);
+    }
+
+    /// Verify isolated runlua supports default managed `io.output` and `io.write`.
+    /// 验证隔离 runlua 支持托管默认 `io.output` 与 `io.write`。
+    #[test]
+    fn execute_runlua_request_inline_uses_managed_io_default_output() {
+        let engine = make_runtime_test_engine();
+        let path = std::env::temp_dir().join(format!(
+            "luaskills_runlua_managed_io_output_{}.txt",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let request = json!({
+            "code": "io.output(args.path); io.write('managed', '-', 'default-output'); io.close(); return vulcan.io.read_text(args.path, { encoding = 'utf-8' })",
+            "args": {
+                "path": path.to_string_lossy().to_string()
+            }
+        });
+
+        let result = engine
+            .execute_runlua_request_json_inline(&request.to_string())
+            .expect("inline runlua should write through managed default output");
+
+        assert!(result.contains("SUCCESS"));
+        assert!(result.contains("managed-default-output"));
+        let _ = fs::remove_file(path);
+    }
+
+    /// Verify isolated runlua redirects Lua `io.popen` to the Rust-backed read implementation.
+    /// 验证隔离 runlua 会把 Lua `io.popen` 重定向到 Rust 托管读取实现。
+    #[test]
+    fn execute_runlua_request_inline_uses_managed_io_popen() {
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .execute_runlua_request_json_inline(
+                r#"{"code":"local f = io.popen('echo managed-popen-ok', 'r'); local value = f:read('*a'); local ok = f:close(); return value, ok"}"#,
+            )
+            .expect("inline runlua should read through managed io.popen");
+
+        assert!(result.contains("SUCCESS"));
+        assert!(result.contains("managed-popen-ok"));
+        assert!(result.contains("true"));
+    }
+
+    /// Verify isolated runlua rejects the unsupported managed `io.popen` write mode.
+    /// 验证隔离 runlua 会拒绝暂不支持的托管 `io.popen` 写入模式。
+    #[test]
+    fn execute_runlua_request_inline_rejects_io_popen_write_mode() {
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .execute_runlua_request_json_inline(r#"{"code":"return io.popen('echo hello', 'w')"}"#)
+            .expect("inline runlua should render the managed io.popen mode error");
+
+        assert!(result.contains("FAILED"));
+        assert!(result.contains("write mode is not implemented yet"));
+    }
+
+    /// Verify host default text encoding is used by managed IO when Lua omits encoding options.
+    /// 验证 Lua 省略编码选项时托管 IO 会使用宿主默认文本编码。
+    #[test]
+    fn execute_runlua_request_inline_uses_host_default_text_encoding() {
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.default_text_encoding = Some("gb18030".to_string());
+        let engine = make_runtime_test_engine_with_host_options(host_options);
+        let path = std::env::temp_dir().join(format!(
+            "luaskills_runlua_default_encoding_{}.txt",
+            std::process::id()
+        ));
+        let bytes = encode_runtime_text("宿主默认编码", RuntimeTextEncoding::Gb18030)
+            .expect("encode host default gb18030 test file");
+        fs::write(&path, bytes).expect("write host default encoding file");
+        let request = json!({
+            "code": "return vulcan.io.read_text(args.path)",
+            "args": {
+                "path": path.to_string_lossy().to_string()
+            }
+        });
+
+        let result = engine
+            .execute_runlua_request_json_inline(&request.to_string())
+            .expect("inline runlua should read through host default encoding");
+
+        assert!(result.contains("SUCCESS"));
+        assert!(result.contains("宿主默认编码"));
+        let _ = fs::remove_file(path);
+    }
+
+    /// Verify hosts can disable the managed global `io` compatibility layer for luaexec.
+    /// 验证宿主可以为 luaexec 关闭托管全局 `io` 兼容层。
+    #[test]
+    fn execute_runlua_request_inline_can_disable_managed_io_compat() {
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.capabilities.enable_managed_io_compat = false;
+        let engine = make_runtime_test_engine_with_host_options(host_options);
+        let result = engine
+            .execute_runlua_request_json_inline(
+                r#"{"code":"local preload = package and package.preload and package.preload.io; return type(preload) == 'function' and 'managed' or 'native'"}"#,
+            )
+            .expect("inline runlua should keep native io when managed compat is disabled");
+
+        assert!(result.contains("SUCCESS"));
+        assert!(result.contains("native"));
+    }
+
+    /// Verify `vulcan.process.exec` exposes explicit encoding metadata after byte-based capture.
+    /// 验证 `vulcan.process.exec` 在按字节捕获后会暴露明确的编码元数据。
+    #[test]
+    fn execute_runlua_request_inline_reports_process_exec_encoding_metadata() {
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .execute_runlua_request_json_inline(
+                r#"{"code":"local info = vulcan.os.info(); local spec; if info.os == 'windows' then spec = { program = 'cmd', args = { '/C', 'echo exec-encoding-ok' }, encoding = 'utf-8' } else spec = { program = 'sh', args = { '-c', 'printf exec-encoding-ok' }, encoding = 'utf-8' } end; local result = vulcan.process.exec(spec); return result.stdout, result.stdout_encoding, result.stdout_lossy"}"#,
+            )
+            .expect("inline runlua should execute process.exec");
+
+        assert!(result.contains("SUCCESS"));
+        assert!(result.contains("exec-encoding-ok"));
+        assert!(result.contains("utf-8"));
+        assert!(result.contains("false"));
+    }
+
+    /// Verify `vulcan.process.session` can write to stdin and read captured stdout.
+    /// 验证 `vulcan.process.session` 可以写入 stdin 并读取捕获的 stdout。
+    #[test]
+    fn execute_runlua_request_inline_uses_process_session_write_read() {
+        let engine = make_runtime_test_engine();
+        let result = engine
+            .execute_runlua_request_json_inline(
+                r#"{"code":"local info = vulcan.os.info(); local spec; if info.os == 'windows' then spec = { program = 'cmd', args = { '/V:ON', '/C', 'set /P line=&echo session:!line!' }, encoding = 'utf-8' } else spec = { program = 'sh', args = { '-c', 'read line; echo session:$line' }, encoding = 'utf-8' } end; local session = vulcan.process.session.open(spec); session:write('ok\\n'); local status = session:close({ timeout_ms = 3000 }); local output = session:read({ timeout_ms = 3000 }); return output.stdout, status.exited, status.success"}"#,
+            )
+            .expect("inline runlua should exercise process session");
+
+        assert!(result.contains("SUCCESS"));
+        assert!(result.contains("session:ok"));
+        assert!(result.contains("true"));
+    }
+
+    /// Verify persistent runtime sessions keep Lua VM globals across eval calls.
+    /// 验证持久运行时会话会在多次 eval 调用之间保留 Lua VM 全局状态。
+    #[test]
+    fn runtime_session_eval_preserves_vm_state_across_calls() {
+        let engine = make_runtime_test_engine();
+        let created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"stateful-test","ttl_sec":60}"#)
+                .expect("create runtime session"),
+        )
+        .expect("create response json");
+        assert_eq!(created["ok"], true);
+        let lease_id = created["lease_id"]
+            .as_str()
+            .expect("lease id should be present")
+            .to_string();
+
+        let first_request = json!({
+            "lease_id": lease_id,
+            "code": "counter = (counter or 0) + 1; return counter"
+        });
+        let first: Value = serde_json::from_str(
+            &engine
+                .eval_runtime_session_json(&first_request.to_string())
+                .expect("first runtime session eval"),
+        )
+        .expect("first eval response json");
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["result"], json!(1));
+
+        let second_request = json!({
+            "lease_id": lease_id,
+            "code": "counter = (counter or 0) + 1; return counter"
+        });
+        let second: Value = serde_json::from_str(
+            &engine
+                .eval_runtime_session_json(&second_request.to_string())
+                .expect("second runtime session eval"),
+        )
+        .expect("second eval response json");
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["result"], json!(2));
+    }
+
+    /// Verify closed runtime sessions return a stable lease_closed error.
+    /// 验证已关闭的运行时会话会返回稳定的 lease_closed 错误。
+    #[test]
+    fn runtime_session_eval_reports_closed_lease() {
+        let engine = make_runtime_test_engine();
+        let created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"closed-test","ttl_sec":60}"#)
+                .expect("create runtime session"),
+        )
+        .expect("create response json");
+        let lease_id = created["lease_id"]
+            .as_str()
+            .expect("lease id should be present")
+            .to_string();
+        let close_request = json!({ "lease_id": lease_id });
+        let closed: Value = serde_json::from_str(
+            &engine
+                .close_runtime_session_json(&close_request.to_string())
+                .expect("close runtime session"),
+        )
+        .expect("close response json");
+        assert_eq!(closed["ok"], true);
+        assert_eq!(closed["closed"], true);
+
+        let eval_request = json!({
+            "lease_id": lease_id,
+            "code": "return 1"
+        });
+        let eval: Value = serde_json::from_str(
+            &engine
+                .eval_runtime_session_json(&eval_request.to_string())
+                .expect("eval closed runtime session"),
+        )
+        .expect("eval response json");
+        assert_eq!(eval["ok"], false);
+        assert_eq!(eval["error_code"], "lease_closed");
+    }
+
+    /// Verify closed runtime sessions return a stable lease_closed error from status.
+    /// 验证已关闭的运行时会话在 status 中会返回稳定的 lease_closed 错误。
+    #[test]
+    fn runtime_session_status_reports_closed_lease() {
+        let engine = make_runtime_test_engine();
+        let created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"closed-status-test","ttl_sec":60}"#)
+                .expect("create runtime session"),
+        )
+        .expect("create response json");
+        let lease_id = created["lease_id"]
+            .as_str()
+            .expect("lease id should be present")
+            .to_string();
+        let close_request = json!({ "lease_id": lease_id.clone() });
+        let closed: Value = serde_json::from_str(
+            &engine
+                .close_runtime_session_json(&close_request.to_string())
+                .expect("close runtime session"),
+        )
+        .expect("close response json");
+        assert_eq!(closed["ok"], true);
+
+        let status_request = json!({ "lease_id": lease_id });
+        let status: Value = serde_json::from_str(
+            &engine
+                .runtime_session_status_json(&status_request.to_string())
+                .expect("status closed runtime session"),
+        )
+        .expect("status response json");
+        assert_eq!(status["ok"], false);
+        assert_eq!(status["error_code"], "lease_closed");
+    }
+
+    /// Verify replaced runtime sessions keep a stable lease_replaced terminal error.
+    /// 验证被替换的运行时会话会保留稳定的 lease_replaced 终态错误。
+    #[test]
+    fn runtime_session_eval_reports_replaced_lease() {
+        let engine = make_runtime_test_engine();
+        let first_created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"replace-test","ttl_sec":60}"#)
+                .expect("create first runtime session"),
+        )
+        .expect("first create response json");
+        let first_lease_id = first_created["lease_id"]
+            .as_str()
+            .expect("first lease id should be present")
+            .to_string();
+
+        let second_created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(
+                    r#"{"sid":"replace-test","ttl_sec":60,"replace":true}"#,
+                )
+                .expect("create second runtime session"),
+        )
+        .expect("second create response json");
+        assert_eq!(second_created["ok"], true);
+        assert_ne!(second_created["lease_id"], first_created["lease_id"]);
+
+        let eval_request = json!({
+            "lease_id": first_lease_id,
+            "code": "return 1"
+        });
+        let eval: Value = serde_json::from_str(
+            &engine
+                .eval_runtime_session_json(&eval_request.to_string())
+                .expect("eval replaced runtime session"),
+        )
+        .expect("replaced eval response json");
+        assert_eq!(eval["ok"], false);
+        assert_eq!(eval["error_code"], "lease_replaced");
+    }
+
+    /// Verify replaced runtime sessions return a stable lease_replaced error from status.
+    /// 验证被替换的运行时会话在 status 中会返回稳定的 lease_replaced 错误。
+    #[test]
+    fn runtime_session_status_reports_replaced_lease() {
+        let engine = make_runtime_test_engine();
+        let first_created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"replace-status-test","ttl_sec":60}"#)
+                .expect("create first runtime session"),
+        )
+        .expect("first create response json");
+        let first_lease_id = first_created["lease_id"]
+            .as_str()
+            .expect("first lease id should be present")
+            .to_string();
+
+        let second_created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(
+                    r#"{"sid":"replace-status-test","ttl_sec":60,"replace":true}"#,
+                )
+                .expect("create second runtime session"),
+        )
+        .expect("second create response json");
+        assert_eq!(second_created["ok"], true);
+
+        let status_request = json!({ "lease_id": first_lease_id });
+        let status: Value = serde_json::from_str(
+            &engine
+                .runtime_session_status_json(&status_request.to_string())
+                .expect("status replaced runtime session"),
+        )
+        .expect("status response json");
+        assert_eq!(status["ok"], false);
+        assert_eq!(status["error_code"], "lease_replaced");
+    }
+
+    /// Verify a stale runtime-session handle observes lease_replaced after another caller replaces the SID lease.
+    /// 验证陈旧运行时会话句柄会在另一个调用方替换同 SID 租约后观察到 lease_replaced。
+    #[test]
+    fn runtime_session_stale_handle_reports_replaced_after_manager_get() {
+        let engine = make_runtime_test_engine();
+        let first_created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"replace-race-test","ttl_sec":60}"#)
+                .expect("create first runtime session"),
+        )
+        .expect("first create response json");
+        let first_lease_id = first_created["lease_id"]
+            .as_str()
+            .expect("first lease id should be present")
+            .to_string();
+        let stale_session = engine
+            .runtime_sessions
+            .get(&first_lease_id, None, None)
+            .expect("capture stale runtime session handle");
+
+        let replaced: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(
+                    r#"{"sid":"replace-race-test","ttl_sec":60,"replace":true}"#,
+                )
+                .expect("replace runtime session"),
+        )
+        .expect("replace response json");
+        assert_eq!(replaced["ok"], true);
+
+        let mut stale_session = stale_session.lock().expect("lock stale runtime session");
+        let error = LuaEngine::ensure_runtime_session_active(&mut stale_session)
+            .expect_err("stale handle should fail");
+        assert_eq!(error.code, "lease_replaced");
+    }
+
+    /// Verify replace=true rejects one busy lease before creating a second VM for the same SID.
+    /// 验证 replace=true 会在同一 SID 的旧租约忙碌时拒绝替换，而不会创建第二个虚拟机。
+    #[test]
+    fn runtime_session_replace_rejects_busy_lease() {
+        let engine = make_runtime_test_engine();
+        let created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"busy-replace-test","ttl_sec":60}"#)
+                .expect("create busy replace runtime session"),
+        )
+        .expect("busy replace create response json");
+        let lease_id = created["lease_id"]
+            .as_str()
+            .expect("busy replace lease id should be present")
+            .to_string();
+
+        let session = engine
+            .runtime_sessions
+            .get(&lease_id, None, None)
+            .expect("get busy replace runtime session");
+        let guard = session.lock().expect("lock busy replace runtime session");
+
+        let blocked_replace: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(
+                    r#"{"sid":"busy-replace-test","ttl_sec":60,"replace":true}"#,
+                )
+                .expect("replace busy runtime session"),
+        )
+        .expect("busy replace response json");
+        assert_eq!(blocked_replace["ok"], false);
+        assert_eq!(blocked_replace["error_code"], "lease_busy");
+        assert!(
+            blocked_replace["message"]
+                .as_str()
+                .expect("busy replace message should be present")
+                .contains("cannot replace busy lease")
+        );
+
+        let listed: Value = serde_json::from_str(
+            &engine
+                .list_runtime_sessions_json(r#"{"sid":"busy-replace-test"}"#)
+                .expect("list busy replace runtime sessions"),
+        )
+        .expect("busy replace list response json");
+        assert_eq!(listed["ok"], true);
+        assert_eq!(listed["leases"].as_array().map(Vec::len), Some(1));
+        assert_eq!(listed["leases"][0]["lease_id"], lease_id);
+
+        drop(guard);
+
+        let replaced: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(
+                    r#"{"sid":"busy-replace-test","ttl_sec":60,"replace":true}"#,
+                )
+                .expect("replace idle runtime session"),
+        )
+        .expect("idle replace response json");
+        assert_eq!(replaced["ok"], true);
+        assert_ne!(replaced["lease_id"], created["lease_id"]);
+    }
+
+    /// Verify runtime sessions reject a mismatched echoed SID before executing code.
+    /// 验证运行时会话会在执行前拒绝不匹配的回传 SID。
+    #[test]
+    fn runtime_session_eval_rejects_sid_mismatch() {
+        let engine = make_runtime_test_engine();
+        let created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"identity-test","ttl_sec":60}"#)
+                .expect("create identity runtime session"),
+        )
+        .expect("identity create response json");
+        let lease_id = created["lease_id"]
+            .as_str()
+            .expect("identity lease id should be present")
+            .to_string();
+
+        let eval_request = json!({
+            "lease_id": lease_id,
+            "sid": "wrong-sid",
+            "code": "return 1"
+        });
+        let eval: Value = serde_json::from_str(
+            &engine
+                .eval_runtime_session_json(&eval_request.to_string())
+                .expect("eval runtime session with wrong sid"),
+        )
+        .expect("wrong sid eval response json");
+        assert_eq!(eval["ok"], false);
+        assert_eq!(eval["error_code"], "lease_sid_mismatch");
+    }
+
+    /// Verify runtime sessions reject a mismatched echoed generation before executing code.
+    /// 验证运行时会话会在执行前拒绝不匹配的回传 generation。
+    #[test]
+    fn runtime_session_eval_rejects_generation_mismatch() {
+        let engine = make_runtime_test_engine();
+        let created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"generation-test","ttl_sec":60}"#)
+                .expect("create generation runtime session"),
+        )
+        .expect("generation create response json");
+        let lease_id = created["lease_id"]
+            .as_str()
+            .expect("generation lease id should be present")
+            .to_string();
+        let sid = created["sid"]
+            .as_str()
+            .expect("generation sid should be present")
+            .to_string();
+
+        let eval_request = json!({
+            "lease_id": lease_id,
+            "sid": sid,
+            "generation": 999_u64,
+            "code": "return 1"
+        });
+        let eval: Value = serde_json::from_str(
+            &engine
+                .eval_runtime_session_json(&eval_request.to_string())
+                .expect("eval runtime session with wrong generation"),
+        )
+        .expect("wrong generation eval response json");
+        assert_eq!(eval["ok"], false);
+        assert_eq!(eval["error_code"], "lease_generation_mismatch");
+    }
+
+    /// Verify runtime-session list only returns active leases and supports SID filtering.
+    /// 验证运行时会话列表仅返回活跃租约并支持 SID 过滤。
+    #[test]
+    fn runtime_session_list_returns_only_active_leases() {
+        let engine = make_runtime_test_engine();
+        let alpha_created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"alpha-test","ttl_sec":60}"#)
+                .expect("create alpha runtime session"),
+        )
+        .expect("alpha create response json");
+        let beta_created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"beta-test","ttl_sec":60}"#)
+                .expect("create beta runtime session"),
+        )
+        .expect("beta create response json");
+        let beta_lease_id = beta_created["lease_id"]
+            .as_str()
+            .expect("beta lease id should be present")
+            .to_string();
+
+        let all_list: Value = serde_json::from_str(
+            &engine
+                .list_runtime_sessions_json(r#"{}"#)
+                .expect("list runtime sessions"),
+        )
+        .expect("list response json");
+        assert_eq!(all_list["ok"], true);
+        assert_eq!(all_list["leases"].as_array().map(Vec::len), Some(2),);
+
+        let alpha_only: Value = serde_json::from_str(
+            &engine
+                .list_runtime_sessions_json(r#"{"sid":"alpha-test"}"#)
+                .expect("list alpha runtime sessions"),
+        )
+        .expect("alpha list response json");
+        assert_eq!(alpha_only["ok"], true);
+        assert_eq!(alpha_only["leases"].as_array().map(Vec::len), Some(1),);
+        assert_eq!(alpha_only["leases"][0]["sid"], alpha_created["sid"]);
+
+        let beta_close_request = json!({ "lease_id": beta_lease_id });
+        let beta_closed: Value = serde_json::from_str(
+            &engine
+                .close_runtime_session_json(&beta_close_request.to_string())
+                .expect("close beta runtime session"),
+        )
+        .expect("beta close response json");
+        assert_eq!(beta_closed["ok"], true);
+
+        let remaining: Value = serde_json::from_str(
+            &engine
+                .list_runtime_sessions_json(r#"{}"#)
+                .expect("list remaining runtime sessions"),
+        )
+        .expect("remaining list response json");
+        assert_eq!(remaining["ok"], true);
+        assert_eq!(remaining["leases"].as_array().map(Vec::len), Some(1),);
+        assert_eq!(remaining["leases"][0]["sid"], alpha_created["sid"]);
+    }
+
+    /// Verify list requests still return busy active leases while a caller is holding the session lock.
+    /// 验证当调用方持有会话锁时列表请求仍然会返回忙碌但活跃的租约。
+    #[test]
+    fn runtime_session_list_keeps_busy_active_leases_visible() {
+        let engine = make_runtime_test_engine();
+        let created: Value = serde_json::from_str(
+            &engine
+                .create_runtime_session_json(r#"{"sid":"busy-list-test","ttl_sec":60}"#)
+                .expect("create busy runtime session"),
+        )
+        .expect("busy create response json");
+        let lease_id = created["lease_id"]
+            .as_str()
+            .expect("busy lease id should be present")
+            .to_string();
+        let session = engine
+            .runtime_sessions
+            .get(&lease_id, None, None)
+            .expect("get busy runtime session");
+        let _guard = session.lock().expect("lock busy runtime session");
+
+        let listed: Value = serde_json::from_str(
+            &engine
+                .list_runtime_sessions_json(r#"{"sid":"busy-list-test"}"#)
+                .expect("list busy runtime sessions"),
+        )
+        .expect("busy list response json");
+        assert_eq!(listed["ok"], true);
+        assert_eq!(listed["leases"].as_array().map(Vec::len), Some(1));
+        assert_eq!(listed["leases"][0]["lease_id"], lease_id);
     }
 
     /// Verify that run_lua clears transient args after one failed execution.

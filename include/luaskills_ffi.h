@@ -150,6 +150,16 @@ typedef struct FfiLuaRuntimeHostOptions {
     Lua 是否允许使用 `vulcan.runtime.skills.*` 管理桥接。
     */
     uint8_t enable_skill_management_bridge;
+    /*
+    Optional default text encoding label used by managed IO and process APIs.
+    托管 IO 与进程 API 使用的可选默认文本编码标签。
+    */
+    const char *default_text_encoding;
+    /*
+    Whether luaexec and runtime sessions must keep Lua's native `io` table.
+    luaexec 与持久运行时会话是否必须保留 Lua 原生 `io` 表。
+    */
+    uint8_t disable_managed_io_compat;
 } FfiLuaRuntimeHostOptions;
 
 typedef struct FfiLuaEngineOptions {
@@ -499,17 +509,6 @@ Free one LuaSkills engine through the standard C ABI surface.
 int32_t luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out);
 
 /*
-Load skills from legacy directory-style roots through the standard C ABI surface.
-通过标准 C ABI 接口按旧目录风格根参数加载技能。
-*/
-int32_t luaskills_ffi_load_from_dirs(
-    uint64_t engine_id,
-    const char *base_dir,
-    const char *override_dir,
-    FfiOwnedBuffer *error_out
-);
-
-/*
 Load skills from one ordered root chain through the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链加载技能。
 */
@@ -517,17 +516,6 @@ int32_t luaskills_ffi_load_from_roots(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
-    FfiOwnedBuffer *error_out
-);
-
-/*
-Reload skills from legacy directory-style roots through the standard C ABI surface.
-通过标准 C ABI 接口按旧目录风格根参数重载技能。
-*/
-int32_t luaskills_ffi_reload_from_dirs(
-    uint64_t engine_id,
-    const char *base_dir,
-    const char *override_dir,
     FfiOwnedBuffer *error_out
 );
 
@@ -690,19 +678,6 @@ int32_t luaskills_ffi_run_lua(
 );
 
 /*
-Disable one skill through legacy directory-style roots via the standard C ABI surface.
-通过标准 C ABI 接口按旧目录风格根参数停用单个技能。
-*/
-int32_t luaskills_ffi_disable_skill_in_dirs(
-    uint64_t engine_id,
-    const char *base_dir,
-    const char *override_dir,
-    const char *skill_id,
-    const char *reason,
-    FfiOwnedBuffer *error_out
-);
-
-/*
 Disable one skill through one ordered root chain via the standard C ABI surface.
 通过标准 C ABI 接口按一条有序根链停用单个技能。
 */
@@ -710,20 +685,6 @@ int32_t luaskills_ffi_disable_skill(
     uint64_t engine_id,
     const FfiRuntimeSkillRoot *skill_roots,
     size_t skill_roots_len,
-    const char *skill_id,
-    const char *reason,
-    FfiOwnedBuffer *error_out
-);
-
-/*
-Disable one skill on the system plane through legacy directory-style roots.
-通过标准 C ABI 接口按旧目录风格根参数在 system 平面停用单个技能。
-*/
-int32_t luaskills_ffi_system_disable_skill_in_dirs(
-    uint64_t engine_id,
-    const char *base_dir,
-    const char *override_dir,
-    int32_t authority,
     const char *skill_id,
     const char *reason,
     FfiOwnedBuffer *error_out

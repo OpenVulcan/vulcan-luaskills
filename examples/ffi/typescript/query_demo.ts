@@ -63,7 +63,11 @@ function readOwnedBuffer(buffer: { ptr: Buffer | null; len: number | bigint } | 
   if (!buffer?.ptr) {
     return "";
   }
-  return Buffer.from(buffer.ptr).subarray(0, Number(buffer.len)).toString("utf8");
+  const bytes = koffi.decode(
+    buffer.ptr,
+    koffi.array("uint8_t", Number(buffer.len)),
+  ) as number[];
+  return Buffer.from(bytes).toString("utf8");
 }
 
 /**
@@ -158,6 +162,8 @@ function main(): void {
     ignored_skill_ids: "void *",
     ignored_skill_ids_len: "size_t",
     enable_skill_management_bridge: "uint8_t",
+    default_text_encoding: "str",
+    disable_managed_io_compat: "uint8_t",
   });
 
   const FfiLuaEngineOptions = koffi.struct("FfiLuaEngineOptions", {
@@ -181,13 +187,13 @@ function main(): void {
   });
 
   const freeBuffer = library.func("void luaskills_ffi_buffer_free(FfiOwnedBuffer value)");
-  const engineNew = library.func("int luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, uint64_t *engine_id_out, FfiOwnedBuffer *error_out)");
-  const loadFromRoots = library.func("int luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, FfiOwnedBuffer *error_out)");
-  const isSkill = library.func("int luaskills_ffi_is_skill(uint64_t engine_id, int32_t authority, const char *tool_name, uint8_t *value_out, FfiOwnedBuffer *error_out)");
-  const skillNameForTool = library.func("int luaskills_ffi_skill_name_for_tool(uint64_t engine_id, int32_t authority, const char *tool_name, FfiOwnedBuffer *skill_id_out, FfiOwnedBuffer *error_out)");
-  const promptArgumentCompletions = library.func("int luaskills_ffi_prompt_argument_completions(uint64_t engine_id, int32_t authority, const char *prompt_name, const char *argument_name, void **values_out, FfiOwnedBuffer *error_out)");
+  const engineNew = library.func("int luaskills_ffi_engine_new(const FfiLuaEngineOptions *options, _Out_ uint64_t *engine_id_out, _Out_ FfiOwnedBuffer *error_out)");
+  const loadFromRoots = library.func("int luaskills_ffi_load_from_roots(uint64_t engine_id, const FfiRuntimeSkillRoot *skill_roots, size_t skill_roots_len, _Out_ FfiOwnedBuffer *error_out)");
+  const isSkill = library.func("int luaskills_ffi_is_skill(uint64_t engine_id, int32_t authority, const char *tool_name, _Out_ uint8_t *value_out, _Out_ FfiOwnedBuffer *error_out)");
+  const skillNameForTool = library.func("int luaskills_ffi_skill_name_for_tool(uint64_t engine_id, int32_t authority, const char *tool_name, _Out_ FfiOwnedBuffer *skill_id_out, _Out_ FfiOwnedBuffer *error_out)");
+  const promptArgumentCompletions = library.func("int luaskills_ffi_prompt_argument_completions(uint64_t engine_id, int32_t authority, const char *prompt_name, const char *argument_name, _Out_ void **values_out, _Out_ FfiOwnedBuffer *error_out)");
   const freeStringArray = library.func("void luaskills_ffi_string_array_free(void *value)");
-  const engineFree = library.func("int luaskills_ffi_engine_free(uint64_t engine_id, FfiOwnedBuffer *error_out)");
+  const engineFree = library.func("int luaskills_ffi_engine_free(uint64_t engine_id, _Out_ FfiOwnedBuffer *error_out)");
 
   const options = {
     pool: { min_size: 1, max_size: 1, idle_ttl_secs: 30 },
@@ -223,6 +229,8 @@ function main(): void {
       ignored_skill_ids: null,
       ignored_skill_ids_len: 0,
       enable_skill_management_bridge: 0,
+      default_text_encoding: null,
+      disable_managed_io_compat: 0,
     },
   };
 

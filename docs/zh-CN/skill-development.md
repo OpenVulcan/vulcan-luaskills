@@ -106,8 +106,9 @@ Skill 作者规则：
 | `vulcan.call` | 调用其他 skill 入口 | 是 | 要求第二个参数必须是 Lua table |
 | `vulcan.runtime` | 运行时辅助能力 | 是 | 包含日志、cwd、luaexec、skill 管理桥接等 |
 | `vulcan.fs` | 文件系统读写 | 是 | 不做沙箱限制 |
+| `vulcan.io` | Rust 托管 IO | 是 | 支持编码可控的文件读写、托管 `popen` 与 luaexec `io` 劫持 |
 | `vulcan.path` | 路径拼接 | 是 | 返回对 Lua 友好的系统路径 |
-| `vulcan.process` | 启动子进程 | 是 | 返回结构化结果 |
+| `vulcan.process` | 启动子进程 | 是 | 包含一次性 `exec` 与交互式 `session` |
 | `vulcan.os` | 宿主 OS/架构信息 | 是 | `os`、`arch` |
 | `vulcan.json` | JSON 编解码 | 是 | JSON ↔ Lua table |
 | `vulcan.cache` | 运行时缓存 | 是 | 在 `vulcan.runtime.lua.exec` 中会被禁用 |
@@ -118,7 +119,54 @@ Skill 作者规则：
 | `vulcan.sqlite` | 当前 skill 的 SQLite 绑定 | 条件可用 | 未启用时仍有 `enabled/status/info` |
 | `vulcan.lancedb` | 当前 skill 的 LanceDB 绑定 | 条件可用 | 未启用时仍有 `enabled/status/info` |
 
-## 3.1 宿主强制忽略 skill
+## 3.1 托管 IO 与进程编码
+
+`vulcan.io` 是 Rust 宿主管理的 IO 接口，优先用于 AI 生成代码与 `luaexec` 场景。它支持：
+
+- `vulcan.io.open(path, mode, options)`
+- `vulcan.io.read_text(path, options)`
+- `vulcan.io.write_text(path, content, options)`
+- `vulcan.io.append_text(path, content, options)`
+- `vulcan.io.lines(path, options)`
+- `vulcan.io.popen(command, mode, options)`
+- `vulcan.io.tmpfile()`
+
+`options.encoding` 可使用 `utf-8`、`system`、`oem`、`gbk`、`gb18030`、`latin1`、`base64`。Windows 下 `system` 使用 ANSI 代码页，`oem` 使用控制台 OEM 代码页。
+
+`vulcan.io.open` 与托管 `io.open` 兼容层支持 `r`、`w`、`a`、二进制后缀，以及 `r+`、`w+`、`a+` 这类更新模式。`io.tmpfile()` 会返回一个支持更新读写的托管句柄，并在关闭时删除底层临时文件。
+
+当调用方省略编码选项时，运行时会优先使用宿主配置的 `LuaRuntimeHostOptions.default_text_encoding`。如果宿主未配置，则 Windows 默认使用 `system`，其他平台默认使用 `utf-8`。
+
+在 `vulcan.runtime.lua.exec(...)` 隔离环境中，`io.open`、`io.input`、`io.output`、`io.read`、`io.write`、`io.tmpfile`、`io.popen` 等常用 `io.*` 调用会被托管兼容层接管，避免 LuaJIT 原生 `io.popen` 造成乱码或不可控进程句柄。宿主可以通过 `LuaRuntimeHostOptions.capabilities.enable_managed_io_compat = false` 关闭这层全局 `io` 替换；关闭后 `vulcan.io` 仍然可用。
+
+`vulcan.process.exec(spec)` 也支持编码字段：
+
+```lua
+local result = vulcan.process.exec({
+    program = "cmd",
+    args = { "/C", "dir" },
+    encoding = "oem",
+    timeout_ms = 3000,
+})
+
+return result.stdout, result.stdout_encoding, result.stdout_lossy
+```
+
+`vulcan.process.session.open(spec)` 用于交互式进程：
+
+```lua
+local session = vulcan.process.session.open({
+    program = "python",
+    args = { "-i" },
+    encoding = "utf-8",
+})
+
+session:write("print(1 + 1)\n")
+local output = session:read({ timeout_ms = 1000 })
+session:close()
+```
+
+## 3.2 宿主强制忽略 skill
 
 `ignored_skill_ids` 是宿主运行时级策略，用来在加载早期跳过某些 skill。
 
@@ -588,9 +636,10 @@ local config_path = vulcan.path.join(
 
 ## 8. `vulcan.process.*`
 
-当前只暴露：
+当前暴露：
 
 - `vulcan.process.exec(spec)`
+- `vulcan.process.session.open(spec)`
 
 ### 8.1 请求结构
 

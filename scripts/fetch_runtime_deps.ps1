@@ -5,7 +5,7 @@ param(
     [string]$Database = "vldb-controller",
     [string]$RuntimeRoot = "output",
     [string]$LuaRuntimeRepo = "LuaSkills/luaskills",
-    [string]$LuaRuntimeVersion = "v0.2.2",
+    [string]$LuaRuntimeVersion = "v0.3.0",
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",
     [string]$VldbControllerVersion = "v0.2.1",
     [string]$VldbSQLiteRepo = "OpenVulcan/vldb-sqlite",

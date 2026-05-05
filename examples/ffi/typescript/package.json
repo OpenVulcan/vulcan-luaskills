@@ -5,7 +5,8 @@
   "scripts": {
     "demo": "tsx demo.ts",
     "lifecycle": "tsx lifecycle_demo.ts",
-    "query": "tsx query_demo.ts"
+    "query": "tsx query_demo.ts",
+    "runtime-session": "tsx runtime_session_demo.ts"
   },
   "dependencies": {
     "koffi": "^2.8.0"

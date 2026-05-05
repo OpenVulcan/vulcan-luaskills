@@ -108,8 +108,9 @@ These rules apply to every projection layer, including MCP, gRPC, FFI/SDK hosts,
 | `vulcan.call` | Call another skill entry | Yes | The second argument must be a Lua table |
 | `vulcan.runtime` | Runtime helper capabilities | Yes | Includes logging, cwd, luaexec, skill management bridge, and more |
 | `vulcan.fs` | File system reads and writes | Yes | No sandbox restriction is provided |
+| `vulcan.io` | Rust-managed IO | Yes | Supports encoding-aware file IO, managed `popen`, and luaexec `io` interception |
 | `vulcan.path` | Path joining | Yes | Returns Lua-friendly system paths |
-| `vulcan.process` | Start child processes | Yes | Returns structured results |
+| `vulcan.process` | Start child processes | Yes | Includes one-shot `exec` and interactive `session` |
 | `vulcan.os` | Host OS and architecture info | Yes | `os`, `arch` |
 | `vulcan.json` | JSON encode/decode | Yes | JSON to/from Lua table |
 | `vulcan.cache` | Runtime cache | Yes | Disabled inside `vulcan.runtime.lua.exec` |
@@ -120,7 +121,54 @@ These rules apply to every projection layer, including MCP, gRPC, FFI/SDK hosts,
 | `vulcan.sqlite` | Current skill SQLite binding | Conditional | `enabled/status/info` still exist when disabled |
 | `vulcan.lancedb` | Current skill LanceDB binding | Conditional | `enabled/status/info` still exist when disabled |
 
-## 3.1 Host-Forced Skill Ignore List
+## 3.1 Managed IO And Process Encoding
+
+`vulcan.io` is the Rust-managed IO surface for AI-generated code and `luaexec` scenarios. It supports:
+
+- `vulcan.io.open(path, mode, options)`
+- `vulcan.io.read_text(path, options)`
+- `vulcan.io.write_text(path, content, options)`
+- `vulcan.io.append_text(path, content, options)`
+- `vulcan.io.lines(path, options)`
+- `vulcan.io.popen(command, mode, options)`
+- `vulcan.io.tmpfile()`
+
+`options.encoding` accepts `utf-8`, `system`, `oem`, `gbk`, `gb18030`, `latin1`, and `base64`. On Windows, `system` uses the ANSI code page and `oem` uses the console OEM code page.
+
+`vulcan.io.open` and the managed `io.open` compatibility layer support `r`, `w`, `a`, binary suffixes, and update modes such as `r+`, `w+`, and `a+`. `io.tmpfile()` returns an update-capable managed handle that deletes its backing file on close.
+
+When a call omits encoding options, the runtime uses `LuaRuntimeHostOptions.default_text_encoding` if the host set it. Otherwise it falls back to `system` on Windows and `utf-8` elsewhere.
+
+Inside the isolated `vulcan.runtime.lua.exec(...)` environment, common `io.*` calls such as `io.open`, `io.input`, `io.output`, `io.read`, `io.write`, `io.tmpfile`, and `io.popen` are redirected to the managed compatibility layer so LuaJIT native `io.popen` does not own process handles or produce uncontrolled decoding. Hosts can disable this compatibility replacement with `LuaRuntimeHostOptions.capabilities.enable_managed_io_compat = false`; `vulcan.io` remains available either way.
+
+`vulcan.process.exec(spec)` also accepts encoding fields:
+
+```lua
+local result = vulcan.process.exec({
+    program = "cmd",
+    args = { "/C", "dir" },
+    encoding = "oem",
+    timeout_ms = 3000,
+})
+
+return result.stdout, result.stdout_encoding, result.stdout_lossy
+```
+
+`vulcan.process.session.open(spec)` supports interactive child processes:
+
+```lua
+local session = vulcan.process.session.open({
+    program = "python",
+    args = { "-i" },
+    encoding = "utf-8",
+})
+
+session:write("print(1 + 1)\n")
+local output = session:read({ timeout_ms = 1000 })
+session:close()
+```
+
+## 3.2 Host-Forced Skill Ignore List
 
 `ignored_skill_ids` is a host runtime policy used to skip selected skills early during load.
 
@@ -589,9 +637,10 @@ Path return rules:
 
 ## 8. `vulcan.process.*`
 
-Currently exposes only:
+Currently exposes:
 
 - `vulcan.process.exec(spec)`
+- `vulcan.process.session.open(spec)`
 
 ### 8.1 Request Shape
 

@@ -1,8 +1,11 @@
 pub mod cache;
 pub mod config;
 pub mod context;
+pub mod encoding;
 pub mod engine;
 pub mod entry;
 pub mod help;
 pub mod logging;
+pub mod managed_io;
+pub mod process_session;
 pub mod result;

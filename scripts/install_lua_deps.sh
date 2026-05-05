@@ -381,7 +381,7 @@ download_extract() {
 # ============================================================
 
 GITHUB_REPO="LuaSkills/luaskills"
-RELEASE_TAG="v0.2.2"
+RELEASE_TAG="v0.3.0"
 
 find_local_archive() {
     # Find a matching local archive under third_party and its direct child directories.

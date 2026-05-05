@@ -63,6 +63,8 @@ class FfiLuaRuntimeHostOptions(ctypes.Structure):
         ("ignored_skill_ids", ctypes.POINTER(ctypes.c_char_p)),
         ("ignored_skill_ids_len", ctypes.c_size_t),
         ("enable_skill_management_bridge", ctypes.c_uint8),
+        ("default_text_encoding", ctypes.c_char_p),
+        ("disable_managed_io_compat", ctypes.c_uint8),
     ]
 
 
@@ -381,6 +383,8 @@ def main() -> None:
     host.ignored_skill_ids = None
     host.ignored_skill_ids_len = 0
     host.enable_skill_management_bridge = 0
+    host.default_text_encoding = None
+    host.disable_managed_io_compat = 0
 
     options = FfiLuaEngineOptions(
         pool=FfiLuaVmPoolConfig(min_size=1, max_size=1, idle_ttl_secs=30),

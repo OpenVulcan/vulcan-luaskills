@@ -2984,39 +2984,13 @@ fn parse_sqlite_param(value: &Value, field_name: &str) -> Result<HostSqliteParam
     }
 }
 
-/// Parse legacy `params_json` text, allowing scalar arrays only.
-/// 解析 legacy `params_json` 字符串，只允许标量数组。
-fn parse_legacy_params_json_text(params_json: &str) -> Result<Vec<HostSqliteParamValue>, String> {
-    if params_json.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let parsed: Value = serde_json::from_str(params_json).map_err(|error| {
-        format!(
-            "params_json must be a JSON array of scalar values: {}",
-            error
-        )
-    })?;
-    let items = parsed
-        .as_array()
-        .ok_or_else(|| "params_json must be a JSON array of scalar values".to_string())?;
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| parse_scalar_sqlite_param(item, &format!("params_json[{}]", index)))
-        .collect()
-}
-
 /// Parse the parameter list for a single SQL request from the unified input object.
 /// 从统一输入对象中解析单条 SQL 的参数列表。
 fn parse_single_sql_params(input: &Value) -> Result<Vec<HostSqliteParamValue>, String> {
-    let params_json = input
-        .get("params_json")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    if input.get("params_json").is_some() {
+        return Err("params_json is no longer supported; use params".to_string());
+    }
     if let Some(params_value) = input.get("params") {
-        if !params_json.trim().is_empty() {
-            return Err("provide either params or params_json, but not both".to_string());
-        }
         let params_array = params_value
             .as_array()
             .ok_or_else(|| "params must be an array".to_string())?;
@@ -3026,7 +3000,7 @@ fn parse_single_sql_params(input: &Value) -> Result<Vec<HostSqliteParamValue>, S
             .map(|(index, item)| parse_sqlite_param(item, &format!("params[{}]", index)))
             .collect();
     }
-    parse_legacy_params_json_text(params_json)
+    Ok(Vec::new())
 }
 
 /// Parse the parameter matrix for batch SQL from the unified input object.
@@ -3055,6 +3029,25 @@ fn parse_batch_sql_params(input: &Value) -> Result<Vec<Vec<HostSqliteParamValue>
                 .collect()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_single_sql_params;
+    use serde_json::json;
+
+    /// Verify legacy params_json payloads are rejected in favor of formal params arrays.
+    /// 验证旧版 params_json 载荷会被拒绝，并要求改用正式 params 数组。
+    #[test]
+    fn parse_single_sql_params_rejects_legacy_params_json() {
+        let error = match parse_single_sql_params(&json!({
+            "params_json": "[1, 2, 3]"
+        })) {
+            Ok(_) => panic!("legacy params_json input should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "params_json is no longer supported; use params");
+    }
 }
 
 /// Ensure that a required string field exists in the JSON request.

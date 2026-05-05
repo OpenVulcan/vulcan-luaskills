@@ -125,6 +125,8 @@ func main() {
 		ignored_skill_ids:                nil,
 		ignored_skill_ids_len:            0,
 		enable_skill_management_bridge:   0,
+		default_text_encoding:            nil,
+		disable_managed_io_compat:        0,
 	}
 	defer C.free(unsafe.Pointer(host.temp_dir))
 	defer C.free(unsafe.Pointer(host.resources_dir))

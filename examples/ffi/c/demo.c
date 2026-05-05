@@ -295,7 +295,9 @@ static void run_standard_ffi_demo(void) {
         .reserved_entry_names_len = 0,
         .ignored_skill_ids = NULL,
         .ignored_skill_ids_len = 0,
-        .enable_skill_management_bridge = 0
+        .enable_skill_management_bridge = 0,
+        .default_text_encoding = NULL,
+        .disable_managed_io_compat = 0
     };
     FfiLuaEngineOptions engine_options = {
         .pool = {

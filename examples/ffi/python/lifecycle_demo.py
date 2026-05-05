@@ -115,18 +115,20 @@ def main() -> None:
         ctypes.POINTER(ctypes.POINTER(FfiRuntimeInvocationResult)),
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.luaskills_ffi_disable_skill.argtypes = [
+    library.luaskills_ffi_system_disable_skill.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiRuntimeSkillRoot),
         ctypes.c_size_t,
+        ctypes.c_int32,
         ctypes.c_char_p,
         ctypes.c_char_p,
         ctypes.POINTER(FfiOwnedBuffer),
     ]
-    library.luaskills_ffi_enable_skill.argtypes = [
+    library.luaskills_ffi_system_enable_skill.argtypes = [
         ctypes.c_uint64,
         ctypes.POINTER(FfiRuntimeSkillRoot),
         ctypes.c_size_t,
+        ctypes.c_int32,
         ctypes.c_char_p,
         ctypes.POINTER(FfiOwnedBuffer),
     ]
@@ -177,6 +179,8 @@ def main() -> None:
     host.ignored_skill_ids = None
     host.ignored_skill_ids_len = 0
     host.enable_skill_management_bridge = 0
+    host.default_text_encoding = None
+    host.disable_managed_io_compat = 0
 
     options = FfiLuaEngineOptions(
         pool=FfiLuaVmPoolConfig(min_size=1, max_size=1, idle_ttl_secs=30),
@@ -219,10 +223,11 @@ def main() -> None:
 
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.luaskills_ffi_disable_skill(
+        library.luaskills_ffi_system_disable_skill(
             engine_id.value,
             skill_roots,
             len(skill_roots),
+            LUASKILLS_SKILL_AUTHORITY_SYSTEM,
             b"demo-standard-ffi-skill",
             b"maintenance window",
             ctypes.byref(error_buffer),
@@ -255,10 +260,11 @@ def main() -> None:
 
     error_buffer = FfiOwnedBuffer()
     must_ok(
-        library.luaskills_ffi_enable_skill(
+        library.luaskills_ffi_system_enable_skill(
             engine_id.value,
             skill_roots,
             len(skill_roots),
+            LUASKILLS_SKILL_AUTHORITY_SYSTEM,
             b"demo-standard-ffi-skill",
             ctypes.byref(error_buffer),
         ),

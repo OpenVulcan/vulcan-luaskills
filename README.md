@@ -216,6 +216,18 @@ examples/
   ffi/           C, Python, Go, TypeScript, runtime fixture, and provider demos.
 ```
 
+## Ecosystem Release Order
+
+For one unified ecosystem release such as `0.3.0`, publish in this order:
+
+1. Release `LuaSkills/luaskills` first, including the crate version and GitHub runtime assets under tag `v0.3.0`.
+2. Publish the TypeScript SDK `@luaskills/sdk@0.3.0`.
+3. Publish the Python SDK `luaskills-sdk==0.3.0`.
+4. Publish the Go SDK module tag `v0.3.0`.
+5. Run the **Examples Release** workflow for each SDK only after its package or module tag is already visible upstream.
+
+This order keeps every installer and examples workflow pointed at already-published runtime assets and SDK packages.
+
 ## License
 
 MIT

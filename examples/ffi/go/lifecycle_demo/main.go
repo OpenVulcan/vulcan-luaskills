@@ -169,6 +169,8 @@ func main() {
 		ignored_skill_ids:                nil,
 		ignored_skill_ids_len:            0,
 		enable_skill_management_bridge:   0,
+		default_text_encoding:            nil,
+		disable_managed_io_compat:        0,
 	}
 	defer C.free(unsafe.Pointer(host.temp_dir))
 	defer C.free(unsafe.Pointer(host.resources_dir))
@@ -226,10 +228,11 @@ func main() {
 	defer C.free(unsafe.Pointer(disableReason))
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.luaskills_ffi_disable_skill(
+		C.luaskills_ffi_system_disable_skill(
 			engineID,
 			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
 			C.size_t(len(skillRoots)),
+			C.LUASKILLS_SKILL_AUTHORITY_SYSTEM,
 			skillID,
 			disableReason,
 			&errorOut,
@@ -261,10 +264,11 @@ func main() {
 
 	errorOut = C.FfiOwnedBuffer{}
 	mustOK(
-		C.luaskills_ffi_enable_skill(
+		C.luaskills_ffi_system_enable_skill(
 			engineID,
 			(*C.FfiRuntimeSkillRoot)(unsafe.Pointer(&skillRoots[0])),
 			C.size_t(len(skillRoots)),
+			C.LUASKILLS_SKILL_AUTHORITY_SYSTEM,
 			skillID,
 			&errorOut,
 		),

@@ -128,22 +128,10 @@ Free one previously created LuaSkills engine handle.
 FfiOwnedBuffer luaskills_ffi_engine_free_json(FfiBorrowedBuffer input_json);
 
 /*
-Load skills from legacy directory-style roots.
-从旧目录风格根参数加载技能。
-*/
-FfiOwnedBuffer luaskills_ffi_load_from_dirs_json(FfiBorrowedBuffer input_json);
-
-/*
 Load skills from one ordered root chain.
 从一条有序根链加载技能。
 */
 FfiOwnedBuffer luaskills_ffi_load_from_roots_json(FfiBorrowedBuffer input_json);
-
-/*
-Reload skills from legacy directory-style roots.
-从旧目录风格根参数重载技能。
-*/
-FfiOwnedBuffer luaskills_ffi_reload_from_dirs_json(FfiBorrowedBuffer input_json);
 
 /*
 Reload skills from one ordered root chain.
@@ -224,22 +212,70 @@ Execute arbitrary Lua code using one JSON request.
 FfiOwnedBuffer luaskills_ffi_run_lua_json(FfiBorrowedBuffer input_json);
 
 /*
-Disable one skill through legacy directory-style roots.
-通过旧目录风格根参数停用单个技能。
+Create one persistent runtime session using one JSON request.
+使用一段 JSON 请求创建单个持久运行时会话。
 */
-FfiOwnedBuffer luaskills_ffi_disable_skill_in_dirs_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_runtime_session_create_json(FfiBorrowedBuffer input_json);
+
+/*
+Evaluate Lua code inside one persistent runtime session using one JSON request.
+使用一段 JSON 请求在单个持久运行时会话中执行 Lua 代码。
+*/
+FfiOwnedBuffer luaskills_ffi_runtime_session_eval_json(FfiBorrowedBuffer input_json);
+
+/*
+Return one persistent runtime session status using one JSON request.
+使用一段 JSON 请求返回单个持久运行时会话状态。
+*/
+FfiOwnedBuffer luaskills_ffi_runtime_session_status_json(FfiBorrowedBuffer input_json);
+
+/*
+List active persistent runtime sessions using one JSON request.
+使用一段 JSON 请求列出活跃持久运行时会话。
+*/
+FfiOwnedBuffer luaskills_ffi_runtime_session_list_json(FfiBorrowedBuffer input_json);
+
+/*
+Close one persistent runtime session using one JSON request.
+使用一段 JSON 请求关闭单个持久运行时会话。
+*/
+FfiOwnedBuffer luaskills_ffi_runtime_session_close_json(FfiBorrowedBuffer input_json);
+
+/*
+Create one persistent runtime session using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求创建单个持久运行时会话。
+*/
+FfiOwnedBuffer luaskills_ffi_system_runtime_session_create_json(FfiBorrowedBuffer input_json);
+
+/*
+Evaluate Lua code inside one persistent runtime session using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求在单个持久运行时会话中执行 Lua 代码。
+*/
+FfiOwnedBuffer luaskills_ffi_system_runtime_session_eval_json(FfiBorrowedBuffer input_json);
+
+/*
+Return one persistent runtime session status using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求返回单个持久运行时会话状态。
+*/
+FfiOwnedBuffer luaskills_ffi_system_runtime_session_status_json(FfiBorrowedBuffer input_json);
+
+/*
+List active persistent runtime sessions using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求列出活跃持久运行时会话。
+*/
+FfiOwnedBuffer luaskills_ffi_system_runtime_session_list_json(FfiBorrowedBuffer input_json);
+
+/*
+Close one persistent runtime session using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求关闭单个持久运行时会话。
+*/
+FfiOwnedBuffer luaskills_ffi_system_runtime_session_close_json(FfiBorrowedBuffer input_json);
 
 /*
 Disable one skill through one ordered root chain.
 通过一条有序根链停用单个技能。
 */
 FfiOwnedBuffer luaskills_ffi_disable_skill_json(FfiBorrowedBuffer input_json);
-
-/*
-Disable one skill through legacy directory-style roots with host-injected system authority.
-通过旧目录风格根参数和宿主注入的 system 权限停用单个技能。
-*/
-FfiOwnedBuffer luaskills_ffi_system_disable_skill_in_dirs_json(FfiBorrowedBuffer input_json);
 
 /*
 Disable one skill through one ordered root chain with host-injected system authority.

@@ -731,7 +731,7 @@ function Run-With-LocalPath {
 # Pre-built C deps from GitHub Releases
 # ============================================================
 
-$ReleaseTag = "v0.2.2"  # matches the workflow release tag
+$ReleaseTag = "v0.3.0"  # matches the workflow release tag
 
 function Download-Prebuilt-Deps {
     $Platform = Get-PrebuiltDepsPlatform

@@ -231,6 +231,12 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Whether Lua may use `vulcan.runtime.skills.*` management bridges.
     /// Lua 是否允许使用 `vulcan.runtime.skills.*` 管理桥接。
     pub enable_skill_management_bridge: u8,
+    /// Optional default text encoding label for managed IO and process APIs.
+    /// 托管 IO 与进程 API 使用的可选默认文本编码标签。
+    pub default_text_encoding: *const c_char,
+    /// Whether luaexec and runtime sessions must keep Lua's native `io` table.
+    /// luaexec 与持久运行时会话是否必须保留 Lua 原生 `io` 表。
+    pub disable_managed_io_compat: u8,
 }
 
 /// C ABI JSON provider callback used by non-Rust hosts to bridge database requests.
@@ -940,6 +946,10 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             value.github_api_base_url,
             "github_api_base_url",
         )?,
+        default_text_encoding: parse_optional_string(
+            value.default_text_encoding,
+            "default_text_encoding",
+        )?,
         sqlite_library_path: parse_optional_string(
             value.sqlite_library_path,
             "sqlite_library_path",
@@ -997,6 +1007,7 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
         )?,
         capabilities: LuaRuntimeCapabilityOptions {
             enable_skill_management_bridge: value.enable_skill_management_bridge != 0,
+            enable_managed_io_compat: value.disable_managed_io_compat == 0,
         },
     })
 }
@@ -2394,34 +2405,6 @@ pub unsafe extern "C" fn luaskills_ffi_engine_free(
     }
 }
 
-/// Load skills from one legacy directory pair through the standard C ABI surface.
-/// 通过标准 C ABI 接口从一组旧目录风格根参数加载技能。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_load_from_dirs(
-    engine_id: u64,
-    base_dir: *const c_char,
-    override_dir: *const c_char,
-    error_out: *mut FfiOwnedBuffer,
-) -> i32 {
-    clear_error_out(error_out);
-    let base_dir = match parse_required_string(base_dir, "base_dir") {
-        Ok(value) => PathBuf::from(value),
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let override_dir = match parse_optional_string(override_dir, "override_dir") {
-        Ok(value) => value.map(PathBuf::from),
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    match with_engine_mut(engine_id, |engine| {
-        engine
-            .load_from_dirs(&base_dir, override_dir.as_deref())
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(()) => ffi_ok_status(error_out),
-        Err(error) => ffi_error_status(error_out, error),
-    }
-}
-
 /// Load skills from one ordered root chain through the standard C ABI surface.
 /// 通过标准 C ABI 接口从一条有序根链加载技能。
 #[unsafe(no_mangle)]
@@ -2439,34 +2422,6 @@ pub unsafe extern "C" fn luaskills_ffi_load_from_roots(
     match with_engine_mut(engine_id, |engine| {
         engine
             .load_from_roots(&skill_roots)
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(()) => ffi_ok_status(error_out),
-        Err(error) => ffi_error_status(error_out, error),
-    }
-}
-
-/// Reload skills from one legacy directory pair through the standard C ABI surface.
-/// 通过标准 C ABI 接口从一组旧目录风格根参数重载技能。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_reload_from_dirs(
-    engine_id: u64,
-    base_dir: *const c_char,
-    override_dir: *const c_char,
-    error_out: *mut FfiOwnedBuffer,
-) -> i32 {
-    clear_error_out(error_out);
-    let base_dir = match parse_required_string(base_dir, "base_dir") {
-        Ok(value) => PathBuf::from(value),
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let override_dir = match parse_optional_string(override_dir, "override_dir") {
-        Ok(value) => value.map(PathBuf::from),
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    match with_engine_mut(engine_id, |engine| {
-        engine
-            .reload_from_dirs(&base_dir, override_dir.as_deref())
             .map_err(|error| error.to_string())
     }) {
         Ok(()) => ffi_ok_status(error_out),
@@ -2962,49 +2917,6 @@ pub unsafe extern "C" fn luaskills_ffi_run_lua(
     }
 }
 
-/// Disable one skill through legacy directory-style roots via the standard C ABI surface.
-/// 通过标准 C ABI 接口按旧目录风格根参数停用单个技能。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_disable_skill_in_dirs(
-    engine_id: u64,
-    base_dir: *const c_char,
-    override_dir: *const c_char,
-    skill_id: *const c_char,
-    reason: *const c_char,
-    error_out: *mut FfiOwnedBuffer,
-) -> i32 {
-    clear_error_out(error_out);
-    let base_dir = match parse_required_string(base_dir, "base_dir") {
-        Ok(value) => PathBuf::from(value),
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let override_dir = match parse_optional_string(override_dir, "override_dir") {
-        Ok(value) => value.map(PathBuf::from),
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let skill_id = match parse_required_string(skill_id, "skill_id") {
-        Ok(skill_id) => skill_id,
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let reason = match parse_optional_string(reason, "reason") {
-        Ok(reason) => reason,
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    match with_engine_mut(engine_id, |engine| {
-        engine
-            .disable_skill(
-                &base_dir,
-                override_dir.as_deref(),
-                &skill_id,
-                reason.as_deref(),
-            )
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(()) => ffi_ok_status(error_out),
-        Err(error) => ffi_error_status(error_out, error),
-    }
-}
-
 /// Disable one skill through one ordered root chain via the standard C ABI surface.
 /// 通过标准 C ABI 接口按一条有序根链停用单个技能。
 #[unsafe(no_mangle)]
@@ -3032,55 +2944,6 @@ pub unsafe extern "C" fn luaskills_ffi_disable_skill(
     match with_engine_mut(engine_id, |engine| {
         engine
             .disable_skill_in_roots(&skill_roots, &skill_id, reason.as_deref())
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(()) => ffi_ok_status(error_out),
-        Err(error) => ffi_error_status(error_out, error),
-    }
-}
-
-/// Disable one skill on the system plane through legacy directory-style roots.
-/// 通过标准 C ABI 接口按旧目录风格根参数在 system 平面停用单个技能。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_system_disable_skill_in_dirs(
-    engine_id: u64,
-    base_dir: *const c_char,
-    override_dir: *const c_char,
-    authority: i32,
-    skill_id: *const c_char,
-    reason: *const c_char,
-    error_out: *mut FfiOwnedBuffer,
-) -> i32 {
-    clear_error_out(error_out);
-    let base_dir = match parse_required_string(base_dir, "base_dir") {
-        Ok(value) => PathBuf::from(value),
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let override_dir = match parse_optional_string(override_dir, "override_dir") {
-        Ok(value) => value.map(PathBuf::from),
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let skill_id = match parse_required_string(skill_id, "skill_id") {
-        Ok(skill_id) => skill_id,
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let reason = match parse_optional_string(reason, "reason") {
-        Ok(reason) => reason,
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    let authority = match parse_skill_management_authority(authority, "authority") {
-        Ok(authority) => authority,
-        Err(error) => return ffi_error_status(error_out, error),
-    };
-    match with_engine_mut(engine_id, |engine| {
-        engine
-            .system_disable_skill(
-                &base_dir,
-                override_dir.as_deref(),
-                authority,
-                &skill_id,
-                reason.as_deref(),
-            )
             .map_err(|error| error.to_string())
     }) {
         Ok(()) => ffi_ok_status(error_out),
@@ -3920,6 +3783,8 @@ mod tests {
             ignored_skill_ids: ptr::null(),
             ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
+            default_text_encoding: ptr::null(),
+            disable_managed_io_compat: 0,
         };
         let engine_options = FfiLuaEngineOptions {
             pool: FfiLuaVmPoolConfig {
@@ -4234,6 +4099,8 @@ mod tests {
             ignored_skill_ids: ptr::null(),
             ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
+            default_text_encoding: ptr::null(),
+            disable_managed_io_compat: 0,
         };
         let engine_options = FfiLuaEngineOptions {
             pool: FfiLuaVmPoolConfig {
@@ -4390,6 +4257,8 @@ mod tests {
             ignored_skill_ids: ptr::null(),
             ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
+            default_text_encoding: ptr::null(),
+            disable_managed_io_compat: 0,
         };
         let engine_options = FfiLuaEngineOptions {
             pool: FfiLuaVmPoolConfig {
@@ -4544,6 +4413,8 @@ mod tests {
             ignored_skill_ids: ptr::null(),
             ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
+            default_text_encoding: ptr::null(),
+            disable_managed_io_compat: 0,
         };
         let engine_options = FfiLuaEngineOptions {
             pool: FfiLuaVmPoolConfig {
@@ -4794,6 +4665,8 @@ mod tests {
             ignored_skill_ids: ptr::null(),
             ignored_skill_ids_len: 0,
             enable_skill_management_bridge: 0,
+            default_text_encoding: ptr::null(),
+            disable_managed_io_compat: 0,
         };
         let engine_options = FfiLuaEngineOptions {
             pool: FfiLuaVmPoolConfig {

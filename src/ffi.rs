@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CString, c_char};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -107,49 +106,6 @@ struct EngineRootsJsonRequest {
     /// Ordered skill roots used by the current operation.
     /// 当前操作使用的有序技能根链。
     skill_roots: Vec<RuntimeSkillRoot>,
-}
-
-/// One JSON request that targets one engine together with directory-style roots.
-/// 同时携带单个引擎与目录风格根参数的 JSON 请求。
-#[derive(Debug, Serialize, Deserialize)]
-struct EngineDirsJsonRequest {
-    /// Stable numeric FFI handle id of the target engine.
-    /// 目标引擎的稳定数值 FFI 句柄标识。
-    engine_id: u64,
-    /// Base skill directory used by the legacy direct integration API.
-    /// 旧直接集成 API 使用的基础技能目录。
-    base_dir: PathBuf,
-    /// Optional override skill directory used by the legacy direct integration API.
-    /// 旧直接集成 API 使用的可选覆盖技能目录。
-    #[serde(default)]
-    override_dir: Option<PathBuf>,
-}
-
-/// One JSON request used to disable one skill through legacy directory-style roots.
-/// 用于通过旧目录风格根参数停用单个技能的 JSON 请求。
-#[derive(Debug, Serialize, Deserialize)]
-struct DisableSkillDirsJsonRequest {
-    /// Stable numeric FFI handle id of the target engine.
-    /// 目标引擎的稳定数值 FFI 句柄标识。
-    engine_id: u64,
-    /// Base skill directory used by the legacy direct integration API.
-    /// 旧直接集成 API 使用的基础技能目录。
-    base_dir: PathBuf,
-    /// Optional override skill directory used by the legacy direct integration API.
-    /// 旧直接集成 API 使用的可选覆盖技能目录。
-    #[serde(default)]
-    override_dir: Option<PathBuf>,
-    /// Stable target skill identifier.
-    /// 稳定的目标技能标识符。
-    skill_id: String,
-    /// Optional disable reason persisted into the skill state.
-    /// 持久化到技能状态中的可选停用原因。
-    #[serde(default)]
-    reason: Option<String>,
-    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
-    /// system JSON 入口必填、普通入口忽略的可选权限等级。
-    #[serde(default)]
-    authority: Option<SkillManagementAuthority>,
 }
 
 /// One JSON request used to render help detail for one skill flow.
@@ -369,6 +325,106 @@ struct RunLuaJsonRequest {
     invocation_context: Option<LuaInvocationContext>,
 }
 
+/// One JSON request used to create one persistent runtime session.
+/// 用于创建单个持久运行时会话的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+struct RuntimeSessionCreateJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    engine_id: u64,
+    /// Stable session identifier supplied by the host.
+    /// 宿主提供的稳定会话标识。
+    sid: String,
+    /// Requested lease TTL in seconds.
+    /// 请求的租约有效期秒数。
+    #[serde(default = "default_ffi_runtime_session_ttl_sec")]
+    ttl_sec: u64,
+    /// Whether an existing session with the same SID should be replaced.
+    /// 是否替换同一 SID 下已经存在的会话。
+    #[serde(default)]
+    replace: bool,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
+}
+
+/// One JSON request used to evaluate code in a persistent runtime session.
+/// 用于在持久运行时会话中执行代码的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+struct RuntimeSessionEvalJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    engine_id: u64,
+    /// Opaque lease identifier returned by create.
+    /// create 返回的不透明租约标识。
+    lease_id: String,
+    /// Optional stable session identifier echoed by the host wrapper.
+    /// 由宿主包装层回传的可选稳定会话标识。
+    #[serde(default)]
+    sid: Option<String>,
+    /// Optional SID-local generation echoed by the host wrapper.
+    /// 由宿主包装层回传的可选 SID 内 generation。
+    #[serde(default)]
+    generation: Option<u64>,
+    /// Inline Lua source code executed by the persistent runtime VM.
+    /// 由持久运行时 VM 执行的内联 Lua 源码。
+    code: String,
+    /// JSON arguments exposed to Lua as `args`.
+    /// 作为 `args` 暴露给 Lua 的 JSON 参数。
+    #[serde(default = "default_json_object")]
+    args: Value,
+    /// Maximum execution time in milliseconds.
+    /// 最大执行时长（毫秒）。
+    #[serde(default = "default_ffi_runtime_session_timeout_ms")]
+    timeout_ms: u64,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
+}
+
+/// One JSON request used to address a persistent runtime session lease.
+/// 用于定位持久运行时会话租约的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+struct RuntimeSessionLeaseJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    engine_id: u64,
+    /// Opaque lease identifier returned by create.
+    /// create 返回的不透明租约标识。
+    lease_id: String,
+    /// Optional stable session identifier echoed by the host wrapper.
+    /// 由宿主包装层回传的可选稳定会话标识。
+    #[serde(default)]
+    sid: Option<String>,
+    /// Optional SID-local generation echoed by the host wrapper.
+    /// 由宿主包装层回传的可选 SID 内 generation。
+    #[serde(default)]
+    generation: Option<u64>,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
+}
+
+/// One JSON request used to list active persistent runtime sessions.
+/// 用于列出活跃持久运行时会话的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+struct RuntimeSessionListJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    engine_id: u64,
+    /// Optional stable session identifier used to filter the active lease list.
+    /// 用于过滤活跃租约列表的可选稳定会话标识。
+    #[serde(default)]
+    sid: Option<String>,
+    /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
+    /// system JSON 入口必填、普通入口忽略的可选权限等级。
+    #[serde(default)]
+    authority: Option<SkillManagementAuthority>,
+}
+
 /// One JSON request used to disable one skill in one ordered root chain.
 /// 用于在一条有序根链中停用单个技能的 JSON 请求。
 #[derive(Debug, Serialize, Deserialize)]
@@ -527,6 +583,28 @@ fn default_json_object() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
+/// Return the default persistent runtime session TTL in seconds for FFI requests.
+/// 返回 FFI 请求使用的默认持久运行时会话 TTL 秒数。
+fn default_ffi_runtime_session_ttl_sec() -> u64 {
+    600
+}
+
+/// Return the default persistent runtime session eval timeout in milliseconds.
+/// 返回默认的持久运行时会话执行超时时长（毫秒）。
+fn default_ffi_runtime_session_timeout_ms() -> u64 {
+    60_000
+}
+
+/// Parse one runtime session JSON payload returned by the engine.
+/// 解析引擎返回的单个运行时会话 JSON 载荷。
+fn parse_runtime_session_engine_payload(
+    payload: String,
+    function_name: &str,
+) -> Result<Value, String> {
+    serde_json::from_str(&payload)
+        .map_err(|error| format!("{function_name} received invalid engine JSON: {error}"))
+}
+
 /// Require one host-injected authority value for an authority-gated JSON FFI entrypoint.
 /// 为单个受权限保护的 JSON FFI 入口要求宿主注入权限值。
 fn require_json_authority(
@@ -668,9 +746,7 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_describe",
         "luaskills_ffi_engine_new",
         "luaskills_ffi_engine_free",
-        "luaskills_ffi_load_from_dirs",
         "luaskills_ffi_load_from_roots",
-        "luaskills_ffi_reload_from_dirs",
         "luaskills_ffi_reload_from_roots",
         "luaskills_ffi_list_entries",
         "luaskills_ffi_list_skill_help",
@@ -684,9 +760,7 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_skill_config_delete",
         "luaskills_ffi_call_skill",
         "luaskills_ffi_run_lua",
-        "luaskills_ffi_disable_skill_in_dirs",
         "luaskills_ffi_disable_skill",
-        "luaskills_ffi_system_disable_skill_in_dirs",
         "luaskills_ffi_system_disable_skill",
         "luaskills_ffi_enable_skill",
         "luaskills_ffi_system_enable_skill",
@@ -708,9 +782,7 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_describe_json",
         "luaskills_ffi_engine_new_json",
         "luaskills_ffi_engine_free_json",
-        "luaskills_ffi_load_from_dirs_json",
         "luaskills_ffi_load_from_roots_json",
-        "luaskills_ffi_reload_from_dirs_json",
         "luaskills_ffi_reload_from_roots_json",
         "luaskills_ffi_list_entries_json",
         "luaskills_ffi_list_skill_help_json",
@@ -724,9 +796,17 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_skill_config_delete_json",
         "luaskills_ffi_call_skill_json",
         "luaskills_ffi_run_lua_json",
-        "luaskills_ffi_disable_skill_in_dirs_json",
+        "luaskills_ffi_runtime_session_create_json",
+        "luaskills_ffi_runtime_session_eval_json",
+        "luaskills_ffi_runtime_session_status_json",
+        "luaskills_ffi_runtime_session_list_json",
+        "luaskills_ffi_runtime_session_close_json",
+        "luaskills_ffi_system_runtime_session_create_json",
+        "luaskills_ffi_system_runtime_session_eval_json",
+        "luaskills_ffi_system_runtime_session_status_json",
+        "luaskills_ffi_system_runtime_session_list_json",
+        "luaskills_ffi_system_runtime_session_close_json",
         "luaskills_ffi_disable_skill_json",
-        "luaskills_ffi_system_disable_skill_in_dirs_json",
         "luaskills_ffi_system_disable_skill_json",
         "luaskills_ffi_enable_skill_json",
         "luaskills_ffi_system_enable_skill_json",
@@ -833,29 +913,6 @@ pub unsafe extern "C" fn luaskills_ffi_engine_free_json(
     ffi_ok(json!({ "freed": true }))
 }
 
-/// Load skills from legacy directory-style roots through the JSON FFI surface.
-/// 通过 JSON FFI 入口按旧目录风格根参数加载技能。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_load_from_dirs_json(
-    input_json: FfiBorrowedBuffer,
-) -> FfiOwnedBuffer {
-    let request = match decode_json_request::<EngineDirsJsonRequest>(
-        input_json,
-        "luaskills_ffi_load_from_dirs_json",
-    ) {
-        Ok(request) => request,
-        Err(error) => return ffi_error(error),
-    };
-    match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .load_from_dirs(&request.base_dir, request.override_dir.as_deref())
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(()) => ffi_ok(json!({ "loaded": true })),
-        Err(error) => ffi_error(error),
-    }
-}
-
 /// Load skills from one ordered root chain through the JSON FFI surface.
 /// 通过 JSON FFI 入口按有序根链加载技能。
 #[unsafe(no_mangle)]
@@ -875,29 +932,6 @@ pub unsafe extern "C" fn luaskills_ffi_load_from_roots_json(
             .map_err(|error| error.to_string())
     }) {
         Ok(()) => ffi_ok(json!({ "loaded": true })),
-        Err(error) => ffi_error(error),
-    }
-}
-
-/// Reload skills from legacy directory-style roots through the JSON FFI surface.
-/// 通过 JSON FFI 入口按旧目录风格根参数重载技能。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_reload_from_dirs_json(
-    input_json: FfiBorrowedBuffer,
-) -> FfiOwnedBuffer {
-    let request = match decode_json_request::<EngineDirsJsonRequest>(
-        input_json,
-        "luaskills_ffi_reload_from_dirs_json",
-    ) {
-        Ok(request) => request,
-        Err(error) => return ffi_error(error),
-    };
-    match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .reload_from_dirs(&request.base_dir, request.override_dir.as_deref())
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(()) => ffi_ok(json!({ "reloaded": true })),
         Err(error) => ffi_error(error),
     }
 }
@@ -1254,30 +1288,320 @@ pub unsafe extern "C" fn luaskills_ffi_run_lua_json(
     }
 }
 
-/// Disable one skill through the ordinary skills plane via the JSON FFI surface.
-/// 通过 JSON FFI 入口在普通 skills 平面停用单个技能。
+/// Create one persistent runtime session through the JSON FFI surface.
+/// 通过 JSON FFI 入口创建单个持久运行时会话。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_disable_skill_in_dirs_json(
+pub unsafe extern "C" fn luaskills_ffi_runtime_session_create_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
-    let request = match decode_json_request::<DisableSkillDirsJsonRequest>(
+    let request = match decode_json_request::<RuntimeSessionCreateJsonRequest>(
         input_json,
-        "luaskills_ffi_disable_skill_in_dirs_json",
+        "luaskills_ffi_runtime_session_create_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
-    match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .disable_skill(
-                &request.base_dir,
-                request.override_dir.as_deref(),
-                &request.skill_id,
-                request.reason.as_deref(),
-            )
-            .map_err(|error| error.to_string())
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({
+            "sid": request.sid,
+            "ttl_sec": request.ttl_sec,
+            "replace": request.replace
+        });
+        let response = engine.create_runtime_session_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_create_json")
     }) {
-        Ok(()) => ffi_ok(json!({ "disabled": true })),
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Evaluate code inside one persistent runtime session through the JSON FFI surface.
+/// 通过 JSON FFI 入口在单个持久运行时会话中执行代码。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_session_eval_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionEvalJsonRequest>(
+        input_json,
+        "luaskills_ffi_runtime_session_eval_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({
+            "lease_id": request.lease_id,
+            "sid": request.sid,
+            "generation": request.generation,
+            "code": request.code,
+            "args": request.args,
+            "timeout_ms": request.timeout_ms
+        });
+        let response = engine.eval_runtime_session_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_eval_json")
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Return one persistent runtime session status through the JSON FFI surface.
+/// 通过 JSON FFI 入口返回单个持久运行时会话状态。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_session_status_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionLeaseJsonRequest>(
+        input_json,
+        "luaskills_ffi_runtime_session_status_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({
+            "lease_id": request.lease_id,
+            "sid": request.sid,
+            "generation": request.generation
+        });
+        let response = engine.runtime_session_status_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_status_json")
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// List active persistent runtime sessions through the JSON FFI surface.
+/// 通过 JSON FFI 入口列出活跃持久运行时会话。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_session_list_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionListJsonRequest>(
+        input_json,
+        "luaskills_ffi_runtime_session_list_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({ "sid": request.sid });
+        let response = engine.list_runtime_sessions_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_list_json")
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Close one persistent runtime session through the JSON FFI surface.
+/// 通过 JSON FFI 入口关闭单个持久运行时会话。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_session_close_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionLeaseJsonRequest>(
+        input_json,
+        "luaskills_ffi_runtime_session_close_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({
+            "lease_id": request.lease_id,
+            "sid": request.sid,
+            "generation": request.generation
+        });
+        let response = engine.close_runtime_session_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_close_json")
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Create one persistent runtime session through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口创建单个持久运行时会话。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_create_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionCreateJsonRequest>(
+        input_json,
+        "luaskills_ffi_system_runtime_session_create_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    let _authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_runtime_session_create_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({
+            "sid": request.sid,
+            "ttl_sec": request.ttl_sec,
+            "replace": request.replace
+        });
+        let response = engine.create_runtime_session_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(
+            response,
+            "luaskills_ffi_system_runtime_session_create_json",
+        )
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Evaluate code inside one persistent runtime session through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口在单个持久运行时会话中执行代码。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_eval_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionEvalJsonRequest>(
+        input_json,
+        "luaskills_ffi_system_runtime_session_eval_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    let _authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_runtime_session_eval_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({
+            "lease_id": request.lease_id,
+            "sid": request.sid,
+            "generation": request.generation,
+            "code": request.code,
+            "args": request.args,
+            "timeout_ms": request.timeout_ms
+        });
+        let response = engine.eval_runtime_session_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(
+            response,
+            "luaskills_ffi_system_runtime_session_eval_json",
+        )
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Return one persistent runtime session status through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口返回单个持久运行时会话状态。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_status_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionLeaseJsonRequest>(
+        input_json,
+        "luaskills_ffi_system_runtime_session_status_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    let _authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_runtime_session_status_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({
+            "lease_id": request.lease_id,
+            "sid": request.sid,
+            "generation": request.generation
+        });
+        let response = engine.runtime_session_status_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(
+            response,
+            "luaskills_ffi_system_runtime_session_status_json",
+        )
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// List active persistent runtime sessions through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口列出活跃持久运行时会话。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_list_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionListJsonRequest>(
+        input_json,
+        "luaskills_ffi_system_runtime_session_list_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    let _authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_runtime_session_list_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({ "sid": request.sid });
+        let response = engine.list_runtime_sessions_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(
+            response,
+            "luaskills_ffi_system_runtime_session_list_json",
+        )
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Close one persistent runtime session through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口关闭单个持久运行时会话。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_close_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<RuntimeSessionLeaseJsonRequest>(
+        input_json,
+        "luaskills_ffi_system_runtime_session_close_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    let _authority = match require_json_authority(
+        request.authority,
+        "luaskills_ffi_system_runtime_session_close_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
+    match with_engine(request.engine_id, |engine| {
+        let payload = json!({
+            "lease_id": request.lease_id,
+            "sid": request.sid,
+            "generation": request.generation
+        });
+        let response = engine.close_runtime_session_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(
+            response,
+            "luaskills_ffi_system_runtime_session_close_json",
+        )
+    }) {
+        Ok(result) => ffi_ok::<Value>(result),
         Err(error) => ffi_error(error),
     }
 }
@@ -1299,42 +1623,6 @@ pub unsafe extern "C" fn luaskills_ffi_disable_skill_json(
         engine
             .disable_skill_in_roots(
                 &request.skill_roots,
-                &request.skill_id,
-                request.reason.as_deref(),
-            )
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(()) => ffi_ok(json!({ "disabled": true })),
-        Err(error) => ffi_error(error),
-    }
-}
-
-/// Disable one skill through the system plane via the JSON FFI surface.
-/// 通过 JSON FFI 入口在 system 平面停用单个技能。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_system_disable_skill_in_dirs_json(
-    input_json: FfiBorrowedBuffer,
-) -> FfiOwnedBuffer {
-    let request = match decode_json_request::<DisableSkillDirsJsonRequest>(
-        input_json,
-        "luaskills_ffi_system_disable_skill_in_dirs_json",
-    ) {
-        Ok(request) => request,
-        Err(error) => return ffi_error(error),
-    };
-    let authority = match require_json_authority(
-        request.authority,
-        "luaskills_ffi_system_disable_skill_in_dirs_json",
-    ) {
-        Ok(authority) => authority,
-        Err(error) => return ffi_error(error),
-    };
-    match with_engine_mut(request.engine_id, |engine| {
-        engine
-            .system_disable_skill(
-                &request.base_dir,
-                request.override_dir.as_deref(),
-                authority,
                 &request.skill_id,
                 request.reason.as_deref(),
             )
@@ -1656,13 +1944,18 @@ mod tests {
         EngineHandleJsonResult, EngineIdJsonRequest, EngineNewJsonRequest, FFI_ENGINE_COUNTER,
         FfiEngineSlot, SkillConfigGetJsonRequest, SkillConfigListJsonRequest,
         SkillConfigSetJsonRequest, ffi_engine_registry, luaskills_ffi_call_skill_json,
-        luaskills_ffi_engine_free_json, luaskills_ffi_engine_new_json, luaskills_ffi_is_skill_json,
-        luaskills_ffi_list_entries_json, luaskills_ffi_list_skill_help_json,
-        luaskills_ffi_prompt_argument_completions_json,
+        luaskills_ffi_describe_json, luaskills_ffi_engine_free_json, luaskills_ffi_engine_new_json,
+        luaskills_ffi_is_skill_json, luaskills_ffi_list_entries_json,
+        luaskills_ffi_list_skill_help_json, luaskills_ffi_prompt_argument_completions_json,
         luaskills_ffi_render_skill_help_detail_json, luaskills_ffi_run_lua_json,
+        luaskills_ffi_runtime_session_close_json, luaskills_ffi_runtime_session_create_json,
+        luaskills_ffi_runtime_session_eval_json, luaskills_ffi_runtime_session_list_json,
         luaskills_ffi_skill_config_delete_json, luaskills_ffi_skill_config_get_json,
         luaskills_ffi_skill_config_list_json, luaskills_ffi_skill_config_set_json,
-        luaskills_ffi_skill_name_for_tool_json, with_engine,
+        luaskills_ffi_skill_name_for_tool_json, luaskills_ffi_system_runtime_session_close_json,
+        luaskills_ffi_system_runtime_session_create_json,
+        luaskills_ffi_system_runtime_session_eval_json,
+        luaskills_ffi_system_runtime_session_list_json, with_engine,
     };
     use crate::ffi_standard::{FfiBorrowedBuffer, FfiOwnedBuffer, luaskills_ffi_buffer_free};
     use crate::{
@@ -1740,6 +2033,395 @@ mod tests {
             .expect("lock ffi engine registry")
             .insert(engine_id, FfiEngineSlot::new(engine));
         TestFfiEngineHandle { engine_id }
+    }
+
+    /// Verify runtime session JSON FFI preserves VM state across eval calls.
+    /// 验证运行时会话 JSON FFI 会在多次 eval 调用之间保留 VM 状态。
+    #[test]
+    fn ffi_runtime_session_json_preserves_vm_state() {
+        let _guard = ffi_test_guard();
+        let engine = register_test_engine();
+        let create_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "sid": "ffi-session-test",
+                "ttl_sec": 60
+            })
+            .to_string(),
+        )
+        .expect("create request");
+        let created = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_create_json(
+                borrowed_json_buffer(&create_request),
+            ))
+        };
+        assert_eq!(created["ok"], true);
+        assert_eq!(created["result"]["ok"], true);
+        let lease_id = created["result"]["lease_id"]
+            .as_str()
+            .expect("lease id")
+            .to_string();
+
+        let first_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "lease_id": lease_id,
+                "code": "counter = (counter or 0) + 1; return counter"
+            })
+            .to_string(),
+        )
+        .expect("first eval request");
+        let first = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_eval_json(
+                borrowed_json_buffer(&first_request),
+            ))
+        };
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["result"]["ok"], true);
+        assert_eq!(first["result"]["result"], serde_json::json!(1));
+
+        let second_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "lease_id": lease_id,
+                "code": "counter = (counter or 0) + 1; return counter"
+            })
+            .to_string(),
+        )
+        .expect("second eval request");
+        let second = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_eval_json(
+                borrowed_json_buffer(&second_request),
+            ))
+        };
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["result"]["result"], serde_json::json!(2));
+
+        let close_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "lease_id": lease_id
+            })
+            .to_string(),
+        )
+        .expect("close request");
+        let closed = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_close_json(
+                borrowed_json_buffer(&close_request),
+            ))
+        };
+        assert_eq!(closed["ok"], true);
+        assert_eq!(closed["result"]["closed"], true);
+    }
+
+    /// Verify runtime-session JSON FFI lists active leases and hides closed ones.
+    /// 验证运行时会话 JSON FFI 会列出活跃租约并隐藏已关闭租约。
+    #[test]
+    fn ffi_runtime_session_json_lists_active_leases() {
+        let _guard = ffi_test_guard();
+        let engine = register_test_engine();
+
+        let alpha_create_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "sid": "ffi-alpha-session",
+                "ttl_sec": 60
+            })
+            .to_string(),
+        )
+        .expect("alpha create request");
+        let alpha_created = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_create_json(
+                borrowed_json_buffer(&alpha_create_request),
+            ))
+        };
+        assert_eq!(alpha_created["ok"], true);
+        let alpha_lease_id = alpha_created["result"]["lease_id"]
+            .as_str()
+            .expect("alpha lease id")
+            .to_string();
+
+        let beta_create_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "sid": "ffi-beta-session",
+                "ttl_sec": 60
+            })
+            .to_string(),
+        )
+        .expect("beta create request");
+        let beta_created = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_create_json(
+                borrowed_json_buffer(&beta_create_request),
+            ))
+        };
+        assert_eq!(beta_created["ok"], true);
+
+        let list_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id
+            })
+            .to_string(),
+        )
+        .expect("list request");
+        let listed = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_list_json(
+                borrowed_json_buffer(&list_request),
+            ))
+        };
+        assert_eq!(listed["ok"], true);
+        assert_eq!(listed["result"]["ok"], true);
+        assert_eq!(listed["result"]["leases"].as_array().map(Vec::len), Some(2));
+
+        let close_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "lease_id": alpha_lease_id
+            })
+            .to_string(),
+        )
+        .expect("alpha close request");
+        let closed = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_close_json(
+                borrowed_json_buffer(&close_request),
+            ))
+        };
+        assert_eq!(closed["ok"], true);
+
+        let filtered_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "sid": "ffi-alpha-session"
+            })
+            .to_string(),
+        )
+        .expect("filtered list request");
+        let filtered = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_list_json(
+                borrowed_json_buffer(&filtered_request),
+            ))
+        };
+        assert_eq!(filtered["ok"], true);
+        assert_eq!(
+            filtered["result"]["leases"].as_array().map(Vec::len),
+            Some(0)
+        );
+    }
+
+    /// Verify runtime-session JSON FFI rejects mismatched echoed generation values.
+    /// 验证运行时会话 JSON FFI 会拒绝不匹配的回传 generation。
+    #[test]
+    fn ffi_runtime_session_json_rejects_generation_mismatch() {
+        let _guard = ffi_test_guard();
+        let engine = register_test_engine();
+        let create_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "sid": "ffi-generation-session",
+                "ttl_sec": 60
+            })
+            .to_string(),
+        )
+        .expect("generation create request");
+        let created = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_create_json(
+                borrowed_json_buffer(&create_request),
+            ))
+        };
+        assert_eq!(created["ok"], true);
+        let lease_id = created["result"]["lease_id"]
+            .as_str()
+            .expect("generation lease id")
+            .to_string();
+        let sid = created["result"]["sid"]
+            .as_str()
+            .expect("generation sid")
+            .to_string();
+
+        let eval_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "lease_id": lease_id,
+                "sid": sid,
+                "generation": 999_u64,
+                "code": "return 1"
+            })
+            .to_string(),
+        )
+        .expect("generation eval request");
+        let eval = unsafe {
+            decode_response_json(luaskills_ffi_runtime_session_eval_json(
+                borrowed_json_buffer(&eval_request),
+            ))
+        };
+        assert_eq!(eval["ok"], true);
+        assert_eq!(eval["result"]["ok"], false);
+        assert_eq!(
+            eval["result"]["error_code"],
+            serde_json::json!("lease_generation_mismatch")
+        );
+    }
+
+    /// Verify the exported JSON FFI descriptor includes system runtime-session entrypoints for SDK probing.
+    /// 验证导出的 JSON FFI 描述包含供 SDK 探测的 system 运行时会话入口。
+    #[test]
+    fn ffi_describe_json_lists_system_runtime_session_exports() {
+        let described = unsafe { decode_response_json(luaskills_ffi_describe_json()) };
+        assert_eq!(described["ok"], true);
+        let exported = described["result"]["exported_functions"]
+            .as_array()
+            .expect("exported_functions array");
+        let exported_names: Vec<&str> = exported
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_create_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_eval_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_status_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_list_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_close_json"));
+    }
+
+    /// Verify system runtime-session JSON FFI rejects requests that omit authority.
+    /// 验证 system 运行时会话 JSON FFI 会拒绝缺少 authority 的请求。
+    #[test]
+    fn ffi_system_runtime_session_json_requires_authority() {
+        let _guard = ffi_test_guard();
+        let engine = register_test_engine();
+        let create_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "sid": "ffi-system-session",
+                "ttl_sec": 60
+            })
+            .to_string(),
+        )
+        .expect("system create request");
+        let created = unsafe {
+            decode_response_json(luaskills_ffi_system_runtime_session_create_json(
+                borrowed_json_buffer(&create_request),
+            ))
+        };
+        assert_eq!(created["ok"], false);
+        assert!(
+            created["error"]
+                .as_str()
+                .expect("system runtime session error")
+                .contains("requires host-injected authority")
+        );
+    }
+
+    /// Verify system runtime-session JSON FFI accepts delegated authority and preserves VM state.
+    /// 验证 system 运行时会话 JSON FFI 接受 delegated authority 并保留 VM 状态。
+    #[test]
+    fn ffi_system_runtime_session_json_supports_delegated_wrapper_flow() {
+        let _guard = ffi_test_guard();
+        let engine = register_test_engine();
+        let create_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "sid": "ffi-system-wrapper-session",
+                "ttl_sec": 60,
+                "replace": true,
+                "authority": SkillManagementAuthority::DelegatedTool
+            })
+            .to_string(),
+        )
+        .expect("system create request");
+        let created = unsafe {
+            decode_response_json(luaskills_ffi_system_runtime_session_create_json(
+                borrowed_json_buffer(&create_request),
+            ))
+        };
+        assert_eq!(created["ok"], true);
+        assert_eq!(created["result"]["ok"], true);
+        let lease_id = created["result"]["lease_id"]
+            .as_str()
+            .expect("system lease id")
+            .to_string();
+        let sid = created["result"]["sid"]
+            .as_str()
+            .expect("system sid")
+            .to_string();
+        let generation = created["result"]["generation"]
+            .as_u64()
+            .expect("system generation");
+
+        let first_eval_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "lease_id": lease_id,
+                "sid": sid,
+                "generation": generation,
+                "code": "counter = (counter or 0) + 1; return counter",
+                "authority": SkillManagementAuthority::DelegatedTool
+            })
+            .to_string(),
+        )
+        .expect("system first eval request");
+        let first = unsafe {
+            decode_response_json(luaskills_ffi_system_runtime_session_eval_json(
+                borrowed_json_buffer(&first_eval_request),
+            ))
+        };
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["result"]["result"], serde_json::json!(1));
+
+        let second_eval_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "lease_id": created["result"]["lease_id"],
+                "sid": created["result"]["sid"],
+                "generation": created["result"]["generation"],
+                "code": "counter = (counter or 0) + 1; return counter",
+                "authority": SkillManagementAuthority::DelegatedTool
+            })
+            .to_string(),
+        )
+        .expect("system second eval request");
+        let second = unsafe {
+            decode_response_json(luaskills_ffi_system_runtime_session_eval_json(
+                borrowed_json_buffer(&second_eval_request),
+            ))
+        };
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["result"]["result"], serde_json::json!(2));
+
+        let list_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "sid": created["result"]["sid"],
+                "authority": SkillManagementAuthority::DelegatedTool
+            })
+            .to_string(),
+        )
+        .expect("system list request");
+        let listed = unsafe {
+            decode_response_json(luaskills_ffi_system_runtime_session_list_json(
+                borrowed_json_buffer(&list_request),
+            ))
+        };
+        assert_eq!(listed["ok"], true);
+        assert_eq!(listed["result"]["leases"].as_array().map(Vec::len), Some(1));
+
+        let close_request = CString::new(
+            serde_json::json!({
+                "engine_id": engine.engine_id,
+                "lease_id": created["result"]["lease_id"],
+                "sid": created["result"]["sid"],
+                "generation": created["result"]["generation"],
+                "authority": SkillManagementAuthority::DelegatedTool
+            })
+            .to_string(),
+        )
+        .expect("system close request");
+        let closed = unsafe {
+            decode_response_json(luaskills_ffi_system_runtime_session_close_json(
+                borrowed_json_buffer(&close_request),
+            ))
+        };
+        assert_eq!(closed["ok"], true);
+        assert_eq!(closed["result"]["closed"], true);
     }
 
     /// Write one enabled skill fixture with entry and help metadata for FFI query tests.
@@ -2042,6 +2724,7 @@ mod tests {
                     allow_network_download: false,
                     github_base_url: None,
                     github_api_base_url: None,
+                    default_text_encoding: None,
                     sqlite_library_path: None,
                     sqlite_provider_mode: crate::LuaRuntimeDatabaseProviderMode::DynamicLibrary,
                     sqlite_callback_mode: crate::LuaRuntimeDatabaseCallbackMode::Standard,
@@ -2114,6 +2797,7 @@ mod tests {
                     allow_network_download: false,
                     github_base_url: None,
                     github_api_base_url: None,
+                    default_text_encoding: None,
                     sqlite_library_path: None,
                     sqlite_provider_mode: crate::LuaRuntimeDatabaseProviderMode::DynamicLibrary,
                     sqlite_callback_mode: crate::LuaRuntimeDatabaseCallbackMode::Standard,
