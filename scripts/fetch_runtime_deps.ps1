@@ -7,7 +7,7 @@ param(
     [string]$LuaRuntimeRepo = "LuaSkills/luaskills-packages",
     [string]$LuaRuntimeVersion = "v0.1.6",
     [string]$LuaSkillsRepo = "LuaSkills/luaskills",
-    [string]$LuaSkillsVersion = "v0.3.0",
+    [string]$LuaSkillsVersion = "v0.3.1",
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",
     [string]$VldbControllerVersion = "v0.2.1",
     [string]$VldbSQLiteRepo = "OpenVulcan/vldb-sqlite",
