@@ -50,6 +50,7 @@ The host owns:
 - Detecting `LUASKILL_SID` in entry schemas when projecting entries into tools.
 - Hiding the field from model/user-facing schemas when the host can provide stable managed identity.
 - Injecting the stable identity before calling the entry.
+- Prefixing host-managed injected identities with the reserved `LUASKILLS-SID-` marker when skills need a portable way to hide host-owned values in results.
 - Leaving the field visible when no stable managed identity exists.
 - Rewriting help and redacting results in managed mode so raw managed identities are not exposed accidentally.
 

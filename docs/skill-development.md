@@ -94,6 +94,7 @@ Host and adapter rules:
 - When exposing entry schemas, scan for an input property named `LUASKILL_SID`.
 - If the host has a stable managed identity for the current conversation, task, workspace, or equivalent context, it may hide `LUASKILL_SID` from the model/user-facing schema and remove it from the visible `required` list.
 - Before invoking the entry in managed mode, the host must inject the hidden `LUASKILL_SID` into the argument object.
+- When the host wants skills to detect and hide host-managed identities in tool results, it should inject the value with the reserved prefix `LUASKILLS-SID-`.
 - The injected value must remain stable for the intended host scope and must not be freshly randomized on every call.
 - If the host cannot provide a stable managed identity, it should leave `LUASKILL_SID` visible and let the caller or the skill fallback flow handle it.
 - Managed-mode help should tell the model or user that the identity is injected by the host and should not be requested, printed, or saved.

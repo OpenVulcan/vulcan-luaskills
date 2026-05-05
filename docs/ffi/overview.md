@@ -47,6 +47,7 @@ Host-side setup:
 2. When a schema contains `LUASKILL_SID` and the host has a stable conversation, task, workspace, or equivalent identity, hide that field from the projected tool schema.
 3. Remove the hidden field from the projected `required` list.
 4. Inject the stable `LUASKILL_SID` value into the entry arguments before `call_skill`.
+   - When the host needs skill-side result hiding or managed-mode detection, wrap the injected identity with the reserved host-managed prefix `LUASKILLS-SID-`.
 5. Add managed-mode help text so the model or user does not ask for, print, or save the raw managed identity.
 6. Redact or rewrite raw managed identities from projected results when needed.
 
