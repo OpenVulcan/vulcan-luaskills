@@ -875,7 +875,7 @@ function Download-Prebuilt-Deps {
             return $null
         }
         if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
-            Write-Host "  ==> No luaskills-packages release tag is resolved, so pre-built deps will be skipped and local compilation will continue." -ForegroundColor Yellow
+            Write-Host "  ==> No luaskills-packages release tag is resolved, so pre-built deps cannot be downloaded." -ForegroundColor Yellow
             return $null
         }
 
@@ -885,7 +885,7 @@ function Download-Prebuilt-Deps {
         try {
             $release = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
         } catch {
-            Write-Host "  ==> GitHub release '$ReleaseTag' not reachable. It may be missing or the repository may still be private. Will compile locally." -ForegroundColor Yellow
+            Write-Host "  ==> GitHub release '$ReleaseTag' not reachable. It may be missing or the repository may still be private." -ForegroundColor Yellow
             return $null
         }
 

@@ -507,7 +507,7 @@ download_prebuilt_deps() {
         cp "$local_archive" "$archive"
     else
         if [ -z "$RELEASE_TAG" ]; then
-            echo "  ==> No luaskills-packages release tag is resolved, so pre-built deps will be skipped and local compilation will continue."
+            echo "  ==> No luaskills-packages release tag is resolved, so pre-built deps cannot be downloaded."
             return 1
         fi
         echo "  ==> Checking GitHub Releases for pre-built deps ($asset_name)..."
@@ -515,7 +515,7 @@ download_prebuilt_deps() {
         local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
         local release_data
         release_data=$(curl -fSL -s "$api_url" 2>/dev/null) || {
-            echo "  ==> Release '$RELEASE_TAG' not reachable. It may be missing or the repository may still be private. Will compile locally."
+            echo "  ==> Release '$RELEASE_TAG' not reachable. It may be missing or the repository may still be private."
             return 1
         }
 
