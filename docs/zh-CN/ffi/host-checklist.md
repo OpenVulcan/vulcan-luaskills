@@ -11,6 +11,7 @@
 
 - [FFI 对接文档](integration-guide.md)
 - [宿主数据库 Provider 对接说明](../providers/host-database-provider-guide.md)
+- [`0.2 -> 0.3` 升级说明](../upgrade-from-0.2-to-0.3.md)
 
 ## 2. 先选接入面
 
@@ -38,6 +39,9 @@
 
 在 `engine_new` 之前，先确认这些条件：
 
+- 已明确当前 `0.3` 运行时资产来自两个仓库：
+  - `LuaSkills/luaskills` 提供 `luaskills-ffi-sdk-*`
+  - `LuaSkills/luaskills-packages` 提供 `lua-runtime-packages-*` 与 `lua-deps-*`
 - 已经准备好宿主运行时目录：
   - `temp`
   - `resources`
@@ -45,6 +49,14 @@
   - `dependencies`
   - `state`
   - `databases`
+- 如果使用 packaged runtime：
+  - `resources/lua-runtime-manifest.json` 必须存在
+  - `resources/luaskills-packages-manifest.json` 必须存在
+  - `resources/luaskills-packages/install-manifest.json` 必须存在
+  - `resources/luaskills-packages/lua_packages.txt` 必须存在
+  - `resources/luaskills-packages/platform-support.json` 必须存在
+  - `resources/luaskills-packages/THIRD_PARTY_LICENSES.json` 必须存在
+  - `resources/luaskills-packages/help/index.json` 必须存在
 - 已经决定数据库 provider 模式：
   - `dynamic_library`
   - `host_callback`
@@ -63,6 +75,9 @@
 - 如果宿主需要屏蔽默认包或冲突包：
   - 在 `FfiLuaRuntimeHostOptions.ignored_skill_ids` 填入对应目录派生的 `skill_id`
   - 被忽略 skill 不会准备依赖、不会绑定数据库，也不会注册 entry
+- 如果宿主复用了旧版 demo 或安装脚本：
+  - 不要再假设主仓库 release 自带完整 `lua-runtime-*`
+  - 应确认 `fetch_runtime_deps` / `install_lua_deps` 已经切到 `luaskills-packages` 的 packages 与 deps 资产
 
 ## 4. 标准创建顺序
 
@@ -206,7 +221,7 @@ ROOT -> PROJECT -> USER
 
 ## 11. 发布前最小自测
 
-如果宿主准备进入 beta 联调，至少确认下面这些项目都通过：
+如果宿主准备进入正式接入联调，至少确认下面这些项目都通过：
 
 - `engine_new -> load_from_roots -> list_entries -> call_skill -> run_lua -> engine_free`
 - `disable_skill / enable_skill` 能反映到运行时视图
@@ -219,4 +234,4 @@ ROOT -> PROJECT -> USER
 - 普通技能管理工具不会把 `ROOT` 暴露给用户安装、更新或卸载
 - 若存在 ROOT 级系统 skill，已确认 PROJECT / USER 同名 skill 不会被加载
 
-只要这组检查全部通过，宿主接入通常就已经具备 beta 联调基础。
+只要这组检查全部通过，宿主接入通常就已经具备稳定联调基础。

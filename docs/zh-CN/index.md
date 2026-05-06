@@ -16,7 +16,8 @@
 | Skill 作者 | [Lua Skill 开发手册](skill-development.md) |
 | 第一次做 FFI 联调 | [FFI 宿主接入检查清单](ffi/host-checklist.md) |
 | 需要完整 FFI 参数、内存和生命周期规则 | [FFI 对接文档](ffi/integration-guide.md) |
-| 需要了解当前 beta 发布边界 | [FFI Beta 发布说明](ffi/beta-release-notes.md) |
+| 需要参考历史 beta 发布边界 | [FFI Beta 发布说明](ffi/beta-release-notes.md) |
+| 正在从 `0.2` 升级到 `0.3` | [`0.2 -> 0.3` 升级说明](upgrade-from-0.2-to-0.3.md) |
 | 需要接管 SQLite / LanceDB | [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md) |
 | 需要理解 ROOT / PROJECT / USER | [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md) |
 | 需要理解 Skill 配置能力 | [Skill 配置系统设计稿](architecture/skill-config-system-design.md) |
@@ -47,6 +48,7 @@ Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和
 - [FFI Beta 发布说明](ffi/beta-release-notes.md)
 - [FFI 宿主接入检查清单](ffi/host-checklist.md)
 - [FFI 对接文档](ffi/integration-guide.md)
+- [`0.2 -> 0.3` 升级说明](upgrade-from-0.2-to-0.3.md)
 - [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md)
 
 第一次接入时建议先跑通 `version -> engine_new -> load_from_roots -> list_entries -> call_skill -> run_lua -> engine_free`，再继续接 lifecycle、query helper、install/update/uninstall、provider callback 或 `space_controller`。

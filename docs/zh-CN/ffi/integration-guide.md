@@ -8,6 +8,7 @@
 
 - [FFI Beta 发布说明](beta-release-notes.md)
 - [FFI 宿主接入检查清单](host-checklist.md)
+- [`0.2 -> 0.3` 升级说明](../upgrade-from-0.2-to-0.3.md)
 
 本文档覆盖当前对外公开的两层 FFI：
 
@@ -130,7 +131,36 @@
 
 也都只是上面这两套固定术语的缩写表达。
 
-## 3. 动态库与头文件
+## 3. 运行时资产、动态库与头文件
+
+### 3.1 `0.3` 运行时资产边界
+
+从 `0.3` 开始，FFI 对接方需要明确区分两类发布来源：
+
+| 资产 | 来源仓库 |
+| --- | --- |
+| `luaskills-ffi-sdk-{platform}.tar.gz` | `LuaSkills/luaskills` |
+| `lua-runtime-packages-{platform}.tar.gz` | `LuaSkills/luaskills-packages` |
+| `lua-deps-{platform}.tar.gz` | `LuaSkills/luaskills-packages` |
+
+也就是说：
+
+- `luaskills` 主仓库负责 crate、本体动态库、FFI SDK 和 demo 资产
+- `luaskills-packages` 负责 Lua runtime packages、预编译 native deps、help 元数据和第三方 license 元数据
+- SDK、demo 和宿主安装脚本应按这条边界组合下载，而不是再假设主仓库 release 自带完整 Lua runtime
+
+若宿主直接消费 packaged runtime，还应确保 runtime 目录中存在下列 `luaskills-packages` 元数据：
+
+- `resources/luaskills-packages-manifest.json`
+- `resources/luaskills-packages/install-manifest.json`
+- `resources/luaskills-packages/lua_packages.txt`
+- `resources/luaskills-packages/platform-support.json`
+- `resources/luaskills-packages/THIRD_PARTY_LICENSES.json`
+- `resources/luaskills-packages/help/index.json`
+
+缺少这些文件时，`0.3` 运行时会把它视为不完整 packaged runtime，并在初始化阶段直接报错。
+
+### 3.2 动态库与头文件
 
 当前产物方向：
 
@@ -390,10 +420,10 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 **凡是 FFI 分配出来的结果结构，必须使用对应 free 函数释放。**
 
-### 6.4 Beta 阶段 ABI 迁移要点
+### 6.4 当前 ABI 迁移要点
 
-当前 `v0.2.x / beta` 阶段已经对现有 FFI 做了一轮直接收敛。
-如果宿主参考的是更早的示例或旧草稿，请优先按下面的对应关系理解：
+当前 `0.3` 正式协议线已经对现有 FFI 做完一轮接口收敛。
+如果宿主参考的是更早的 `0.2.x / beta` 示例、旧草稿或早期 SDK 封装，请优先按下面的对应关系理解：
 
 - 旧：标准 C ABI 接口大量使用 `char **error_out`
   - 新：标准 C ABI 接口统一改成 `FfiOwnedBuffer *error_out`
@@ -419,12 +449,13 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 1. 不要继续把标准错误输出按 `char *` 读取。
 2. 不要手动释放结构体内嵌的 `FfiOwnedBuffer` 字段，仍应优先调用结构体专用 free 函数。
 
-### 6.5 beta / v0.1.0 发布边界
+### 6.5 当前发布定位与安全边界
 
 当前 FFI 发布面应按以下定位理解：
 
-- 当前版本更适合作为 `beta` / `v0.1.0` 的**受控宿主集成接口**
+- 当前版本已经是 `0.3` 正式协议线下的**受控宿主集成接口**
 - 当前版本的主集成方式仍然是 Rust 直连，FFI 主要服务于非 Rust 宿主或跨语言桥接
+- packaged runtime、FFI SDK 与 Lua runtime packages 已经拆成独立来源，宿主应接受这条新的资产边界
 - FFI 是低层 ABI，不承诺“误用后仍然安全”，宿主必须严格遵守本文档中的所有权、线程与回调规则
 - 当前运行时默认把 skill 当作**受信代码**看待，FFI 文档不提供 Lua skill 沙箱安全承诺
 

@@ -31,6 +31,7 @@ Read:
 | Rust host developer | [Repository README](../README.md#integration-paths) |
 | C ABI or SDK integrator | [FFI and SDK overview](ffi/overview.md) |
 | Deep FFI integrator | [FFI integration guide](zh-CN/ffi/integration-guide.md) |
+| Existing `0.2.x` integrator upgrading to `0.3.x` | [`0.2 -> 0.3` upgrade guide](upgrade-from-0.2-to-0.3.md) |
 | Database provider implementer | [Database provider overview](providers/database-providers.md) |
 | Runtime architecture reader | [Runtime architecture overview](architecture/runtime-model.md) |
 
@@ -59,6 +60,7 @@ Skill development is available in English. The deepest host, FFI, provider, and 
 - [FFI beta release notes](zh-CN/ffi/beta-release-notes.md)
 - [FFI host checklist](zh-CN/ffi/host-checklist.md)
 - [FFI integration guide](zh-CN/ffi/integration-guide.md)
+- [`0.2 -> 0.3` upgrade guide](upgrade-from-0.2-to-0.3.md)
 - [Host database provider guide](zh-CN/providers/host-database-provider-guide.md)
 - [Skill root layer policy](zh-CN/architecture/skill-root-layer-policy.md)
 - [Skill config system design](zh-CN/architecture/skill-config-system-design.md)
