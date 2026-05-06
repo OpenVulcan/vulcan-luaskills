@@ -62,7 +62,11 @@ If you used to assume that “downloading the main repository release gives a co
 - `resources/luaskills-packages/lua_packages.txt`
 - `resources/luaskills-packages/platform-support.json`
 - `resources/luaskills-packages/THIRD_PARTY_LICENSES.json`
+- `resources/luaskills-packages/THIRD_PARTY_NOTICES.md`
 - `resources/luaskills-packages/help/index.json`
+- `resources/luaskills-packages/help/packages`
+- `resources/luaskills-packages/help/modules`
+- `licenses/luaskills-packages/index.json`
 
 If these files are missing, `0.3` treats the runtime as incomplete and fails early instead of continuing with an invalid package layout.
 

@@ -56,7 +56,11 @@
   - `resources/luaskills-packages/lua_packages.txt` 必须存在
   - `resources/luaskills-packages/platform-support.json` 必须存在
   - `resources/luaskills-packages/THIRD_PARTY_LICENSES.json` 必须存在
+  - `resources/luaskills-packages/THIRD_PARTY_NOTICES.md` 必须存在
   - `resources/luaskills-packages/help/index.json` 必须存在
+  - `resources/luaskills-packages/help/packages` 必须存在
+  - `resources/luaskills-packages/help/modules` 必须存在
+  - `licenses/luaskills-packages/index.json` 必须存在
 - 已经决定数据库 provider 模式：
   - `dynamic_library`
   - `host_callback`

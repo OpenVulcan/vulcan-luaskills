@@ -62,7 +62,11 @@
 - `resources/luaskills-packages/lua_packages.txt`
 - `resources/luaskills-packages/platform-support.json`
 - `resources/luaskills-packages/THIRD_PARTY_LICENSES.json`
+- `resources/luaskills-packages/THIRD_PARTY_NOTICES.md`
 - `resources/luaskills-packages/help/index.json`
+- `resources/luaskills-packages/help/packages`
+- `resources/luaskills-packages/help/modules`
+- `licenses/luaskills-packages/index.json`
 
 如果这是一个 packaged runtime，但这些文件缺失，`0.3` 会直接报错，而不是继续容忍不完整的包结构。
 

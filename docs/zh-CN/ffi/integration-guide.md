@@ -156,7 +156,11 @@
 - `resources/luaskills-packages/lua_packages.txt`
 - `resources/luaskills-packages/platform-support.json`
 - `resources/luaskills-packages/THIRD_PARTY_LICENSES.json`
+- `resources/luaskills-packages/THIRD_PARTY_NOTICES.md`
 - `resources/luaskills-packages/help/index.json`
+- `resources/luaskills-packages/help/packages`
+- `resources/luaskills-packages/help/modules`
+- `licenses/luaskills-packages/index.json`
 
 缺少这些文件时，`0.3` 运行时会把它视为不完整 packaged runtime，并在初始化阶段直接报错。
 
