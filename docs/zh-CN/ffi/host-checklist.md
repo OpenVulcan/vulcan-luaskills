@@ -11,7 +11,7 @@
 
 - [FFI 对接文档](integration-guide.md)
 - [宿主数据库 Provider 对接说明](../providers/host-database-provider-guide.md)
-- [`0.2 -> 0.3` 升级说明](../upgrade-from-0.2-to-0.3.md)
+- [宿主工具结果桥接、宿主 LuaRuntime（`system_lua_lib`）与执行平面设计稿](../architecture/host-tooling-result-bridge-design.md)
 
 ## 2. 先选接入面
 
@@ -39,7 +39,7 @@
 
 在 `engine_new` 之前，先确认这些条件：
 
-- 已明确当前 `0.3` 运行时资产来自两个仓库：
+- 已明确当前稳定运行时资产来自两个仓库：
   - `LuaSkills/luaskills` 提供 `luaskills-ffi-sdk-*`
   - `LuaSkills/luaskills-packages` 提供 `lua-runtime-packages-*` 与 `lua-deps-*`
 - 已经准备好宿主运行时目录：
@@ -73,6 +73,12 @@
   - 已确认 `endpoint / auto_spawn / executable_path / process_mode`
 - 如果连接远端 controller：
   - 必须关闭 `auto_spawn`
+- 如果宿主准备接 `system_runtime_lease`：
+  - 已决定统一的 `system_lua_lib_dir`
+  - 若宿主不显式提供，已接受默认回落到运行时 `skills` 目录
+- 如果宿主准备消费结构化结果：
+  - 已决定 `request_context.client_capabilities.host_result` 的注入策略
+  - 已明确默认关闭，只有显式开启时才允许 skill 第四返回值进入宿主结果
 - 如果宿主会高频使用 `vulcan.runtime.lua.exec`：
   - 已决定是否覆盖 `runlua_pool_config`
   - 未配置时默认是 `min=1 / max=4 / idle_ttl_secs=60`
@@ -129,6 +135,9 @@ ROOT -> PROJECT -> USER
 4. `prompt_argument_completions`
 5. `list_skill_help`
 6. `render_skill_help_detail`
+7. `runtime_lease create / eval / status / list / close`
+8. `system_runtime_lease create / eval / status / list / close`
+9. `host_result` 关闭与开启两条链路
 
 这样更容易定位问题，不会把“运行时主链问题”和“辅助接口问题”混在一起。
 
@@ -237,5 +246,10 @@ ROOT -> PROJECT -> USER
 - `vulcan.host.list / has / call` 在 callback 缺失、工具缺失和 callback 失败时都有可诊断结果
 - 普通技能管理工具不会把 `ROOT` 暴露给用户安装、更新或卸载
 - 若存在 ROOT 级系统 skill，已确认 PROJECT / USER 同名 skill 不会被加载
+- `runtime_lease` 的同一 `lease_id` 多次 `eval` 会保留 Lua 全局状态
+- `system_runtime_lease` 在宿主显式传入 `cwd` 时会稳定保留该目录，而不是回退覆盖到默认 `skills`
+- `system_runtime_lease` 在宿主未显式传入 `cwd` 时会按预期回落到 `system_lua_lib_dir` 或默认 `skills`
+- 宿主未开启 `host_result` 时，skill 第四返回值会被忽略
+- 宿主开启 `host_result` 时，支持的 skill 可以返回 `change_set` 等结构化结果，且宿主能独立读取
 
 只要这组检查全部通过，宿主接入通常就已经具备稳定联调基础。

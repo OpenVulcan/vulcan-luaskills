@@ -762,6 +762,7 @@ local deleted = vulcan.cache.delete(cache_id)
 - `request`
 - `client_info`
 - `client_capabilities`
+- `host_result`
 - `client_budget`
 - `tool_config`
 - `skill_dir`
@@ -826,7 +827,60 @@ local deleted = vulcan.cache.delete(cache_id)
 
 - 在普通 skill 调用中，这三个值通常都可用。
 - 在某些 runlua / help / 非 skill 文件场景里，可能为 `nil`。
+- 在 `system_runtime_lease` / `system_lua_lib` 这类宿主 LuaRuntime 场景里，这三个值默认也应视为 `nil`，因为这时不存在“当前 skill 文件”语义。
 - 当前实现会自动把 Windows verbatim 路径前缀去掉，保证 Lua 侧拿到的是正常系统路径。
+
+### 12.7 `vulcan.context.host_result`
+
+宿主结构化结果桥接的标准化视图。
+
+当前推荐字段包括：
+
+- `enabled`
+- `allowed_kinds`
+- `max_payload_bytes`
+
+说明：
+
+- 宿主未显式开启 `host_result` 时，这个对象可能不存在，或 `enabled ~= true`。
+- 支持结构化结果的 skill 不应只看 `client_capabilities.host_result` 原始对象，而应优先读取这份标准化视图。
+- 当前推荐的标准结果种类是 `change_set`，用于把 IDE 每轮操作级结果独立返回给宿主。
+
+### 12.8 结构化第四返回值
+
+当宿主显式开启 `host_result` 时，skill 可以返回：
+
+```lua
+return content, overflow_mode, template_hint, host_result
+```
+
+其中：
+
+- `content` 仍然是主文本结果
+- `overflow_mode` 与 `template_hint` 继续按原有文本主链语义工作
+- 第四返回值 `host_result` 仅作为宿主独立结构化结果源，不替代主文本结果
+
+推荐形态：
+
+```lua
+return "Applied 1 edit.", nil, nil, {
+    kind = "change_set",
+    payload = {
+        files = {
+            {
+                path = "src/example.lua",
+                action = "update",
+            },
+        },
+    },
+}
+```
+
+注意事项：
+
+- 宿主未开启 `host_result` 时，第四返回值会被忽略。
+- `host_result` 应保持可 JSON 化。
+- 对 skill 来说，`change_set` 的目标是提供操作级结果，不是替代 `git diff`。
 
 ## 13. `vulcan.deps.*`
 
@@ -853,6 +907,7 @@ local ffi_root = vulcan.deps.ffi_path
 
 - 这三项依赖当前 skill 所在根目录和宿主依赖布局。
 - 如果当前没有有效 skill 上下文，它们会是 `nil`。
+- 在 `system_runtime_lease` / `system_lua_lib` 场景里，它们也应默认视为 `nil`，因为这时没有当前 skill 依赖根语义。
 - skill 应当只依赖这些协议暴露出的路径，不要自己猜宿主物理目录结构。
 
 ## 14. `vulcan.sqlite.*`

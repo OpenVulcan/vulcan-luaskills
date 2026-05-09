@@ -8,7 +8,7 @@
 
 - [FFI Beta 发布说明](beta-release-notes.md)
 - [FFI 宿主接入检查清单](host-checklist.md)
-- [`0.2 -> 0.3` 升级说明](../upgrade-from-0.2-to-0.3.md)
+- [宿主工具结果桥接、宿主 LuaRuntime（`system_lua_lib`）与执行平面设计稿](../architecture/host-tooling-result-bridge-design.md)
 
 本文档覆盖当前对外公开的两层 FFI：
 
@@ -131,11 +131,24 @@
 
 也都只是上面这两套固定术语的缩写表达。
 
+### 2.6 当前基础对接主链能力
+
+当前正式对接文档默认覆盖以下宿主主链能力：
+
+- 公共 `runtime_lease_*_json`
+- 带 authority 的 `system_runtime_lease_*_json`
+- `system_lua_lib_dir` 与 system 租约路径语义
+- `host_result` 第四返回值桥接
+- `change_set` 这一类结构化宿主结果
+
+也就是说，本文档不是只覆盖最早的 `call_skill / run_lua` 主链，而是覆盖当前 `0.4.x` 稳定线实际对外承诺的完整宿主集成面。
+
 ## 3. 运行时资产、动态库与头文件
 
-### 3.1 `0.3` 运行时资产边界
+### 3.1 当前运行时资产边界
 
-从 `0.3` 开始，FFI 对接方需要明确区分两类发布来源：
+当前稳定协议线中，FFI 对接方需要明确区分两类发布来源。
+这条边界从 `0.3` 建立，并延续到当前 `0.4.x` 稳定线：
 
 | 资产 | 来源仓库 |
 | --- | --- |
@@ -162,7 +175,7 @@
 - `resources/luaskills-packages/help/modules`
 - `licenses/luaskills-packages/index.json`
 
-缺少这些文件时，`0.3` 运行时会把它视为不完整 packaged runtime，并在初始化阶段直接报错。
+缺少这些文件时，当前运行时会把它视为不完整 packaged runtime，并在初始化阶段直接报错。
 
 ### 3.2 动态库与头文件
 
@@ -426,7 +439,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 ### 6.4 当前 ABI 迁移要点
 
-当前 `0.3` 正式协议线已经对现有 FFI 做完一轮接口收敛。
+当前正式协议线已经对现有 FFI 做完一轮接口收敛。
 如果宿主参考的是更早的 `0.2.x / beta` 示例、旧草稿或早期 SDK 封装，请优先按下面的对应关系理解：
 
 - 旧：标准 C ABI 接口大量使用 `char **error_out`
@@ -457,7 +470,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 
 当前 FFI 发布面应按以下定位理解：
 
-- 当前版本已经是 `0.3` 正式协议线下的**受控宿主集成接口**
+- 当前版本已经是 `0.4.x` 稳定线下的**受控宿主集成接口**
 - 当前版本的主集成方式仍然是 Rust 直连，FFI 主要服务于非 Rust 宿主或跨语言桥接
 - packaged runtime、FFI SDK 与 Lua runtime packages 已经拆成独立来源，宿主应接受这条新的资产边界
 - FFI 是低层 ABI，不承诺“误用后仍然安全”，宿主必须严格遵守本文档中的所有权、线程与回调规则

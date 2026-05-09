@@ -17,9 +17,11 @@ It is designed for applications that want a controlled skill system instead of o
 It provides:
 
 - Skill discovery, loading, entry enumeration, and invocation.
+- Persistent runtime leases through `runtime_lease` and authority-bound `system_runtime_lease` entrypoints.
 - Strict help trees that hosts can render as docs, command palettes, tools, or UI panels.
 - Standard Lua capability namespaces under `vulcan.*` and system-side helpers under `vulcan.runtime.*`.
 - Runtime context injection for current requests, skill directories, resources, dependency roots, and client metadata.
+- Host-owned structured result bridging through `host_result`, including the first canonical `change_set` result kind.
 - Optional SQLite and LanceDB bindings for stateful or memory-oriented skills.
 - Rust API integration for Rust hosts.
 - Standard C ABI and public `_json` FFI for non-Rust hosts.
@@ -65,6 +67,8 @@ LuaSkills is especially useful when you need a split between runtime truth and h
 | Lua API | Inject `vulcan.call`, `vulcan.fs`, `vulcan.path`, `vulcan.process`, `vulcan.os`, `vulcan.json`, `vulcan.cache`, `vulcan.context`, `vulcan.deps`, `vulcan.sqlite`, `vulcan.lancedb`, and `vulcan.runtime`. |
 | Help model | Parse strict skill help trees and expose structured help for host rendering. |
 | Host boundary | Keep product policy, UI, budgets, and permissions outside the runtime. |
+| Host runtime leases | Support public `runtime_lease` and authority-bound `system_runtime_lease` calls for persistent Lua VM state, host-owned path contexts, and `system_lua_lib`-style execution. |
+| Structured host results | Let hosts opt into `host_result` so skills can return a fourth structured payload such as `change_set` without replacing the main text result. |
 | Database providers | Support dynamic-library, host-callback, and space-controller modes for SQLite and LanceDB. |
 | Multi-language integration | Expose Rust APIs, standard C ABI, and public `_json` FFI for SDKs and host bridges. |
 | Skill roots | Support layered roots such as `ROOT`, `PROJECT`, and `USER` with host-controlled management authority. |
@@ -107,6 +111,7 @@ Important technical docs:
 - [Host database provider guide](docs/zh-CN/providers/host-database-provider-guide.md)
 - [Skill root layer policy](docs/zh-CN/architecture/skill-root-layer-policy.md)
 - [Skill config system design](docs/zh-CN/architecture/skill-config-system-design.md)
+- [Host tooling result bridge and `system_lua_lib` design draft](docs/zh-CN/architecture/host-tooling-result-bridge-design.md)
 
 ## Integration Paths
 
@@ -127,7 +132,7 @@ Rust hosts can depend on the crate directly:
 
 ```toml
 [dependencies]
-luaskills = "0.3"
+luaskills = "0.4"
 ```
 
 Repository development uses the normal Rust workflow:

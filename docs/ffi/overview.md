@@ -14,6 +14,16 @@ The goal is to let each host choose the right binding cost without changing the 
 | Public `_json` FFI | Dynamic languages and SDKs | Uses JSON input/output envelopes and is easier to wrap from Python, Node.js, TypeScript, and similar hosts. |
 | Language SDKs | Product teams that want fewer ABI details | TypeScript, Python, and Go SDKs wrap runtime loading, JSON envelopes, authority helpers, lifecycle calls, and provider callback boundaries. |
 
+## Current Host Integration Highlights
+
+Current stable host-facing features include:
+
+- Public `runtime_lease` endpoints for persistent Lua VM reuse with stable `lease_id + sid + generation` identity.
+- Authority-bound `system_runtime_lease` endpoints for host-owned system leases and `system_lua_lib` directory semantics.
+- Host-owned path context fields on lease creation such as `cwd`, `workspace_root`, `lua_roots`, `c_roots`, and `mounts`.
+- Optional `host_result` bridging so one skill may return `content, overflow_mode, template_hint, host_result`.
+- The first canonical structured host result kind: `change_set`, used for IDE-grade operation results without replacing the main text payload.
+
 ## How To Choose
 
 - Rust host: call the crate directly.
@@ -103,6 +113,7 @@ SDK mapping:
 - [FFI beta release notes](../zh-CN/ffi/beta-release-notes.md)
 - [FFI host checklist](../zh-CN/ffi/host-checklist.md)
 - [FFI integration guide](../zh-CN/ffi/integration-guide.md)
+- [Host tooling result bridge and `system_lua_lib` design draft](../zh-CN/architecture/host-tooling-result-bridge-design.md)
 - [Host database provider guide](../zh-CN/providers/host-database-provider-guide.md)
 
 ## Examples

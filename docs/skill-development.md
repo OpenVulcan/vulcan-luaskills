@@ -763,6 +763,7 @@ Current fields:
 - `request`
 - `client_info`
 - `client_capabilities`
+- `host_result`
 - `client_budget`
 - `tool_config`
 - `skill_dir`
@@ -827,7 +828,60 @@ Notes:
 
 - In normal skill calls, all three are usually available.
 - In some runlua, help, or non-skill-file scenarios, they may be `nil`.
+- In `system_runtime_lease` / `system_lua_lib` host-runtime scenarios, all three should also be treated as `nil` because there is no current skill-file identity.
 - The current implementation automatically strips Windows verbatim path prefixes so Lua receives normal system paths.
+
+### 12.7 `vulcan.context.host_result`
+
+The standardized host structured-result bridge view.
+
+Current recommended fields:
+
+- `enabled`
+- `allowed_kinds`
+- `max_payload_bytes`
+
+Notes:
+
+- When the host does not explicitly enable `host_result`, this object may be missing or `enabled ~= true`.
+- Skills that support structured host results should prefer this normalized view over reading raw `client_capabilities.host_result` fields directly.
+- The current recommended canonical result kind is `change_set`, used to return IDE-grade operation results back to the host.
+
+### 12.8 Structured fourth return value
+
+When the host explicitly enables `host_result`, one skill may return:
+
+```lua
+return content, overflow_mode, template_hint, host_result
+```
+
+Where:
+
+- `content` remains the main text result.
+- `overflow_mode` and `template_hint` keep their existing text-path meaning.
+- the fourth return value `host_result` is a separate host-structured result source and does not replace the main text result.
+
+Recommended shape:
+
+```lua
+return "Applied 1 edit.", nil, nil, {
+    kind = "change_set",
+    payload = {
+        files = {
+            {
+                path = "src/example.lua",
+                action = "update",
+            },
+        },
+    },
+}
+```
+
+Notes:
+
+- When the host does not enable `host_result`, the fourth return value is ignored.
+- `host_result` should stay JSON-serializable.
+- For skill authors, `change_set` exists to provide operation-level results, not to replace `git diff`.
 
 ## 13. `vulcan.deps.*`
 
@@ -854,6 +908,7 @@ Notes:
 
 - These paths depend on the current skill root and host dependency layout.
 - If there is no valid current skill context, they are `nil`.
+- In `system_runtime_lease` / `system_lua_lib` scenarios, they should also be treated as `nil` because there is no current skill dependency-root identity.
 - Skills should rely on these protocol-exposed paths and should not guess the host's physical directory layout.
 
 ## 14. `vulcan.sqlite.*`
