@@ -7877,7 +7877,9 @@ impl LuaEngine {
                 )
             })?;
             context.system_lua_lib_dir = Some(system_dir.clone());
-            context.cwd = Some(system_dir.clone());
+            if context.cwd.is_none() {
+                context.cwd = Some(system_dir.clone());
+            }
             if !context.lua_roots.iter().any(|root| root == &system_dir) {
                 context.lua_roots.insert(0, system_dir);
             }
@@ -9791,6 +9793,7 @@ mod tests {
         get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
         normalize_host_visible_path_text, populate_vulcan_dependency_context,
         populate_vulcan_file_context, populate_vulcan_internal_execution_context, runlua_cwd_guard,
+        render_host_visible_path,
     };
     use crate::host::callbacks::runtime_model_callback_test_guard;
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
@@ -12707,6 +12710,99 @@ return {
         .expect("second eval response json");
         assert_eq!(second["ok"], true);
         assert_eq!(second["result"], json!(2));
+    }
+
+    /// Verify system runtime leases preserve one explicit host-owned cwd while still exposing the fixed system_lua_lib directory.
+    /// 验证 system 运行时租约会保留宿主显式传入的 cwd，同时继续暴露固定的 system_lua_lib 目录。
+    #[test]
+    fn system_runtime_lease_preserves_explicit_cwd_override() {
+        let runtime_root = make_temp_runtime_root("system-runtime-lease-cwd");
+        if runtime_root.exists() {
+            let _ = fs::remove_dir_all(&runtime_root);
+        }
+        let explicit_cwd = runtime_root.join("host-cwd");
+        let fixed_system_dir = runtime_root.join("fixed-system-lua-lib");
+        fs::create_dir_all(&explicit_cwd).expect("create explicit host cwd");
+
+        let mut host_options = LuaRuntimeHostOptions::default();
+        host_options.system_lua_lib_dir = Some(fixed_system_dir.clone());
+        let engine = make_runtime_test_engine_with_host_options(host_options);
+
+        let created: Value = serde_json::from_str(
+            &engine
+                .create_system_runtime_lease_json(&json!({
+                    "authority": "system",
+                    "sid": "system-cwd-test",
+                    "ttl_sec": 60,
+                    "cwd": explicit_cwd.to_string_lossy()
+                })
+                .to_string())
+                .expect("create system runtime lease"),
+        )
+        .expect("system runtime lease create response json");
+        assert_eq!(created["ok"], true);
+        assert_eq!(
+            created["cwd"],
+            json!(render_host_visible_path(&explicit_cwd))
+        );
+        assert_eq!(
+            created["system_lua_lib"],
+            json!(render_host_visible_path(&fixed_system_dir))
+        );
+
+        let lease_id = created["lease_id"]
+            .as_str()
+            .expect("lease id should be present")
+            .to_string();
+        let generation = created["generation"]
+            .as_u64()
+            .expect("generation should be present");
+
+        let status: Value = serde_json::from_str(
+            &engine
+                .system_runtime_lease_status_json(&json!({
+                    "authority": "system",
+                    "lease_id": lease_id,
+                    "generation": generation
+                })
+                .to_string())
+                .expect("status system runtime lease"),
+        )
+        .expect("system runtime lease status response json");
+        assert_eq!(status["ok"], true);
+        assert_eq!(status["cwd"], json!(render_host_visible_path(&explicit_cwd)));
+        assert_eq!(
+            status["system_lua_lib"],
+            json!(render_host_visible_path(&fixed_system_dir))
+        );
+
+        let eval: Value = serde_json::from_str(
+            &engine
+                .eval_system_runtime_lease_json(&json!({
+                    "authority": "system",
+                    "lease_id": lease_id,
+                    "generation": generation,
+                    "code": "return { cwd = vulcan.runtime.cwd() }"
+                })
+                .to_string())
+                .expect("eval system runtime lease"),
+        )
+        .expect("system runtime lease eval response json");
+        assert_eq!(eval["ok"], true);
+        assert_eq!(
+            eval["cwd"],
+            json!(render_host_visible_path(&explicit_cwd))
+        );
+        assert_eq!(
+            eval["system_lua_lib"],
+            json!(render_host_visible_path(&fixed_system_dir))
+        );
+        assert_eq!(
+            eval["result"]["cwd"],
+            json!(render_host_visible_path(&explicit_cwd))
+        );
+
+        let _ = fs::remove_dir_all(&runtime_root);
     }
 
     /// Verify closed runtime sessions return a stable lease_closed error.
