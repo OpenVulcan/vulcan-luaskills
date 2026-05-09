@@ -38,7 +38,7 @@ use crate::runtime_help::{
 use crate::runtime_logging::{error as log_error, info as log_info, warn as log_warn};
 use crate::runtime_options::{LuaInvocationContext, LuaRuntimeHostOptions, RuntimeSkillRoot};
 use crate::runtime_result::{
-    NON_STRING_TOOL_RESULT_ERROR, RuntimeInvocationResult, ToolOverflowMode,
+    NON_STRING_TOOL_RESULT_ERROR, RuntimeHostResult, RuntimeInvocationResult, ToolOverflowMode,
 };
 use crate::skill::dependencies::SkillDependencyManifest;
 use crate::skill::manager::{
@@ -1025,12 +1025,32 @@ struct RuntimeSessionCreateRequest {
     sid: String,
     /// Requested lease TTL in seconds.
     /// 请求的租约有效期秒数。
-    #[serde(default = "default_runtime_session_ttl_sec")]
-    ttl_sec: u64,
+    #[serde(default)]
+    ttl_sec: Option<u64>,
     /// Whether an existing session with the same SID should be replaced.
     /// 是否替换同一 SID 下已经存在的会话。
     #[serde(default)]
     replace: bool,
+    /// Optional lease working directory controlled by the host.
+    /// 由宿主控制的可选租约工作目录。
+    #[serde(default)]
+    cwd: Option<String>,
+    /// Optional workspace root attached to the lease for host-side bookkeeping.
+    /// 供宿主侧记账与注入使用的可选工作区根目录。
+    #[serde(default)]
+    workspace_root: Option<String>,
+    /// Optional extra Lua module roots prepended for this lease.
+    /// 为当前租约前置追加的可选 Lua 模块根目录集合。
+    #[serde(default)]
+    lua_roots: Vec<String>,
+    /// Optional extra native module roots prepended for this lease.
+    /// 为当前租约前置追加的可选原生模块根目录集合。
+    #[serde(default)]
+    c_roots: Vec<String>,
+    /// Optional structured host-owned mount metadata recorded on the lease.
+    /// 记录在租约上的可选宿主挂载元数据。
+    #[serde(default = "default_runlua_exec_args")]
+    mounts: Value,
 }
 
 /// Runtime session eval request accepted by the host-facing JSON API.
@@ -1059,6 +1079,18 @@ struct RuntimeSessionEvalRequest {
     /// 最大执行时长（毫秒）。
     #[serde(default = "default_runlua_timeout_ms")]
     timeout_ms: u64,
+    /// Optional request-scoped host metadata injected for the current evaluation.
+    /// 为本次执行注入的可选请求级宿主元数据。
+    #[serde(default)]
+    request_context: Option<RuntimeRequestContext>,
+    /// Host-resolved client budget object injected for the current evaluation.
+    /// 为本次执行注入的宿主解析客户端预算对象。
+    #[serde(default = "default_runlua_exec_args")]
+    client_budget: Value,
+    /// Host-resolved tool config object injected for the current evaluation.
+    /// 为本次执行注入的宿主解析工具配置对象。
+    #[serde(default = "default_runlua_exec_args")]
+    tool_config: Value,
 }
 
 /// Runtime session identifier request accepted by status and close APIs.
@@ -1086,6 +1118,53 @@ struct RuntimeSessionListRequest {
     /// 用于过滤活跃租约列表的可选稳定会话标识。
     #[serde(default)]
     sid: Option<String>,
+}
+
+/// Stable lease profile that determines lifetime defaults and runtime path semantics.
+/// 决定生命周期默认值与运行时路径语义的稳定租约类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeLeaseProfile {
+    /// Ordinary public runtime lease used by hosts for finite stateful execution.
+    /// 宿主用于有限期有状态执行的普通公开租约。
+    Public,
+    /// Host-owned `system_lua_lib` runtime lease with fixed library-directory semantics.
+    /// 带固定库目录语义的宿主自有 `system_lua_lib` 运行时租约。
+    SystemLuaLib,
+}
+
+impl RuntimeLeaseProfile {
+    /// Return the stable host-visible profile string.
+    /// 返回面向宿主的稳定 profile 字符串。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::SystemLuaLib => "system_lua_lib",
+        }
+    }
+}
+
+/// Host-owned per-lease path context independent from ordinary skill directory semantics.
+/// 独立于普通 skill 目录语义的宿主租约路径上下文。
+#[derive(Debug, Clone)]
+struct RuntimeLeasePathContext {
+    /// Effective working directory applied while evaluating the lease.
+    /// 执行租约时生效的工作目录。
+    cwd: Option<PathBuf>,
+    /// Optional workspace root tracked for host-side identity and prompt assembly.
+    /// 供宿主侧身份与提示词装配跟踪的可选工作区根目录。
+    workspace_root: Option<PathBuf>,
+    /// Extra Lua module roots permanently prepended to the lease VM.
+    /// 永久前置到租约虚拟机中的额外 Lua 模块根目录。
+    lua_roots: Vec<PathBuf>,
+    /// Extra native module roots permanently prepended to the lease VM.
+    /// 永久前置到租约虚拟机中的额外原生模块根目录。
+    c_roots: Vec<PathBuf>,
+    /// Host-owned structured mount metadata.
+    /// 宿主拥有的结构化挂载元数据。
+    mounts: Value,
+    /// Effective fixed system Lua library directory when the lease profile is `system_lua_lib`.
+    /// 当租约 profile 为 `system_lua_lib` 时生效的固定系统 Lua 库目录。
+    system_lua_lib_dir: Option<PathBuf>,
 }
 
 /// Manager for persistent runtime sessions owned by one LuaEngine.
@@ -1128,15 +1207,21 @@ struct RuntimeSession {
     /// SID-local generation number.
     /// SID 内部的 generation 编号。
     generation: u64,
+    /// Stable lease profile describing whether the VM is one public lease or one `system_lua_lib` lease.
+    /// 描述当前 VM 属于公开租约还是 `system_lua_lib` 租约的稳定 profile。
+    profile: RuntimeLeaseProfile,
     /// Lease TTL in seconds refreshed by successful calls.
     /// 成功调用会刷新的租约 TTL 秒数。
-    ttl_sec: u64,
+    ttl_sec: Option<u64>,
     /// Monotonic expiration timestamp used for local cleanup.
     /// 用于本地清理的单调过期时间戳。
-    expires_at: Instant,
+    expires_at: Option<Instant>,
     /// Host-visible expiration timestamp in Unix milliseconds.
     /// 面向宿主可见的 Unix 毫秒过期时间戳。
-    expires_at_unix_ms: u128,
+    expires_at_unix_ms: Option<u128>,
+    /// Host-owned runtime path context applied to the lease.
+    /// 应用于当前租约的宿主运行时路径上下文。
+    path_context: RuntimeLeasePathContext,
     /// Persistent Lua VM retained by this session.
     /// 此会话保留的持久 Lua VM。
     vm: LuaVm,
@@ -1205,6 +1290,9 @@ struct RuntimeSessionTombstone {
     /// SID-local generation number preserved for diagnostics.
     /// 用于诊断的 SID 内 generation 编号。
     generation: u64,
+    /// Stable lease profile preserved for post-terminal profile checks.
+    /// 为终态后的 profile 校验保留的稳定租约类型。
+    profile: RuntimeLeaseProfile,
     /// Stable terminal error code reported after the lease leaves the active pool.
     /// 租约离开活跃池后返回的稳定终态错误码。
     code: &'static str,
@@ -1223,6 +1311,18 @@ fn default_runlua_exec_args() -> Value {
 /// 返回持久运行时会话使用的默认 TTL。
 fn default_runtime_session_ttl_sec() -> u64 {
     600
+}
+
+impl RuntimeSessionEvalRequest {
+    /// Convert the eval request into one request-scoped invocation context snapshot.
+    /// 将执行请求转换为一份请求级调用上下文快照。
+    fn to_invocation_context(&self) -> LuaInvocationContext {
+        LuaInvocationContext::new(
+            self.request_context.clone(),
+            self.client_budget.clone(),
+            self.tool_config.clone(),
+        )
+    }
 }
 
 /// Return the default timeout for runlua execution in milliseconds.
@@ -2672,6 +2772,7 @@ struct LuaNestedCallScopeGuard {
     previous_client_capabilities: LuaValue,
     previous_client_budget: LuaValue,
     previous_tool_config: LuaValue,
+    previous_host_result: LuaValue,
     previous_lancedb_skill_name: String,
     previous_sqlite_skill_name: String,
     previous_internal_context: VulcanInternalExecutionContext,
@@ -2716,6 +2817,9 @@ impl LuaNestedCallScopeGuard {
             previous_tool_config: context_table
                 .get("tool_config")
                 .map_err(|error| format!("Failed to read vulcan.context.tool_config: {}", error))?,
+            previous_host_result: context_table
+                .get("host_result")
+                .map_err(|error| format!("Failed to read vulcan.context.host_result: {}", error))?,
             previous_lancedb_skill_name: vulcan.get("__lancedb_skill_name").unwrap_or_default(),
             previous_sqlite_skill_name: vulcan.get("__sqlite_skill_name").unwrap_or_default(),
             previous_internal_context: capture_vulcan_internal_execution_context(lua)?,
@@ -2836,6 +2940,9 @@ impl LuaNestedCallScopeGuard {
         context_table
             .set("tool_config", self.previous_tool_config.clone())
             .map_err(|error| format!("Failed to restore vulcan.context.tool_config: {}", error))?;
+        context_table
+            .set("host_result", self.previous_host_result.clone())
+            .map_err(|error| format!("Failed to restore vulcan.context.host_result: {}", error))?;
         populate_vulcan_internal_execution_context(&self.lua, &self.previous_internal_context)?;
         populate_vulcan_file_context(
             &self.lua,
@@ -3053,9 +3160,11 @@ impl RuntimeSessionManager {
     /// 插入一个新的运行时会话并强制 SID 唯一。
     fn insert(
         &self,
+        profile: RuntimeLeaseProfile,
         sid: String,
-        ttl_sec: u64,
+        ttl_sec: Option<u64>,
         replace: bool,
+        path_context: RuntimeLeasePathContext,
         vm: LuaVm,
     ) -> Result<Value, RuntimeSessionError> {
         let mut state = self.lock_state()?;
@@ -3134,21 +3243,24 @@ impl RuntimeSessionManager {
             .saturating_add(1);
         state.generations.insert(sid.clone(), generation);
         let lease_id = format!("rt_{}_{}", unix_time_millis(), state.next_sequence);
-        let ttl_sec = ttl_sec.clamp(1, 3_600);
+        let ttl_sec = ttl_sec.map(|value| value.clamp(1, 3_600));
         let (expires_at, expires_at_unix_ms) = runtime_session_expiry(ttl_sec);
         let terminal_state = Arc::new(AtomicU8::new(RuntimeSessionTerminalState::Active as u8));
         let session = RuntimeSession {
             sid: sid.clone(),
             lease_id: lease_id.clone(),
             generation,
+            profile,
             ttl_sec,
             expires_at,
             expires_at_unix_ms,
+            path_context,
             vm,
             terminal_state: Arc::clone(&terminal_state),
             closed: false,
         };
         let snapshot = session.status_payload();
+        let response_snapshot = snapshot.clone();
         state.leases.insert(
             lease_id.clone(),
             RuntimeSessionEntry {
@@ -3164,6 +3276,14 @@ impl RuntimeSessionManager {
             "sid": sid,
             "lease_id": lease_id,
             "generation": generation,
+            "profile": profile.as_str(),
+            "lifetime": if ttl_sec.is_some() { "finite" } else { "infinite" },
+            "cwd": response_snapshot.get("cwd").cloned().unwrap_or(Value::Null),
+            "workspace_root": response_snapshot
+                .get("workspace_root")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "system_lua_lib": response_snapshot.get("system_lua_lib").cloned().unwrap_or(Value::Null),
             "ttl_sec": ttl_sec,
             "expires_at_unix_ms": expires_at_unix_ms
         }))
@@ -3176,6 +3296,7 @@ impl RuntimeSessionManager {
         lease_id: &str,
         expected_sid: Option<&str>,
         expected_generation: Option<u64>,
+        expected_profile: Option<RuntimeLeaseProfile>,
     ) -> Result<Arc<Mutex<RuntimeSession>>, RuntimeSessionError> {
         let mut state = self.lock_state()?;
         Self::prune_inactive_locked(&mut state);
@@ -3186,11 +3307,13 @@ impl RuntimeSessionManager {
                 message: format!("runtime session lease `{lease_id}` is busy"),
             })?;
             Self::validate_session_identity(&session_guard, expected_sid, expected_generation)?;
+            Self::validate_session_profile(&session_guard, expected_profile)?;
             drop(session_guard);
             return Ok(session);
         }
         if let Some(tombstone) = state.tombstones.get(lease_id) {
             Self::validate_tombstone_identity(tombstone, expected_sid, expected_generation)?;
+            Self::validate_tombstone_profile(tombstone, expected_profile)?;
             return Err(tombstone.as_error());
         }
         Err(RuntimeSessionError {
@@ -3206,8 +3329,14 @@ impl RuntimeSessionManager {
         lease_id: &str,
         expected_sid: Option<&str>,
         expected_generation: Option<u64>,
+        expected_profile: Option<RuntimeLeaseProfile>,
     ) -> Result<Value, RuntimeSessionError> {
-        let session = self.get(lease_id, expected_sid, expected_generation)?;
+        let session = self.get(
+            lease_id,
+            expected_sid,
+            expected_generation,
+            expected_profile,
+        )?;
         let session = session.try_lock().map_err(|_| RuntimeSessionError {
             code: "lease_busy",
             message: format!("runtime session lease `{lease_id}` is busy"),
@@ -3220,13 +3349,23 @@ impl RuntimeSessionManager {
 
     /// Return a stable active-lease listing payload.
     /// 返回稳定的活跃租约列表载荷。
-    fn list(&self, sid: Option<&str>) -> Result<Value, RuntimeSessionError> {
+    fn list(
+        &self,
+        sid: Option<&str>,
+        expected_profile: Option<RuntimeLeaseProfile>,
+    ) -> Result<Value, RuntimeSessionError> {
         let mut state = self.lock_state()?;
         Self::prune_inactive_locked(&mut state);
         let mut leases = Vec::new();
         for entry in state.leases.values() {
             if sid.is_some_and(|expected_sid| entry.snapshot["sid"].as_str() != Some(expected_sid))
             {
+                continue;
+            }
+            if expected_profile.is_some_and(|expected_profile| {
+                entry.snapshot.get("profile").and_then(Value::as_str)
+                    != Some(expected_profile.as_str())
+            }) {
                 continue;
             }
             leases.push(entry.snapshot.clone());
@@ -3245,6 +3384,7 @@ impl RuntimeSessionManager {
         lease_id: &str,
         expected_sid: Option<&str>,
         expected_generation: Option<u64>,
+        expected_profile: Option<RuntimeLeaseProfile>,
     ) -> Result<Value, RuntimeSessionError> {
         let mut state = self.lock_state()?;
         Self::prune_inactive_locked(&mut state);
@@ -3256,6 +3396,7 @@ impl RuntimeSessionManager {
         }) else {
             if let Some(tombstone) = state.tombstones.get(lease_id) {
                 Self::validate_tombstone_identity(tombstone, expected_sid, expected_generation)?;
+                Self::validate_tombstone_profile(tombstone, expected_profile)?;
                 return Err(tombstone.as_error());
             }
             return Err(RuntimeSessionError {
@@ -3268,6 +3409,7 @@ impl RuntimeSessionManager {
             message: format!("runtime session lease `{lease_id}` is busy"),
         })?;
         Self::validate_session_identity(&session, expected_sid, expected_generation)?;
+        Self::validate_session_profile(&session, expected_profile)?;
         terminal_state.store(RuntimeSessionTerminalState::Closed as u8, Ordering::Release);
         session.closed = true;
         let payload = session.close_payload();
@@ -3320,7 +3462,7 @@ impl RuntimeSessionManager {
             let should_remove = entry
                 .session
                 .try_lock()
-                .map(|session| now >= session.expires_at)
+                .map(|session| session.expires_at.is_some() && session.is_expired())
                 .unwrap_or(false);
             if should_remove {
                 removed.push(lease_id.clone());
@@ -3392,6 +3534,50 @@ impl RuntimeSessionManager {
             expected_sid,
             expected_generation,
         )
+    }
+
+    /// Validate one active runtime-session profile against the expected public or system surface.
+    /// 使用预期的公开或系统表面对单个活跃运行时会话 profile 进行校验。
+    fn validate_session_profile(
+        session: &RuntimeSession,
+        expected_profile: Option<RuntimeLeaseProfile>,
+    ) -> Result<(), RuntimeSessionError> {
+        if let Some(expected_profile) = expected_profile {
+            if session.profile != expected_profile {
+                return Err(RuntimeSessionError {
+                    code: "lease_profile_mismatch",
+                    message: format!(
+                        "runtime session lease `{}` belongs to profile `{}`, not `{}`",
+                        session.lease_id,
+                        session.profile.as_str(),
+                        expected_profile.as_str()
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate one terminal runtime-session tombstone profile against the expected public or system surface.
+    /// 使用预期的公开或系统表面对单个终态运行时会话墓碑 profile 进行校验。
+    fn validate_tombstone_profile(
+        tombstone: &RuntimeSessionTombstone,
+        expected_profile: Option<RuntimeLeaseProfile>,
+    ) -> Result<(), RuntimeSessionError> {
+        if let Some(expected_profile) = expected_profile {
+            if tombstone.profile != expected_profile {
+                return Err(RuntimeSessionError {
+                    code: "lease_profile_mismatch",
+                    message: format!(
+                        "runtime session lease `{}` belongs to profile `{}`, not `{}`",
+                        tombstone.lease_id,
+                        tombstone.profile.as_str(),
+                        expected_profile.as_str()
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Validate the stable SID and generation of one runtime-session record.
@@ -3470,7 +3656,8 @@ impl RuntimeSession {
     /// Return whether this runtime session is expired.
     /// 返回此运行时会话是否已经过期。
     fn is_expired(&self) -> bool {
-        Instant::now() >= self.expires_at
+        self.expires_at
+            .is_some_and(|expires_at| Instant::now() >= expires_at)
     }
 
     /// Return a JSON status payload for this runtime session.
@@ -3483,6 +3670,11 @@ impl RuntimeSession {
             "sid": self.sid.clone(),
             "lease_id": self.lease_id.clone(),
             "generation": self.generation,
+            "profile": self.profile.as_str(),
+            "lifetime": if self.ttl_sec.is_some() { "finite" } else { "infinite" },
+            "cwd": session_status_cwd_text(self),
+            "workspace_root": session_status_workspace_root_text(self),
+            "system_lua_lib": session_status_system_lua_lib_text(self),
             "ttl_sec": self.ttl_sec,
             "expires_at_unix_ms": self.expires_at_unix_ms,
             "closed": self.closed,
@@ -3498,6 +3690,11 @@ impl RuntimeSession {
             "sid": self.sid.clone(),
             "lease_id": self.lease_id.clone(),
             "generation": self.generation,
+            "profile": self.profile.as_str(),
+            "lifetime": if self.ttl_sec.is_some() { "finite" } else { "infinite" },
+            "cwd": session_status_cwd_text(self),
+            "workspace_root": session_status_workspace_root_text(self),
+            "system_lua_lib": session_status_system_lua_lib_text(self),
             "ttl_sec": self.ttl_sec,
             "expires_at_unix_ms": self.expires_at_unix_ms,
             "closed": self.closed,
@@ -3514,6 +3711,7 @@ impl RuntimeSessionTombstone {
             sid: session.sid.clone(),
             lease_id: session.lease_id.clone(),
             generation: session.generation,
+            profile: session.profile,
             code,
             retired_at: Instant::now(),
         }
@@ -3537,6 +3735,14 @@ impl RuntimeSessionTombstone {
                 .get("generation")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
+            profile: match snapshot
+                .get("profile")
+                .and_then(Value::as_str)
+                .unwrap_or("public")
+            {
+                "system_lua_lib" => RuntimeLeaseProfile::SystemLuaLib,
+                _ => RuntimeLeaseProfile::Public,
+            },
             code,
             retired_at: Instant::now(),
         }
@@ -3566,13 +3772,46 @@ fn unix_time_millis() -> u128 {
         .unwrap_or(0)
 }
 
+/// Return the host-visible cwd string stored on one runtime lease status payload.
+/// 返回单个运行时租约状态载荷上记录的宿主可见 cwd 字符串。
+fn session_status_cwd_text(session: &RuntimeSession) -> Option<String> {
+    session
+        .path_context
+        .cwd
+        .as_deref()
+        .map(render_host_visible_path)
+}
+
+/// Return the host-visible workspace-root string stored on one runtime lease status payload.
+/// 返回单个运行时租约状态载荷上记录的宿主可见工作区根目录字符串。
+fn session_status_workspace_root_text(session: &RuntimeSession) -> Option<String> {
+    session
+        .path_context
+        .workspace_root
+        .as_deref()
+        .map(render_host_visible_path)
+}
+
+/// Return the host-visible `system_lua_lib` directory string stored on one runtime lease status payload.
+/// 返回单个运行时租约状态载荷上记录的宿主可见 `system_lua_lib` 目录字符串。
+fn session_status_system_lua_lib_text(session: &RuntimeSession) -> Option<String> {
+    session
+        .path_context
+        .system_lua_lib_dir
+        .as_deref()
+        .map(render_host_visible_path)
+}
+
 /// Calculate monotonic and host-visible expiration timestamps.
 /// 计算单调时间与宿主可见的过期时间戳。
-fn runtime_session_expiry(ttl_sec: u64) -> (Instant, u128) {
+fn runtime_session_expiry(ttl_sec: Option<u64>) -> (Option<Instant>, Option<u128>) {
+    let Some(ttl_sec) = ttl_sec else {
+        return (None, None);
+    };
     let ttl = Duration::from_secs(ttl_sec);
     (
-        Instant::now() + ttl,
-        unix_time_millis().saturating_add(ttl.as_millis()),
+        Some(Instant::now() + ttl),
+        Some(unix_time_millis().saturating_add(ttl.as_millis())),
     )
 }
 
@@ -3667,12 +3906,358 @@ fn normalize_runtime_session_sid(value: &str) -> Result<String, String> {
     Ok(sid.to_string())
 }
 
+/// Validate and normalize one optional host-provided lease path.
+/// 校验并归一化单个可选宿主租约路径。
+fn normalize_optional_runtime_lease_path(
+    value: Option<&str>,
+    field_name: &str,
+) -> Result<Option<PathBuf>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.contains('\0') {
+        return Err(format!("{field_name} must not contain NUL bytes"));
+    }
+    #[cfg(windows)]
+    if has_invalid_windows_path_syntax(trimmed) {
+        return Err(format!(
+            "{field_name} contains unsupported Windows path syntax"
+        ));
+    }
+    Ok(Some(PathBuf::from(trimmed)))
+}
+
+/// Validate and normalize one host-provided lease path list.
+/// 校验并归一化一组宿主租约路径列表。
+fn normalize_runtime_lease_path_list(
+    values: &[String],
+    field_name: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let mut normalized = Vec::new();
+    for (index, value) in values.iter().enumerate() {
+        let item = normalize_optional_runtime_lease_path(
+            Some(value.as_str()),
+            &format!("{field_name}[{index}]"),
+        )?;
+        if let Some(item) = item {
+            normalized.push(item);
+        }
+    }
+    Ok(normalized)
+}
+
+/// Structured host-result capability snapshot derived from request context.
+/// 从请求上下文导出的结构化宿主结果能力快照。
+#[derive(Debug, Clone)]
+struct RuntimeHostResultCapability {
+    /// Whether the host explicitly enables structured host results for the current request.
+    /// 宿主是否为当前请求显式开启结构化宿主结果。
+    enabled: bool,
+    /// Allowed result kinds when the host wants to restrict the bridge surface.
+    /// 当宿主希望限制桥接面时允许的结果类型集合。
+    allowed_kinds: Vec<String>,
+    /// Optional maximum payload byte size accepted by the host.
+    /// 宿主接受的可选最大载荷字节数。
+    max_payload_bytes: Option<usize>,
+}
+
+impl RuntimeHostResultCapability {
+    /// Return whether one result kind is accepted by the current host capability snapshot.
+    /// 返回当前宿主能力快照是否接受某个结果类型。
+    fn allows_kind(&self, kind: &str) -> bool {
+        self.allowed_kinds.is_empty() || self.allowed_kinds.iter().any(|item| item == kind)
+    }
+}
+
+/// Resolve one host-result capability snapshot from one optional invocation context.
+/// 从可选调用上下文中解析一份宿主结果能力快照。
+fn resolve_host_result_capability(
+    invocation_context: Option<&LuaInvocationContext>,
+) -> RuntimeHostResultCapability {
+    let Some(request_context) =
+        invocation_context.and_then(|context| context.request_context.as_ref())
+    else {
+        return RuntimeHostResultCapability {
+            enabled: false,
+            allowed_kinds: Vec::new(),
+            max_payload_bytes: None,
+        };
+    };
+    let Value::Object(capabilities) = &request_context.client_capabilities else {
+        return RuntimeHostResultCapability {
+            enabled: false,
+            allowed_kinds: Vec::new(),
+            max_payload_bytes: None,
+        };
+    };
+    let Value::Object(host_result) = capabilities
+        .get("host_result")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()))
+    else {
+        return RuntimeHostResultCapability {
+            enabled: false,
+            allowed_kinds: Vec::new(),
+            max_payload_bytes: None,
+        };
+    };
+    let enabled = host_result
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let allowed_kinds = host_result
+        .get("allowed_kinds")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    let max_payload_bytes = host_result
+        .get("max_payload_bytes")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0);
+    RuntimeHostResultCapability {
+        enabled,
+        allowed_kinds,
+        max_payload_bytes,
+    }
+}
+
+/// Convert one host-result capability snapshot into one Lua helper table payload.
+/// 将宿主结果能力快照转换为一份 Lua helper 表载荷。
+fn host_result_capability_to_json_value(capability: &RuntimeHostResultCapability) -> Value {
+    let allowed_kinds = capability
+        .allowed_kinds
+        .iter()
+        .cloned()
+        .map(Value::String)
+        .collect::<Vec<Value>>();
+    json!({
+        "enabled": capability.enabled,
+        "allowed_kinds": allowed_kinds,
+        "max_payload_bytes": capability.max_payload_bytes,
+    })
+}
+
+/// Parse one optional fourth Lua return value into one structured host result.
+/// 将可选的第四个 Lua 返回值解析为结构化宿主结果。
+fn parse_host_result_value(
+    value: Option<&LuaValue>,
+    display_name: &str,
+    capability: &RuntimeHostResultCapability,
+) -> Result<Option<RuntimeHostResult>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if matches!(value, LuaValue::Nil) {
+        return Ok(None);
+    }
+    if !capability.enabled {
+        return Ok(None);
+    }
+    let host_result_json = lua_value_to_json(value)?;
+    let Value::Object(object) = host_result_json else {
+        return Err(format!(
+            "Lua skill '{}' must return host_result as an object with kind and payload",
+            display_name
+        ));
+    };
+    let kind = object
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Lua skill '{}' must return host_result.kind as one non-empty string",
+                display_name
+            )
+        })?
+        .to_string();
+    if !capability.allows_kind(&kind) {
+        return Err(format!(
+            "Lua skill '{}' returned host_result.kind '{}' which is not allowed by the host",
+            display_name, kind
+        ));
+    }
+    let payload = object.get("payload").cloned().ok_or_else(|| {
+        format!(
+            "Lua skill '{}' must return host_result.payload when host_result is enabled",
+            display_name
+        )
+    })?;
+    validate_host_result_payload(display_name, &kind, &payload, capability.max_payload_bytes)?;
+    Ok(Some(RuntimeHostResult { kind, payload }))
+}
+
+/// Validate one structured host-result payload against common and kind-specific rules.
+/// 按通用规则与特定 kind 规则校验结构化宿主结果载荷。
+fn validate_host_result_payload(
+    display_name: &str,
+    kind: &str,
+    payload: &Value,
+    max_payload_bytes: Option<usize>,
+) -> Result<(), String> {
+    let payload_json = serde_json::to_vec(payload).map_err(|error| {
+        format!(
+            "Lua skill '{}' returned one host_result payload that cannot be serialized: {}",
+            display_name, error
+        )
+    })?;
+    if let Some(limit) = max_payload_bytes {
+        if payload_json.len() > limit {
+            return Err(format!(
+                "Lua skill '{}' returned host_result payload {} bytes larger than host limit {}",
+                display_name,
+                payload_json.len(),
+                limit
+            ));
+        }
+    }
+    if kind == "change_set" {
+        validate_change_set_payload(display_name, payload)?;
+    }
+    Ok(())
+}
+
+/// Validate the canonical `change_set` payload contract used by IDE-oriented edit results.
+/// 校验面向 IDE 编辑结果使用的 canonical `change_set` 载荷协议。
+fn validate_change_set_payload(display_name: &str, payload: &Value) -> Result<(), String> {
+    let Value::Object(object) = payload else {
+        return Err(format!(
+            "Lua skill '{}' must return change_set payload as an object",
+            display_name
+        ));
+    };
+    let mode = object.get("mode").and_then(Value::as_str).ok_or_else(|| {
+        format!(
+            "Lua skill '{}' change_set.mode must be a string",
+            display_name
+        )
+    })?;
+    if !matches!(mode, "preview" | "applied") {
+        return Err(format!(
+            "Lua skill '{}' change_set.mode must be 'preview' or 'applied'",
+            display_name
+        ));
+    }
+    if let Some(summary) = object.get("summary") {
+        if !summary.is_string() && !summary.is_null() {
+            return Err(format!(
+                "Lua skill '{}' change_set.summary must be a string when present",
+                display_name
+            ));
+        }
+    }
+    if let Some(files) = object.get("files") {
+        let Value::Array(files) = files else {
+            return Err(format!(
+                "Lua skill '{}' change_set.files must be an array when present",
+                display_name
+            ));
+        };
+        for (index, file) in files.iter().enumerate() {
+            let Value::Object(file) = file else {
+                return Err(format!(
+                    "Lua skill '{}' change_set.files[{}] must be an object",
+                    display_name, index
+                ));
+            };
+            let path = file
+                .get("path")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "Lua skill '{}' change_set.files[{}].path must be one non-empty string",
+                        display_name, index
+                    )
+                })?;
+            if !Path::new(path).is_absolute() {
+                return Err(format!(
+                    "Lua skill '{}' change_set.files[{}].path must be absolute",
+                    display_name, index
+                ));
+            }
+            let change = file.get("change").and_then(Value::as_str).ok_or_else(|| {
+                format!(
+                    "Lua skill '{}' change_set.files[{}].change must be a string",
+                    display_name, index
+                )
+            })?;
+            if !matches!(change, "create" | "modify" | "delete" | "rename") {
+                return Err(format!(
+                    "Lua skill '{}' change_set.files[{}].change is unsupported",
+                    display_name, index
+                ));
+            }
+            if let Some(patch) = file.get("patch") {
+                if !patch.is_string() && !patch.is_null() {
+                    return Err(format!(
+                        "Lua skill '{}' change_set.files[{}].patch must be a string when present",
+                        display_name, index
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(diagnostics) = object.get("diagnostics") {
+        let Value::Array(diagnostics) = diagnostics else {
+            return Err(format!(
+                "Lua skill '{}' change_set.diagnostics must be an array when present",
+                display_name
+            ));
+        };
+        for (index, diagnostic) in diagnostics.iter().enumerate() {
+            let Value::Object(diagnostic) = diagnostic else {
+                return Err(format!(
+                    "Lua skill '{}' change_set.diagnostics[{}] must be an object",
+                    display_name, index
+                ));
+            };
+            let _level = diagnostic
+                .get("level")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "Lua skill '{}' change_set.diagnostics[{}].level must be a string",
+                        display_name, index
+                    )
+                })?;
+            let _message = diagnostic
+                .get("message")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "Lua skill '{}' change_set.diagnostics[{}].message must be a string",
+                        display_name, index
+                    )
+                })?;
+        }
+    }
+    Ok(())
+}
+
 /// Parse Lua multi-return values into the host's unified string-result protocol.
 /// 把 Lua 工具的多返回值解析为宿主统一字符串结果协议。
 fn parse_tool_call_output(
     values: MultiValue,
     display_name: &str,
+    invocation_context: Option<&LuaInvocationContext>,
 ) -> Result<RuntimeInvocationResult, String> {
+    let host_result_capability = resolve_host_result_capability(invocation_context);
     let values_vec: Vec<LuaValue> = values.into_vec();
     if values_vec.is_empty() {
         return Err(format!(
@@ -3681,9 +4266,9 @@ fn parse_tool_call_output(
         ));
     }
 
-    if values_vec.len() > 3 {
+    if values_vec.len() > 4 {
         return Err(format!(
-            "Lua skill '{}' must return content[, overflow_mode[, template_hint]]",
+            "Lua skill '{}' must return content[, overflow_mode[, template_hint[, host_result]]]",
             display_name
         ));
     }
@@ -3756,10 +4341,14 @@ fn parse_tool_call_output(
         }
     };
 
+    let host_result =
+        parse_host_result_value(values_vec.get(3), display_name, &host_result_capability)?;
+
     Ok(RuntimeInvocationResult::from_content_parts(
         content,
         overflow_mode,
         template_hint,
+        host_result,
     ))
 }
 
@@ -6294,6 +6883,10 @@ impl LuaEngine {
             .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
         let tool_config_lua = json_value_to_lua(lua, &tool_config_value)
             .map_err(|error| format!("Failed to convert tool_config to Lua: {}", error))?;
+        let host_result_capability = resolve_host_result_capability(invocation_context);
+        let host_result_value = host_result_capability_to_json_value(&host_result_capability);
+        let host_result_lua = json_value_to_lua(lua, &host_result_value)
+            .map_err(|error| format!("Failed to convert host_result helper to Lua: {}", error))?;
 
         context_table
             .set("request", context_lua)
@@ -6315,6 +6908,9 @@ impl LuaEngine {
         context_table
             .set("tool_config", tool_config_lua)
             .map_err(|error| format!("Failed to set vulcan.context.tool_config: {}", error))?;
+        context_table
+            .set("host_result", host_result_lua)
+            .map_err(|error| format!("Failed to set vulcan.context.host_result: {}", error))?;
         Ok(())
     }
 
@@ -7134,7 +7730,7 @@ impl LuaEngine {
                 msg
             })?;
 
-            parse_tool_call_output(result, &display_tool_name).map_err(|e| {
+            parse_tool_call_output(result, &display_tool_name, invocation_context).map_err(|e| {
                 log_error(format!("[LuaSkill:error] {}", e));
                 e
             })
@@ -7217,12 +7813,229 @@ impl LuaEngine {
         self.run_lua_with_lease(&mut lease, code, args, invocation_context)
     }
 
-    /// Create one persistent runtime session and return a stable JSON response.
-    /// 创建一个持久运行时会话并返回稳定 JSON 响应。
-    pub fn create_runtime_session_json(&self, request_json: &str) -> Result<String, String> {
+    /// Return the effective fixed `system_lua_lib` directory for the current engine.
+    /// 返回当前引擎生效的固定 `system_lua_lib` 目录。
+    fn resolve_system_lua_lib_dir(&self) -> PathBuf {
+        self.host_options
+            .system_lua_lib_dir
+            .clone()
+            .or_else(|| {
+                self.runtime_skill_roots
+                    .first()
+                    .map(|root| root.skills_dir.clone())
+            })
+            .unwrap_or_else(|| PathBuf::from("skills"))
+    }
+
+    /// Resolve the effective TTL semantics of one runtime lease create request.
+    /// 解析单个运行时租约创建请求的生效 TTL 语义。
+    fn resolve_runtime_lease_ttl(
+        profile: RuntimeLeaseProfile,
+        requested_ttl_sec: Option<u64>,
+    ) -> Result<Option<u64>, String> {
+        match profile {
+            RuntimeLeaseProfile::Public => match requested_ttl_sec {
+                Some(0) => Err("runtime lease ttl_sec must be greater than 0".to_string()),
+                Some(value) => Ok(Some(value.clamp(1, 3_600))),
+                None => Ok(Some(default_runtime_session_ttl_sec())),
+            },
+            RuntimeLeaseProfile::SystemLuaLib => match requested_ttl_sec {
+                None | Some(0) => Ok(None),
+                Some(value) => Ok(Some(value.clamp(1, 3_600))),
+            },
+        }
+    }
+
+    /// Resolve one host-owned runtime lease path context from the create request and lease profile.
+    /// 根据创建请求与租约 profile 解析一份宿主拥有的运行时租约路径上下文。
+    fn resolve_runtime_lease_path_context(
+        &self,
+        request: &RuntimeSessionCreateRequest,
+        profile: RuntimeLeaseProfile,
+    ) -> Result<RuntimeLeasePathContext, String> {
+        let mut context = RuntimeLeasePathContext {
+            cwd: normalize_optional_runtime_lease_path(request.cwd.as_deref(), "cwd")?,
+            workspace_root: normalize_optional_runtime_lease_path(
+                request.workspace_root.as_deref(),
+                "workspace_root",
+            )?,
+            lua_roots: normalize_runtime_lease_path_list(&request.lua_roots, "lua_roots")?,
+            c_roots: normalize_runtime_lease_path_list(&request.c_roots, "c_roots")?,
+            mounts: request.mounts.clone(),
+            system_lua_lib_dir: None,
+        };
+        if !context.mounts.is_object() && !context.mounts.is_null() {
+            return Err("runtime lease mounts must be one JSON object when present".to_string());
+        }
+        if profile == RuntimeLeaseProfile::SystemLuaLib {
+            let system_dir = self.resolve_system_lua_lib_dir();
+            std::fs::create_dir_all(&system_dir).map_err(|error| {
+                format!(
+                    "failed to create system_lua_lib_dir {}: {}",
+                    system_dir.display(),
+                    error
+                )
+            })?;
+            context.system_lua_lib_dir = Some(system_dir.clone());
+            context.cwd = Some(system_dir.clone());
+            if !context.lua_roots.iter().any(|root| root == &system_dir) {
+                context.lua_roots.insert(0, system_dir);
+            }
+        }
+        Ok(context)
+    }
+
+    /// Prepend one set of host-owned Lua and native module roots to one lease VM.
+    /// 将一组宿主拥有的 Lua 与原生模块根目录前置到单个租约虚拟机上。
+    fn configure_runtime_lease_vm(
+        lua: &Lua,
+        path_context: &RuntimeLeasePathContext,
+    ) -> Result<(), String> {
+        let package: Table = lua.globals().get("package").map_err(|error| {
+            format!(
+                "Failed to get Lua package table for runtime lease: {}",
+                error
+            )
+        })?;
+        let old_cpath: mlua::String = package.get("cpath").map_err(|error| {
+            format!("Failed to read package.cpath for runtime lease: {}", error)
+        })?;
+        let old_path: mlua::String = package
+            .get("path")
+            .map_err(|error| format!("Failed to read package.path for runtime lease: {}", error))?;
+        let mut cpath_prefix = String::new();
+        for root in &path_context.c_roots {
+            #[cfg(windows)]
+            {
+                cpath_prefix.push_str(&format!(
+                    "{}\\?.dll;{}\\?\\init.dll;",
+                    root.display(),
+                    root.display()
+                ));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                cpath_prefix.push_str(&format!(
+                    "{}/?.so;{}/?/init.so;",
+                    root.display(),
+                    root.display()
+                ));
+            }
+            #[cfg(target_os = "macos")]
+            {
+                cpath_prefix.push_str(&format!(
+                    "{}/?.dylib;{}/?/init.dylib;",
+                    root.display(),
+                    root.display()
+                ));
+            }
+        }
+        let mut path_prefix = String::new();
+        for root in &path_context.lua_roots {
+            #[cfg(windows)]
+            {
+                path_prefix.push_str(&format!(
+                    "{}\\?.lua;{}\\?\\init.lua;",
+                    root.display(),
+                    root.display()
+                ));
+            }
+            #[cfg(unix)]
+            {
+                path_prefix.push_str(&format!(
+                    "{}/?.lua;{}/?/init.lua;",
+                    root.display(),
+                    root.display()
+                ));
+            }
+        }
+        if !cpath_prefix.is_empty() {
+            let old_cpath_text = old_cpath
+                .to_str()
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let new_cpath = format!("{}{}", cpath_prefix, old_cpath_text);
+            package
+                .set(
+                    "cpath",
+                    lua.create_string(&new_cpath).map_err(|error| {
+                        format!("Failed to build runtime lease cpath string: {}", error)
+                    })?,
+                )
+                .map_err(|error| format!("Failed to set runtime lease package.cpath: {}", error))?;
+        }
+        if !path_prefix.is_empty() {
+            let old_path_text = old_path
+                .to_str()
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let new_path = format!("{}{}", path_prefix, old_path_text);
+            package
+                .set(
+                    "path",
+                    lua.create_string(&new_path).map_err(|error| {
+                        format!("Failed to build runtime lease path string: {}", error)
+                    })?,
+                )
+                .map_err(|error| format!("Failed to set runtime lease package.path: {}", error))?;
+        }
+        Ok(())
+    }
+
+    /// Evaluate one Lua chunk while temporarily switching the process cwd when the lease owns one cwd.
+    /// 当租约拥有 cwd 时，在临时切换进程工作目录后执行一段 Lua 代码。
+    fn eval_lua_value_with_optional_cwd(
+        lua: &Lua,
+        wrapper: &str,
+        cwd: Option<&Path>,
+    ) -> Result<LuaValue, mlua::Error> {
+        match cwd {
+            Some(cwd) => {
+                let _cwd_guard = runlua_cwd_guard()
+                    .lock()
+                    .map_err(|_| mlua::Error::runtime("runtime lease cwd guard lock poisoned"))?;
+                let original_dir = std::env::current_dir().map_err(|error| {
+                    mlua::Error::runtime(format!("runtime lease cwd: {}", error))
+                })?;
+                std::env::set_current_dir(cwd).map_err(|error| {
+                    mlua::Error::runtime(format!(
+                        "runtime lease set cwd {}: {}",
+                        cwd.display(),
+                        error
+                    ))
+                })?;
+                let execution = lua.load(wrapper).eval::<LuaValue>();
+                let restore_result = std::env::set_current_dir(&original_dir).map_err(|error| {
+                    mlua::Error::runtime(format!("runtime lease restore cwd: {}", error))
+                });
+                match (execution, restore_result) {
+                    (Ok(value), Ok(())) => Ok(value),
+                    (Err(error), Ok(())) => Err(error),
+                    (_, Err(error)) => Err(error),
+                }
+            }
+            None => lua.load(wrapper).eval::<LuaValue>(),
+        }
+    }
+
+    /// Create one persistent runtime lease and return a stable JSON response.
+    /// 创建一个持久运行时租约并返回稳定 JSON 响应。
+    pub fn create_runtime_lease_json(&self, request_json: &str) -> Result<String, String> {
+        self.create_runtime_session_with_profile_json(request_json, RuntimeLeaseProfile::Public)
+    }
+
+    /// Create one persistent runtime lease under the selected profile and return a stable JSON response.
+    /// 在所选 profile 下创建一个持久运行时租约并返回稳定 JSON 响应。
+    fn create_runtime_session_with_profile_json(
+        &self,
+        request_json: &str,
+        profile: RuntimeLeaseProfile,
+    ) -> Result<String, String> {
         let mut request: RuntimeSessionCreateRequest = serde_json::from_str(request_json)
             .map_err(|error| format!("Invalid runtime session create JSON: {}", error))?;
         request.sid = normalize_runtime_session_sid(&request.sid)?;
+        let ttl_sec = Self::resolve_runtime_lease_ttl(profile, request.ttl_sec)?;
+        let path_context = self.resolve_runtime_lease_path_context(&request, profile)?;
         let vm = Self::create_runlua_vm(
             &self.skills,
             &self.entry_registry,
@@ -7232,18 +8045,36 @@ impl LuaEngine {
             self.lancedb_host.clone(),
             self.sqlite_host.clone(),
         )?;
+        Self::configure_runtime_lease_vm(&vm.lua, &path_context)?;
         Self::install_managed_io_compat_for_runtime(&vm.lua, self.host_options.as_ref())?;
         let payload = self
             .runtime_sessions
-            .insert(request.sid, request.ttl_sec, request.replace, vm)
+            .insert(
+                profile,
+                request.sid,
+                ttl_sec,
+                request.replace,
+                path_context,
+                vm,
+            )
             .unwrap_or_else(runtime_session_error_payload);
         serde_json::to_string(&payload)
             .map_err(|error| format!("Runtime session create JSON encode failed: {}", error))
     }
 
-    /// Evaluate Lua code inside one persistent runtime session and return a stable JSON response.
-    /// 在一个持久运行时会话中执行 Lua 代码并返回稳定 JSON 响应。
-    pub fn eval_runtime_session_json(&self, request_json: &str) -> Result<String, String> {
+    /// Evaluate Lua code inside one persistent runtime lease and return a stable JSON response.
+    /// 在一个持久运行时租约中执行 Lua 代码并返回稳定 JSON 响应。
+    pub fn eval_runtime_lease_json(&self, request_json: &str) -> Result<String, String> {
+        self.eval_runtime_session_with_profile_json(request_json, RuntimeLeaseProfile::Public)
+    }
+
+    /// Evaluate Lua code inside one persistent runtime lease under the selected profile.
+    /// 在所选 profile 下的持久运行时租约中执行 Lua 代码。
+    fn eval_runtime_session_with_profile_json(
+        &self,
+        request_json: &str,
+        expected_profile: RuntimeLeaseProfile,
+    ) -> Result<String, String> {
         let mut request: RuntimeSessionEvalRequest = serde_json::from_str(request_json)
             .map_err(|error| format!("Invalid runtime session eval JSON: {}", error))?;
         if let Some(sid) = request.sid.as_mut() {
@@ -7256,6 +8087,7 @@ impl LuaEngine {
             &request.lease_id,
             request.sid.as_deref(),
             request.generation,
+            Some(expected_profile),
         ) {
             Ok(session) => session,
             Err(error) => {
@@ -7289,6 +8121,10 @@ impl LuaEngine {
                             "sid": session.sid.clone(),
                             "lease_id": session.lease_id.clone(),
                             "generation": session.generation,
+                            "profile": session.profile.as_str(),
+                            "lifetime": if session.ttl_sec.is_some() { "finite" } else { "infinite" },
+                            "cwd": session_status_cwd_text(&session),
+                            "system_lua_lib": session_status_system_lua_lib_text(&session),
                             "expires_at_unix_ms": session.expires_at_unix_ms,
                             "result": result
                         }),
@@ -7315,9 +8151,19 @@ impl LuaEngine {
             .map_err(|error| format!("Runtime session eval JSON encode failed: {}", error))
     }
 
-    /// Return status for one persistent runtime session as JSON.
-    /// 以 JSON 返回一个持久运行时会话的状态。
-    pub fn runtime_session_status_json(&self, request_json: &str) -> Result<String, String> {
+    /// Return status for one persistent runtime lease as JSON.
+    /// 以 JSON 返回一个持久运行时租约的状态。
+    pub fn runtime_lease_status_json(&self, request_json: &str) -> Result<String, String> {
+        self.runtime_session_status_with_profile_json(request_json, RuntimeLeaseProfile::Public)
+    }
+
+    /// Return status for one persistent runtime lease under the selected profile as JSON.
+    /// 以 JSON 返回所选 profile 下的持久运行时租约状态。
+    fn runtime_session_status_with_profile_json(
+        &self,
+        request_json: &str,
+        expected_profile: RuntimeLeaseProfile,
+    ) -> Result<String, String> {
         let mut request: RuntimeSessionLeaseRequest = serde_json::from_str(request_json)
             .map_err(|error| format!("Invalid runtime session status JSON: {}", error))?;
         if let Some(sid) = request.sid.as_mut() {
@@ -7329,15 +8175,26 @@ impl LuaEngine {
                 &request.lease_id,
                 request.sid.as_deref(),
                 request.generation,
+                Some(expected_profile),
             )
             .unwrap_or_else(runtime_session_error_payload);
         serde_json::to_string(&payload)
             .map_err(|error| format!("Runtime session status JSON encode failed: {}", error))
     }
 
-    /// List active persistent runtime sessions and return a stable JSON response.
-    /// 列出活跃的持久运行时会话并返回稳定 JSON 响应。
-    pub fn list_runtime_sessions_json(&self, request_json: &str) -> Result<String, String> {
+    /// List active persistent runtime leases and return a stable JSON response.
+    /// 列出活跃的持久运行时租约并返回稳定 JSON 响应。
+    pub fn list_runtime_leases_json(&self, request_json: &str) -> Result<String, String> {
+        self.list_runtime_sessions_with_profile_json(request_json, RuntimeLeaseProfile::Public)
+    }
+
+    /// List active persistent runtime leases under the selected profile and return a stable JSON response.
+    /// 列出所选 profile 下活跃的持久运行时租约并返回稳定 JSON 响应。
+    fn list_runtime_sessions_with_profile_json(
+        &self,
+        request_json: &str,
+        expected_profile: RuntimeLeaseProfile,
+    ) -> Result<String, String> {
         let mut request: RuntimeSessionListRequest = serde_json::from_str(request_json)
             .map_err(|error| format!("Invalid runtime session list JSON: {}", error))?;
         if let Some(sid) = request.sid.as_mut() {
@@ -7345,15 +8202,25 @@ impl LuaEngine {
         }
         let payload = self
             .runtime_sessions
-            .list(request.sid.as_deref())
+            .list(request.sid.as_deref(), Some(expected_profile))
             .unwrap_or_else(runtime_session_error_payload);
         serde_json::to_string(&payload)
             .map_err(|error| format!("Runtime session list JSON encode failed: {}", error))
     }
 
-    /// Close one persistent runtime session and return its final status as JSON.
-    /// 关闭一个持久运行时会话并以 JSON 返回其最终状态。
-    pub fn close_runtime_session_json(&self, request_json: &str) -> Result<String, String> {
+    /// Close one persistent runtime lease and return its final status as JSON.
+    /// 关闭一个持久运行时租约并以 JSON 返回其最终状态。
+    pub fn close_runtime_lease_json(&self, request_json: &str) -> Result<String, String> {
+        self.close_runtime_session_with_profile_json(request_json, RuntimeLeaseProfile::Public)
+    }
+
+    /// Close one persistent runtime lease under the selected profile and return its final status as JSON.
+    /// 关闭所选 profile 下的持久运行时租约并以 JSON 返回最终状态。
+    fn close_runtime_session_with_profile_json(
+        &self,
+        request_json: &str,
+        expected_profile: RuntimeLeaseProfile,
+    ) -> Result<String, String> {
         let mut request: RuntimeSessionLeaseRequest = serde_json::from_str(request_json)
             .map_err(|error| format!("Invalid runtime session close JSON: {}", error))?;
         if let Some(sid) = request.sid.as_mut() {
@@ -7365,10 +8232,53 @@ impl LuaEngine {
                 &request.lease_id,
                 request.sid.as_deref(),
                 request.generation,
+                Some(expected_profile),
             )
             .unwrap_or_else(runtime_session_error_payload);
         serde_json::to_string(&payload)
             .map_err(|error| format!("Runtime session close JSON encode failed: {}", error))
+    }
+
+    /// Create one `system_lua_lib` runtime lease through the dedicated system surface.
+    /// 通过专用 system 接口创建一个 `system_lua_lib` 运行时租约。
+    pub fn create_system_runtime_lease_json(&self, request_json: &str) -> Result<String, String> {
+        self.create_runtime_session_with_profile_json(
+            request_json,
+            RuntimeLeaseProfile::SystemLuaLib,
+        )
+    }
+
+    /// Evaluate one `system_lua_lib` runtime lease through the dedicated system surface.
+    /// 通过专用 system 接口执行一个 `system_lua_lib` 运行时租约。
+    pub fn eval_system_runtime_lease_json(&self, request_json: &str) -> Result<String, String> {
+        self.eval_runtime_session_with_profile_json(request_json, RuntimeLeaseProfile::SystemLuaLib)
+    }
+
+    /// Return status for one `system_lua_lib` runtime lease through the dedicated system surface.
+    /// 通过专用 system 接口返回单个 `system_lua_lib` 运行时租约状态。
+    pub fn system_runtime_lease_status_json(&self, request_json: &str) -> Result<String, String> {
+        self.runtime_session_status_with_profile_json(
+            request_json,
+            RuntimeLeaseProfile::SystemLuaLib,
+        )
+    }
+
+    /// List `system_lua_lib` runtime leases through the dedicated system surface.
+    /// 通过专用 system 接口列出 `system_lua_lib` 运行时租约。
+    pub fn list_system_runtime_leases_json(&self, request_json: &str) -> Result<String, String> {
+        self.list_runtime_sessions_with_profile_json(
+            request_json,
+            RuntimeLeaseProfile::SystemLuaLib,
+        )
+    }
+
+    /// Close one `system_lua_lib` runtime lease through the dedicated system surface.
+    /// 通过专用 system 接口关闭单个 `system_lua_lib` 运行时租约。
+    pub fn close_system_runtime_lease_json(&self, request_json: &str) -> Result<String, String> {
+        self.close_runtime_session_with_profile_json(
+            request_json,
+            RuntimeLeaseProfile::SystemLuaLib,
+        )
     }
 
     /// Install the managed Lua `io` compatibility table in a persistent runtime VM.
@@ -7401,7 +8311,9 @@ impl LuaEngine {
         if let Some(error) = session.inactive_error() {
             return Err(error);
         }
-        session.refresh();
+        if session.ttl_sec.is_some() {
+            session.refresh();
+        }
         Ok(())
     }
 
@@ -7413,7 +8325,8 @@ impl LuaEngine {
         request: &RuntimeSessionEvalRequest,
     ) -> Result<Value, String> {
         reset_pooled_vm_request_scope(&session.vm.lua, self.host_options.as_ref())?;
-        Self::populate_vulcan_request_context(&session.vm.lua, None)?;
+        let invocation_context = request.to_invocation_context();
+        Self::populate_vulcan_request_context(&session.vm.lua, Some(&invocation_context))?;
         populate_vulcan_internal_execution_context(
             &session.vm.lua,
             &VulcanInternalExecutionContext {
@@ -7448,7 +8361,11 @@ impl LuaEngine {
         );
         Self::install_runlua_timeout_guard(&session.vm.lua, request.timeout_ms)
             .map_err(|error| error.to_string())?;
-        let eval_result = session.vm.lua.load(&wrapper).eval::<LuaValue>();
+        let eval_result = Self::eval_lua_value_with_optional_cwd(
+            &session.vm.lua,
+            &wrapper,
+            session.path_context.cwd.as_deref(),
+        );
         Self::remove_runlua_timeout_guard(&session.vm.lua);
         let result = eval_result.map_err(|error| {
             let msg = format!("Runtime session eval error: {}", error);
@@ -8648,6 +9565,7 @@ end
         context.set("client_capabilities", lua.create_table()?)?;
         context.set("client_budget", lua.create_table()?)?;
         context.set("tool_config", lua.create_table()?)?;
+        context.set("host_result", lua.create_table()?)?;
         context.set("skill_dir", LuaValue::Nil)?;
         context.set("entry_dir", LuaValue::Nil)?;
         context.set("entry_file", LuaValue::Nil)?;
@@ -11754,7 +12672,7 @@ return {
         let engine = make_runtime_test_engine();
         let created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"stateful-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"stateful-test","ttl_sec":60}"#)
                 .expect("create runtime session"),
         )
         .expect("create response json");
@@ -11770,7 +12688,7 @@ return {
         });
         let first: Value = serde_json::from_str(
             &engine
-                .eval_runtime_session_json(&first_request.to_string())
+                .eval_runtime_lease_json(&first_request.to_string())
                 .expect("first runtime session eval"),
         )
         .expect("first eval response json");
@@ -11783,7 +12701,7 @@ return {
         });
         let second: Value = serde_json::from_str(
             &engine
-                .eval_runtime_session_json(&second_request.to_string())
+                .eval_runtime_lease_json(&second_request.to_string())
                 .expect("second runtime session eval"),
         )
         .expect("second eval response json");
@@ -11798,7 +12716,7 @@ return {
         let engine = make_runtime_test_engine();
         let created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"closed-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"closed-test","ttl_sec":60}"#)
                 .expect("create runtime session"),
         )
         .expect("create response json");
@@ -11809,7 +12727,7 @@ return {
         let close_request = json!({ "lease_id": lease_id });
         let closed: Value = serde_json::from_str(
             &engine
-                .close_runtime_session_json(&close_request.to_string())
+                .close_runtime_lease_json(&close_request.to_string())
                 .expect("close runtime session"),
         )
         .expect("close response json");
@@ -11822,7 +12740,7 @@ return {
         });
         let eval: Value = serde_json::from_str(
             &engine
-                .eval_runtime_session_json(&eval_request.to_string())
+                .eval_runtime_lease_json(&eval_request.to_string())
                 .expect("eval closed runtime session"),
         )
         .expect("eval response json");
@@ -11837,7 +12755,7 @@ return {
         let engine = make_runtime_test_engine();
         let created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"closed-status-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"closed-status-test","ttl_sec":60}"#)
                 .expect("create runtime session"),
         )
         .expect("create response json");
@@ -11848,7 +12766,7 @@ return {
         let close_request = json!({ "lease_id": lease_id.clone() });
         let closed: Value = serde_json::from_str(
             &engine
-                .close_runtime_session_json(&close_request.to_string())
+                .close_runtime_lease_json(&close_request.to_string())
                 .expect("close runtime session"),
         )
         .expect("close response json");
@@ -11857,7 +12775,7 @@ return {
         let status_request = json!({ "lease_id": lease_id });
         let status: Value = serde_json::from_str(
             &engine
-                .runtime_session_status_json(&status_request.to_string())
+                .runtime_lease_status_json(&status_request.to_string())
                 .expect("status closed runtime session"),
         )
         .expect("status response json");
@@ -11872,7 +12790,7 @@ return {
         let engine = make_runtime_test_engine();
         let first_created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"replace-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"replace-test","ttl_sec":60}"#)
                 .expect("create first runtime session"),
         )
         .expect("first create response json");
@@ -11883,9 +12801,7 @@ return {
 
         let second_created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(
-                    r#"{"sid":"replace-test","ttl_sec":60,"replace":true}"#,
-                )
+                .create_runtime_lease_json(r#"{"sid":"replace-test","ttl_sec":60,"replace":true}"#)
                 .expect("create second runtime session"),
         )
         .expect("second create response json");
@@ -11898,7 +12814,7 @@ return {
         });
         let eval: Value = serde_json::from_str(
             &engine
-                .eval_runtime_session_json(&eval_request.to_string())
+                .eval_runtime_lease_json(&eval_request.to_string())
                 .expect("eval replaced runtime session"),
         )
         .expect("replaced eval response json");
@@ -11913,7 +12829,7 @@ return {
         let engine = make_runtime_test_engine();
         let first_created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"replace-status-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"replace-status-test","ttl_sec":60}"#)
                 .expect("create first runtime session"),
         )
         .expect("first create response json");
@@ -11924,7 +12840,7 @@ return {
 
         let second_created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(
+                .create_runtime_lease_json(
                     r#"{"sid":"replace-status-test","ttl_sec":60,"replace":true}"#,
                 )
                 .expect("create second runtime session"),
@@ -11935,7 +12851,7 @@ return {
         let status_request = json!({ "lease_id": first_lease_id });
         let status: Value = serde_json::from_str(
             &engine
-                .runtime_session_status_json(&status_request.to_string())
+                .runtime_lease_status_json(&status_request.to_string())
                 .expect("status replaced runtime session"),
         )
         .expect("status response json");
@@ -11950,7 +12866,7 @@ return {
         let engine = make_runtime_test_engine();
         let first_created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"replace-race-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"replace-race-test","ttl_sec":60}"#)
                 .expect("create first runtime session"),
         )
         .expect("first create response json");
@@ -11960,12 +12876,12 @@ return {
             .to_string();
         let stale_session = engine
             .runtime_sessions
-            .get(&first_lease_id, None, None)
+            .get(&first_lease_id, None, None, None)
             .expect("capture stale runtime session handle");
 
         let replaced: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(
+                .create_runtime_lease_json(
                     r#"{"sid":"replace-race-test","ttl_sec":60,"replace":true}"#,
                 )
                 .expect("replace runtime session"),
@@ -11986,7 +12902,7 @@ return {
         let engine = make_runtime_test_engine();
         let created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"busy-replace-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"busy-replace-test","ttl_sec":60}"#)
                 .expect("create busy replace runtime session"),
         )
         .expect("busy replace create response json");
@@ -11997,13 +12913,13 @@ return {
 
         let session = engine
             .runtime_sessions
-            .get(&lease_id, None, None)
+            .get(&lease_id, None, None, None)
             .expect("get busy replace runtime session");
         let guard = session.lock().expect("lock busy replace runtime session");
 
         let blocked_replace: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(
+                .create_runtime_lease_json(
                     r#"{"sid":"busy-replace-test","ttl_sec":60,"replace":true}"#,
                 )
                 .expect("replace busy runtime session"),
@@ -12020,7 +12936,7 @@ return {
 
         let listed: Value = serde_json::from_str(
             &engine
-                .list_runtime_sessions_json(r#"{"sid":"busy-replace-test"}"#)
+                .list_runtime_leases_json(r#"{"sid":"busy-replace-test"}"#)
                 .expect("list busy replace runtime sessions"),
         )
         .expect("busy replace list response json");
@@ -12032,7 +12948,7 @@ return {
 
         let replaced: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(
+                .create_runtime_lease_json(
                     r#"{"sid":"busy-replace-test","ttl_sec":60,"replace":true}"#,
                 )
                 .expect("replace idle runtime session"),
@@ -12049,7 +12965,7 @@ return {
         let engine = make_runtime_test_engine();
         let created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"identity-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"identity-test","ttl_sec":60}"#)
                 .expect("create identity runtime session"),
         )
         .expect("identity create response json");
@@ -12065,7 +12981,7 @@ return {
         });
         let eval: Value = serde_json::from_str(
             &engine
-                .eval_runtime_session_json(&eval_request.to_string())
+                .eval_runtime_lease_json(&eval_request.to_string())
                 .expect("eval runtime session with wrong sid"),
         )
         .expect("wrong sid eval response json");
@@ -12080,7 +12996,7 @@ return {
         let engine = make_runtime_test_engine();
         let created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"generation-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"generation-test","ttl_sec":60}"#)
                 .expect("create generation runtime session"),
         )
         .expect("generation create response json");
@@ -12101,7 +13017,7 @@ return {
         });
         let eval: Value = serde_json::from_str(
             &engine
-                .eval_runtime_session_json(&eval_request.to_string())
+                .eval_runtime_lease_json(&eval_request.to_string())
                 .expect("eval runtime session with wrong generation"),
         )
         .expect("wrong generation eval response json");
@@ -12116,13 +13032,13 @@ return {
         let engine = make_runtime_test_engine();
         let alpha_created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"alpha-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"alpha-test","ttl_sec":60}"#)
                 .expect("create alpha runtime session"),
         )
         .expect("alpha create response json");
         let beta_created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"beta-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"beta-test","ttl_sec":60}"#)
                 .expect("create beta runtime session"),
         )
         .expect("beta create response json");
@@ -12133,7 +13049,7 @@ return {
 
         let all_list: Value = serde_json::from_str(
             &engine
-                .list_runtime_sessions_json(r#"{}"#)
+                .list_runtime_leases_json(r#"{}"#)
                 .expect("list runtime sessions"),
         )
         .expect("list response json");
@@ -12142,7 +13058,7 @@ return {
 
         let alpha_only: Value = serde_json::from_str(
             &engine
-                .list_runtime_sessions_json(r#"{"sid":"alpha-test"}"#)
+                .list_runtime_leases_json(r#"{"sid":"alpha-test"}"#)
                 .expect("list alpha runtime sessions"),
         )
         .expect("alpha list response json");
@@ -12153,7 +13069,7 @@ return {
         let beta_close_request = json!({ "lease_id": beta_lease_id });
         let beta_closed: Value = serde_json::from_str(
             &engine
-                .close_runtime_session_json(&beta_close_request.to_string())
+                .close_runtime_lease_json(&beta_close_request.to_string())
                 .expect("close beta runtime session"),
         )
         .expect("beta close response json");
@@ -12161,7 +13077,7 @@ return {
 
         let remaining: Value = serde_json::from_str(
             &engine
-                .list_runtime_sessions_json(r#"{}"#)
+                .list_runtime_leases_json(r#"{}"#)
                 .expect("list remaining runtime sessions"),
         )
         .expect("remaining list response json");
@@ -12177,7 +13093,7 @@ return {
         let engine = make_runtime_test_engine();
         let created: Value = serde_json::from_str(
             &engine
-                .create_runtime_session_json(r#"{"sid":"busy-list-test","ttl_sec":60}"#)
+                .create_runtime_lease_json(r#"{"sid":"busy-list-test","ttl_sec":60}"#)
                 .expect("create busy runtime session"),
         )
         .expect("busy create response json");
@@ -12187,13 +13103,13 @@ return {
             .to_string();
         let session = engine
             .runtime_sessions
-            .get(&lease_id, None, None)
+            .get(&lease_id, None, None, None)
             .expect("get busy runtime session");
         let _guard = session.lock().expect("lock busy runtime session");
 
         let listed: Value = serde_json::from_str(
             &engine
-                .list_runtime_sessions_json(r#"{"sid":"busy-list-test"}"#)
+                .list_runtime_leases_json(r#"{"sid":"busy-list-test"}"#)
                 .expect("list busy runtime sessions"),
         )
         .expect("busy list response json");

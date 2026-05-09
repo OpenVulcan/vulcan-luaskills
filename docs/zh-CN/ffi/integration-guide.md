@@ -711,7 +711,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
   - 影响 `vulcan.io`、托管 `io` 兼容层、`vulcan.process.exec` 与 `vulcan.process.session` 的省略编码路径
   - 未配置时 Windows 默认 `system`，其他平台默认 `utf-8`
 - `disable_managed_io_compat = 0`
-  - `luaexec` 与持久运行时会话会把全局 `io` 替换为 Rust 托管兼容层
+  - `luaexec` 与持久运行时租约会把全局 `io` 替换为 Rust 托管兼容层
 - `disable_managed_io_compat != 0`
   - 保留 Lua 原生全局 `io`；`vulcan.io` 仍然注册，AI 代码可以显式调用
 
@@ -885,7 +885,7 @@ runtime-config(action, skill_id?, key?, value?)
 说明：
 
 - `describe_json` 会返回当前动态库实际导出的 `_json` 入口列表，SDK 或宿主 wrapper 应优先用它做能力探测，而不是只按文档假定某个入口一定存在。
-- 当前部署约束只支持最新正式协议；`system_runtime_session_*_json`、`load_from_roots`、`reload_from_roots` 与正式 lifecycle 入口都应被视为必需导出。
+- 当前部署约束只支持最新正式协议；`system_runtime_lease_*_json`、`load_from_roots`、`reload_from_roots` 与正式 lifecycle 入口都应被视为必需导出。
 
 ### 9.2 加载与重载接口
 
@@ -936,27 +936,28 @@ runtime-config(action, skill_id?, key?, value?)
 
 - `luaskills_ffi_call_skill_json`
 - `luaskills_ffi_run_lua_json`
-- `luaskills_ffi_runtime_session_create_json`
-- `luaskills_ffi_runtime_session_eval_json`
-- `luaskills_ffi_runtime_session_status_json`
-- `luaskills_ffi_runtime_session_list_json`
-- `luaskills_ffi_runtime_session_close_json`
-- `luaskills_ffi_system_runtime_session_create_json`
-- `luaskills_ffi_system_runtime_session_eval_json`
-- `luaskills_ffi_system_runtime_session_status_json`
-- `luaskills_ffi_system_runtime_session_list_json`
-- `luaskills_ffi_system_runtime_session_close_json`
+- `luaskills_ffi_runtime_lease_create_json`
+- `luaskills_ffi_runtime_lease_eval_json`
+- `luaskills_ffi_runtime_lease_status_json`
+- `luaskills_ffi_runtime_lease_list_json`
+- `luaskills_ffi_runtime_lease_close_json`
+- `luaskills_ffi_system_runtime_lease_create_json`
+- `luaskills_ffi_system_runtime_lease_eval_json`
+- `luaskills_ffi_system_runtime_lease_status_json`
+- `luaskills_ffi_system_runtime_lease_list_json`
+- `luaskills_ffi_system_runtime_lease_close_json`
 
 说明：
 
-- 普通 `call_skill / run_lua / runtime_session_*_json` 不接收 authority，也不作为 root 可见性或技能管理权限边界。
+- 普通 `call_skill / run_lua / runtime_lease_*_json` 不接收 authority，也不作为 root 可见性或技能管理权限边界。
 - `call_skill` 调用当前已激活运行时视图中的 skill，包括已加载的 `ROOT / PROJECT / USER` skill。
 - `run_lua` 执行当前运行时环境中的 Lua 代码；如果宿主不希望普通用户执行任意 Lua，应在工具封装层单独限制或不暴露该接口。
-- `runtime_session_*_json` 与 `system_runtime_session_*_json` 都是持久运行时租约接口，同一 `lease_id` 的多次 `eval` 会复用同一个 Lua VM 并保留全局状态；宿主应使用稳定的 `sid` 绑定对话、任务或工作区，并在不需要时显式 close。
-- `system_runtime_session_*_json` 必须由宿主注入 `authority`；当前接受 `"system"` 与 `"delegated_tool"` 两种值，推荐对外 wrapper 固定注入 `"delegated_tool"`，把公共 `runtime_session_*_json` 留给可信宿主内部链路。
+- `runtime_lease_*_json` 与 `system_runtime_lease_*_json` 都是持久运行时租约接口，同一 `lease_id` 的多次 `eval` 会复用同一个 Lua VM 并保留全局状态；宿主应使用稳定的 `sid` 绑定对话、任务或工作区，并在不需要时显式 close。
+- `system_runtime_lease_*_json` 必须由宿主注入 `authority`；当前接受 `"system"` 与 `"delegated_tool"` 两种值，推荐对外 wrapper 固定注入 `"delegated_tool"`，把公共 `runtime_lease_*_json` 留给可信宿主内部链路。
+- `create` 现在支持宿主拥有的路径上下文字段：`cwd`、`workspace_root`、`lua_roots`、`c_roots`、`mounts`。对于 `system_runtime_lease_*_json`，如果宿主未显式传入 `cwd`，运行时会回落到 `system_lua_lib_dir` 或默认 `skills` 目录。
 - `eval / status / close` 请求可选回传 `sid` 与 `generation`；推荐宿主 wrapper 始终把 `create` 返回的两项一并带回，提前发现串线或陈旧句柄。
 - 推荐宿主把 `lease_id + sid + generation` 物化成一个本地 session handle 对象，而不是在业务代码中散落传递三个字段。
-- `runtime_session_list_json` 仅列出当前仍然活跃的租约；已 `close`、已过期或已被同 SID 新租约替换的旧 `lease_id` 不会出现在列表中。
+- `runtime_lease_list_json` 仅列出当前仍然活跃的租约；已 `close`、已过期或已被同 SID 新租约替换的旧 `lease_id` 不会出现在列表中。
 - 旧 `lease_id` 在被关闭、过期或替换后会返回稳定错误码，例如 `lease_closed`、`lease_expired`、`lease_replaced`，便于宿主或 AI wrapper 做恢复与重建。
 - 如果 wrapper 回传的 `sid` 或 `generation` 与当前租约不一致，会返回 `lease_sid_mismatch` 或 `lease_generation_mismatch`。
 - `DelegatedTool` 对 ROOT 的隐藏只适用于管理、查询与 prompt completion 面，不限制运行时 skill 调用。
@@ -994,6 +995,12 @@ runtime-config(action, skill_id?, key?, value?)
   "sid": "conversation-123"
 }
 ```
+
+`call_skill` 的结构化宿主结果：
+
+- `host_result` 默认关闭，只有宿主通过 `request_context.client_capabilities.host_result.enabled = true` 显式开启时才允许 skill 返回第四返回值。
+- 支持结构化结果的 skill 应返回 `content, overflow_mode, template_hint, host_result`，其中 `host_result = { kind = "...", payload = { ... } }`。
+- 当前推荐的标准结果种类是 `change_set`，用于把 IDE 每轮操作级结果独立返回给宿主，而不是依赖全局 `git diff` 兜底。
 
 ### 9.5 生命周期接口
 

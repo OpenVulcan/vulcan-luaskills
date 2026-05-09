@@ -12,7 +12,7 @@
 
 本文默认当前稳定组合为：
 
-- `LuaSkills/luaskills`：`0.3.1`
+- `LuaSkills/luaskills`：`0.4.0`
 - `LuaSkills/luaskills-packages`：`0.1.6`
 
 ## 2. 升级结论

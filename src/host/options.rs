@@ -151,6 +151,9 @@ pub struct LuaRuntimeHostOptions {
     /// Host-managed root directory used only to probe host-provided FFI/native dependencies.
     /// 仅用于探测宿主提供 FFI/原生依赖的宿主管理根目录。
     pub host_provided_ffi_root: Option<PathBuf>,
+    /// Optional fixed host-owned system Lua library directory used by `system_lua_lib` leases.
+    /// 供 `system_lua_lib` 租约使用的可选固定宿主系统 Lua 库目录。
+    pub system_lua_lib_dir: Option<PathBuf>,
     /// Host-managed cache directory used for downloaded archives and remote manifests.
     /// 宿主管理的下载缓存目录，用于归档文件和远程清单缓存。
     pub download_cache_root: Option<PathBuf>,

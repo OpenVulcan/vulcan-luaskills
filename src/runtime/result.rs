@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Unified English error message returned when a tool emits a non-string result.
 /// 当工具返回非字符串结果时，统一返回的英文错误提示。
@@ -47,6 +48,22 @@ pub struct RuntimeInvocationResult {
     /// Normalized body line count used by the host to decide whether the line budget is exceeded.
     /// 正文规范化后的行数，供宿主判断是否命中行预算。
     pub content_lines: usize,
+    /// Optional structured host-side result returned as the fourth Lua value when the host explicitly enables the bridge.
+    /// 当宿主显式开启桥接后，作为 Lua 第四返回值传回的可选宿主结构化结果。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_result: Option<RuntimeHostResult>,
+}
+
+/// Structured host-side result emitted by one Lua tool call when the host bridge is enabled.
+/// 在宿主桥接开启时由单次 Lua 工具调用发出的结构化宿主结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeHostResult {
+    /// Stable host-consumed result kind such as `change_set` or one host-private contract name.
+    /// 供宿主消费的稳定结果类型，例如 `change_set` 或宿主私有协议名称。
+    pub kind: String,
+    /// JSON-compatible structured payload consumed by the host as one independent signal source.
+    /// 由宿主作为独立信号源消费的 JSON 兼容结构化载荷。
+    pub payload: Value,
 }
 
 impl RuntimeInvocationResult {
@@ -56,6 +73,7 @@ impl RuntimeInvocationResult {
         content: String,
         overflow_mode: Option<ToolOverflowMode>,
         template_hint: Option<String>,
+        host_result: Option<RuntimeHostResult>,
     ) -> Self {
         let normalized = normalize_text(&content);
         let content_bytes = normalized.len();
@@ -66,13 +84,14 @@ impl RuntimeInvocationResult {
             template_hint,
             content_bytes,
             content_lines,
+            host_result,
         }
     }
 
     /// Build a content-only string result.
     /// 构造只包含正文的字符串返回值。
     pub fn plain(content: String) -> Self {
-        Self::from_content_parts(content, None, None)
+        Self::from_content_parts(content, None, None, None)
     }
 }
 

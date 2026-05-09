@@ -35,7 +35,7 @@ LUASKILLS_REPO="${LUASKILLS_REPO:-LuaSkills/luaskills}"
 
 # LuaSkillsVersion stores the GitHub Release tag for LuaSkills FFI SDK assets.
 # LuaSkillsVersion 保存 LuaSkills FFI SDK 资产的 GitHub Release 标签。
-LUASKILLS_VERSION="${LUASKILLS_VERSION:-v0.3.1}"
+LUASKILLS_VERSION="${LUASKILLS_VERSION:-v0.4.0}"
 
 # VldbControllerRepo stores the GitHub repository for vldb-controller assets.
 # VldbControllerRepo 保存 vldb-controller 资产所在的 GitHub 仓库。

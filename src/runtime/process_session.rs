@@ -1622,11 +1622,10 @@ mod tests {
         let encoding = default_runtime_text_encoding();
         if cfg!(windows) {
             ProcessSessionOpenRequest {
-                program: "powershell".to_string(),
+                program: "python".to_string(),
                 args: vec![
-                    "-NoProfile".to_string(),
-                    "-Command".to_string(),
-                    "$child = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30'; [Console]::Out.WriteLine($child.Id); [Console]::Out.Flush()".to_string(),
+                    "-c".to_string(),
+                    "import subprocess, sys, time; child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); print(child.pid, flush=True); time.sleep(0.3)".to_string(),
                 ],
                 cwd: None,
                 stdout_encoding: encoding,
@@ -1637,7 +1636,10 @@ mod tests {
         } else {
             ProcessSessionOpenRequest {
                 program: "sh".to_string(),
-                args: vec!["-c".to_string(), "sleep 30 & echo $!; exit 0".to_string()],
+                args: vec![
+                    "-c".to_string(),
+                    "sleep 30 & echo $!; sleep 0.3; exit 0".to_string(),
+                ],
                 cwd: None,
                 stdout_encoding: encoding,
                 stderr_encoding: encoding,
@@ -1717,28 +1719,44 @@ mod tests {
     fn wait_for_descendant_pid(session: &ManagedProcessSession, timeout: Duration) -> u32 {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
+            #[cfg(windows)]
+            {
+                let root_pid = session
+                    .state
+                    .child
+                    .lock()
+                    .expect("lock child process for descendant snapshot")
+                    .id();
+                if let Ok(descendants) = collect_windows_descendant_processes(root_pid) {
+                    if let Some(descendant) = descendants.into_iter().map(|entry| entry.pid).next()
+                    {
+                        return descendant;
+                    }
+                }
+            }
             let stdout = session
                 .state
                 .stdout_buffer
                 .lock()
                 .expect("lock stdout buffer");
             if !stdout.is_empty() {
-                let pid_text = stdout
+                let pid_lines = stdout
                     .iter()
                     .filter_map(|byte| match byte {
                         b'0'..=b'9' => Some(char::from(*byte)),
                         b'\r' | b'\n' => Some('\n'),
                         _ => None,
                     })
-                    .collect::<String>()
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
+                    .collect::<String>();
                 drop(stdout);
-                if let Ok(pid) = pid_text.parse::<u32>() {
-                    return pid;
+                for pid_text in pid_lines
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                {
+                    if let Ok(pid) = pid_text.parse::<u32>() {
+                        return pid;
+                    }
                 }
             }
             thread::sleep(Duration::from_millis(25));

@@ -76,8 +76,8 @@ Read one string-array result into JavaScript strings without freeing the outer a
  */
 function readStringArray(
   valuesPtr: Buffer | null,
-  FfiStringArray: koffi.IKoffiStructType,
-  FfiOwnedBuffer: koffi.IKoffiStructType,
+  FfiStringArray: koffi.IKoffiCType,
+  FfiOwnedBuffer: koffi.IKoffiCType,
 ): string[] {
   if (!valuesPtr) {
     return [];

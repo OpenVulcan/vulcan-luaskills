@@ -122,7 +122,7 @@ function printEntryCount(
   listEntries: (engineId: bigint, authority: number, entriesOut: Array<Buffer | null>, errorOut: Array<{ ptr: Buffer | null; len: number | bigint }>) => number,
   freeEntryList: (value: Buffer | null) => void,
   freeBuffer: (buffer: { ptr: Buffer | null; len: number | bigint }) => void,
-  FfiRuntimeEntryDescriptorList: koffi.IKoffiStructType,
+  FfiRuntimeEntryDescriptorList: koffi.IKoffiCType,
 ): number {
   const entriesOut = [null];
   const errorOut = [{ ptr: null, len: 0 }];
@@ -163,7 +163,7 @@ function callFixtureSkill(
   ) => number,
   freeInvocationResult: (value: Buffer | null) => void,
   freeBuffer: (buffer: { ptr: Buffer | null; len: number | bigint }) => void,
-  FfiRuntimeInvocationResult: koffi.IKoffiStructType,
+  FfiRuntimeInvocationResult: koffi.IKoffiCType,
 ): string {
   const argsJson = makeBorrowedBuffer(`{"note":"${note}"}`);
   const invocationOut = [null];

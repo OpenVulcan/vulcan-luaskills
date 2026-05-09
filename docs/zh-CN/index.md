@@ -21,6 +21,7 @@
 | 需要接管 SQLite / LanceDB | [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md) |
 | 需要理解 ROOT / PROJECT / USER | [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md) |
 | 需要理解 Skill 配置能力 | [Skill 配置系统设计稿](architecture/skill-config-system-design.md) |
+| 需要理解宿主结构化结果、`system_lua_lib` 与执行平面 | [宿主工具结果桥接、宿主 LuaRuntime（`system_lua_lib`）与执行平面设计稿](architecture/host-tooling-result-bridge-design.md) |
 
 ## 产品与生态
 
@@ -36,6 +37,7 @@
 - [Lua Skill 开发手册](skill-development.md)
 - [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md)
 - [Skill 配置系统设计稿](architecture/skill-config-system-design.md)
+- [宿主工具结果桥接、宿主 LuaRuntime（`system_lua_lib`）与执行平面设计稿](architecture/host-tooling-result-bridge-design.md)
 
 Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和 `vulcan.deps.*` 暴露的协议路径，不应该反推宿主物理目录结构。
 
@@ -57,6 +59,7 @@ Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和
 
 - [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md)
 - [Skill 配置系统设计稿](architecture/skill-config-system-design.md)
+- [宿主工具结果桥接、宿主 LuaRuntime（`system_lua_lib`）与执行平面设计稿](architecture/host-tooling-result-bridge-design.md)
 
 ## 历史与归档
 

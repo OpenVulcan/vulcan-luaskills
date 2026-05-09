@@ -212,64 +212,64 @@ Execute arbitrary Lua code using one JSON request.
 FfiOwnedBuffer luaskills_ffi_run_lua_json(FfiBorrowedBuffer input_json);
 
 /*
-Create one persistent runtime session using one JSON request.
-使用一段 JSON 请求创建单个持久运行时会话。
+Create one persistent runtime lease using one JSON request.
+使用一段 JSON 请求创建单个持久运行时租约。
 */
-FfiOwnedBuffer luaskills_ffi_runtime_session_create_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_runtime_lease_create_json(FfiBorrowedBuffer input_json);
 
 /*
-Evaluate Lua code inside one persistent runtime session using one JSON request.
-使用一段 JSON 请求在单个持久运行时会话中执行 Lua 代码。
+Evaluate Lua code inside one persistent runtime lease using one JSON request.
+使用一段 JSON 请求在单个持久运行时租约中执行 Lua 代码。
 */
-FfiOwnedBuffer luaskills_ffi_runtime_session_eval_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_runtime_lease_eval_json(FfiBorrowedBuffer input_json);
 
 /*
-Return one persistent runtime session status using one JSON request.
-使用一段 JSON 请求返回单个持久运行时会话状态。
+Return one persistent runtime lease status using one JSON request.
+使用一段 JSON 请求返回单个持久运行时租约状态。
 */
-FfiOwnedBuffer luaskills_ffi_runtime_session_status_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_runtime_lease_status_json(FfiBorrowedBuffer input_json);
 
 /*
-List active persistent runtime sessions using one JSON request.
-使用一段 JSON 请求列出活跃持久运行时会话。
+List active persistent runtime leases using one JSON request.
+使用一段 JSON 请求列出活跃持久运行时租约。
 */
-FfiOwnedBuffer luaskills_ffi_runtime_session_list_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_runtime_lease_list_json(FfiBorrowedBuffer input_json);
 
 /*
-Close one persistent runtime session using one JSON request.
-使用一段 JSON 请求关闭单个持久运行时会话。
+Close one persistent runtime lease using one JSON request.
+使用一段 JSON 请求关闭单个持久运行时租约。
 */
-FfiOwnedBuffer luaskills_ffi_runtime_session_close_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_runtime_lease_close_json(FfiBorrowedBuffer input_json);
 
 /*
-Create one persistent runtime session using one system JSON request with host-injected authority.
-使用一段带宿主注入 authority 的 system JSON 请求创建单个持久运行时会话。
+Create one persistent runtime lease using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求创建单个持久运行时租约。
 */
-FfiOwnedBuffer luaskills_ffi_system_runtime_session_create_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_system_runtime_lease_create_json(FfiBorrowedBuffer input_json);
 
 /*
-Evaluate Lua code inside one persistent runtime session using one system JSON request with host-injected authority.
-使用一段带宿主注入 authority 的 system JSON 请求在单个持久运行时会话中执行 Lua 代码。
+Evaluate Lua code inside one persistent runtime lease using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求在单个持久运行时租约中执行 Lua 代码。
 */
-FfiOwnedBuffer luaskills_ffi_system_runtime_session_eval_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_system_runtime_lease_eval_json(FfiBorrowedBuffer input_json);
 
 /*
-Return one persistent runtime session status using one system JSON request with host-injected authority.
-使用一段带宿主注入 authority 的 system JSON 请求返回单个持久运行时会话状态。
+Return one persistent runtime lease status using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求返回单个持久运行时租约状态。
 */
-FfiOwnedBuffer luaskills_ffi_system_runtime_session_status_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_system_runtime_lease_status_json(FfiBorrowedBuffer input_json);
 
 /*
-List active persistent runtime sessions using one system JSON request with host-injected authority.
-使用一段带宿主注入 authority 的 system JSON 请求列出活跃持久运行时会话。
+List active persistent runtime leases using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求列出活跃持久运行时租约。
 */
-FfiOwnedBuffer luaskills_ffi_system_runtime_session_list_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_system_runtime_lease_list_json(FfiBorrowedBuffer input_json);
 
 /*
-Close one persistent runtime session using one system JSON request with host-injected authority.
-使用一段带宿主注入 authority 的 system JSON 请求关闭单个持久运行时会话。
+Close one persistent runtime lease using one system JSON request with host-injected authority.
+使用一段带宿主注入 authority 的 system JSON 请求关闭单个持久运行时租约。
 */
-FfiOwnedBuffer luaskills_ffi_system_runtime_session_close_json(FfiBorrowedBuffer input_json);
+FfiOwnedBuffer luaskills_ffi_system_runtime_lease_close_json(FfiBorrowedBuffer input_json);
 
 /*
 Disable one skill through one ordered root chain.

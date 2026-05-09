@@ -1,6 +1,6 @@
 /**
-Minimal TypeScript host demo for one persistent runtime session lease.
-演示单个持久运行时会话租约的最小 TypeScript 宿主示例。
+Minimal TypeScript host demo for one persistent runtime lease.
+演示单个持久运行时租约的最小 TypeScript 宿主示例。
  */
 
 import koffi from "koffi";
@@ -17,11 +17,11 @@ import {
 Stable session id reused by the demo lease lifecycle.
 演示租约生命周期复用的稳定会话标识。
  */
-const RUNTIME_SESSION_SID = "typescript-runtime-session-demo";
+const RUNTIME_SESSION_SID = "typescript-runtime-lease-demo";
 
 /**
-Run one persistent runtime-session smoke flow through the JSON FFI surface.
-通过 JSON FFI 接口执行一条持久运行时会话烟测链路。
+Run one persistent runtime-lease smoke flow through the JSON FFI surface.
+通过 JSON FFI 接口执行一条持久运行时租约烟测链路。
  */
 function main(): void {
   const library = koffi.load(resolveLibraryPath());
@@ -45,10 +45,10 @@ function main(): void {
       system.skillNameForTool("demo-standard-ffi-skill-ping"),
     );
 
-    const sessions = system.runtimeSessions();
+    const sessions = system.runtimeLeases();
     console.log(
-      "Uses dedicated system runtime-session endpoints:",
-      sessions.usesSystemRuntimeSessionEndpoints(),
+      "Uses dedicated system runtime-lease endpoints:",
+      sessions.usesSystemRuntimeLeaseEndpoints(),
     );
     const session = sessions.createHandle(RUNTIME_SESSION_SID, 600, true);
     const identity = session.identityPayload();
@@ -77,7 +77,7 @@ if not proc then
   proc = vulcan.process.session.open(spec)
 end
 counter = (counter or 0) + 1
-proc:write((args.input or "runtime-session-demo") .. "\\n")
+proc:write((args.input or "runtime-lease-demo") .. "\\n")
 return {
   opened = true,
   counter = counter,
@@ -85,7 +85,7 @@ return {
 }
 `,
       {
-        input: "runtime-session-demo",
+        input: "runtime-lease-demo",
       },
     );
     console.log("Open eval result:", opened.result);

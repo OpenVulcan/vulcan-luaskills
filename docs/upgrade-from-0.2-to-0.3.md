@@ -12,7 +12,7 @@ This guide covers:
 
 The current stable combination is:
 
-- `LuaSkills/luaskills`: `0.3.1`
+- `LuaSkills/luaskills`: `0.4.0`
 - `LuaSkills/luaskills-packages`: `0.1.6`
 
 ## 2. Short Version

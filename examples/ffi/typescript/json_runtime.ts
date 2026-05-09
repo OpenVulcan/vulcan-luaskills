@@ -15,10 +15,10 @@ Generic JSON object payload passed through helper boundaries.
 export type JsonMap = Record<string, unknown>;
 
 /**
-Stable runtime-session identity payload carried by host-side wrappers.
-宿主侧包装层携带的稳定运行时会话身份载荷。
+Stable runtime-lease identity payload carried by host-side wrappers.
+宿主侧包装层携带的稳定运行时租约身份载荷。
  */
-export type RuntimeSessionIdentity = {
+export type RuntimeLeaseIdentity = {
   lease_id: string;
   sid: string;
   generation: number;
@@ -258,22 +258,22 @@ export class StandardFixtureRuntimeClient {
   }
 
   /**
-  Build one plain runtime-session client that targets the public JSON FFI endpoints.
-  构造一个指向公共 JSON FFI 入口的普通运行时会话客户端。
+  Build one plain runtime-lease client that targets the public JSON FFI endpoints.
+  构造一个指向公共 JSON FFI 入口的普通运行时租约客户端。
    */
-  runtimeSessions(engineId: number | bigint): RuntimeSessionClient {
-    return new RuntimeSessionClient(this.client, engineId);
+  runtimeLeases(engineId: number | bigint): RuntimeLeaseClient {
+    return new RuntimeLeaseClient(this.client, engineId);
   }
 
   /**
-  Build one authority-bound runtime-session client that targets the system JSON FFI endpoints.
-  构造一个指向 system JSON FFI 入口并绑定 authority 的运行时会话客户端。
+  Build one authority-bound runtime-lease client that targets the system JSON FFI endpoints.
+  构造一个指向 system JSON FFI 入口并绑定 authority 的运行时租约客户端。
    */
-  systemRuntimeSessions(
+  systemRuntimeLeases(
     engineId: number | bigint,
     authority: SkillManagementAuthority = SKILL_AUTHORITY_DELEGATED_TOOL,
-  ): RuntimeSessionClient {
-    return new RuntimeSessionClient(this.client, engineId, authority);
+  ): RuntimeLeaseClient {
+    return new RuntimeLeaseClient(this.client, engineId, authority);
   }
 
   /**
@@ -358,10 +358,10 @@ export class StandardFixtureRuntimeClient {
 }
 
 /**
-Stateful host helper that wraps one engine's runtime-session JSON API.
-包装单个引擎 runtime-session JSON API 的有状态宿主辅助器。
+Stateful host helper that wraps one engine's runtime-lease JSON API.
+包装单个引擎 runtime-lease JSON API 的有状态宿主辅助器。
  */
-export class RuntimeSessionClient {
+export class RuntimeLeaseClient {
   /**
   Bind one JSON client to one existing engine id.
   将一个 JSON 客户端绑定到一个已有引擎标识。
@@ -373,8 +373,8 @@ export class RuntimeSessionClient {
   ) {}
 
   /**
-  Dispatch one raw runtime-session JSON request without applying success checks.
-  分发单个原始运行时会话 JSON 请求而不附加成功校验。
+  Dispatch one raw runtime-lease JSON request without applying success checks.
+  分发单个原始运行时租约 JSON 请求而不附加成功校验。
    */
   callRaw(action: string, payload: JsonMap): JsonMap {
     const requestPayload: JsonMap = {
@@ -384,7 +384,7 @@ export class RuntimeSessionClient {
     if (this.systemToolAuthority !== undefined) {
       requestPayload.authority = this.systemToolAuthority;
     }
-    return this.client.call(this.runtimeSessionFunctionName(action), requestPayload);
+    return this.client.call(this.runtimeLeaseFunctionName(action), requestPayload);
   }
 
   /**
@@ -392,30 +392,30 @@ export class RuntimeSessionClient {
   创建或替换一个持久运行时租约。
    */
   create(sid: string, ttlSec = 600, replace = false): JsonMap {
-    return requireRuntimeSessionOK(
+    return requireRuntimeLeaseOK(
       this.callRaw("create", {
         sid,
         ttl_sec: ttlSec,
         replace,
       }),
-      "runtime session create",
+      "runtime lease create",
     );
   }
 
   /**
-  Create one runtime-session handle object from a fresh create response.
-  基于新的 create 响应创建一个运行时会话句柄对象。
+  Create one runtime-lease handle object from a fresh create response.
+  基于新的 create 响应创建一个运行时租约句柄对象。
    */
-  createHandle(sid: string, ttlSec = 600, replace = false): RuntimeSessionHandle {
-    return RuntimeSessionHandle.fromPayload(this, this.create(sid, ttlSec, replace));
+  createHandle(sid: string, ttlSec = 600, replace = false): RuntimeLeaseHandle {
+    return RuntimeLeaseHandle.fromPayload(this, this.create(sid, ttlSec, replace));
   }
 
   /**
-  Rebuild one runtime-session handle object from one persisted payload.
-  基于一份已持久化载荷重建一个运行时会话句柄对象。
+  Rebuild one runtime-lease handle object from one persisted payload.
+  基于一份已持久化载荷重建一个运行时租约句柄对象。
    */
-  bindHandle(payload: JsonMap): RuntimeSessionHandle {
-    return RuntimeSessionHandle.fromPayload(this, payload);
+  bindHandle(payload: JsonMap): RuntimeLeaseHandle {
+    return RuntimeLeaseHandle.fromPayload(this, payload);
   }
 
   /**
@@ -442,9 +442,9 @@ export class RuntimeSessionClient {
     if (generation !== undefined) {
       payload.generation = generation;
     }
-    return requireRuntimeSessionOK(
+    return requireRuntimeLeaseOK(
       this.callRaw("eval", payload),
-      "runtime session eval",
+      "runtime lease eval",
     );
   }
 
@@ -476,23 +476,23 @@ export class RuntimeSessionClient {
   }
 
   /**
-  List active runtime-session handles rebuilt from the current lease listing payload.
-  基于当前租约列表载荷重建活跃运行时会话句柄列表。
+  List active runtime-lease handles rebuilt from the current lease listing payload.
+  基于当前租约列表载荷重建活跃运行时租约句柄列表。
    */
-  listHandles(sid?: string): RuntimeSessionHandle[] {
+  listHandles(sid?: string): RuntimeLeaseHandle[] {
     const payload = this.list(sid);
     const leases = payload.leases;
     if (!Array.isArray(leases)) {
-      throw new Error("runtime session list payload is missing the leases array");
+      throw new Error("runtime lease list payload is missing the leases array");
     }
-    return leases.map((lease) => RuntimeSessionHandle.fromPayload(this, lease as JsonMap));
+    return leases.map((lease) => RuntimeLeaseHandle.fromPayload(this, lease as JsonMap));
   }
 
   /**
-  Return the first active runtime-session handle for one SID when present.
-  返回某个 SID 的第一个活跃运行时会话句柄（如果存在）。
+  Return the first active runtime-lease handle for one SID when present.
+  返回某个 SID 的第一个活跃运行时租约句柄（如果存在）。
    */
-  findHandle(sid: string): RuntimeSessionHandle | null {
+  findHandle(sid: string): RuntimeLeaseHandle | null {
     const handles = this.listHandles(sid);
     return handles.length > 0 ? handles[0] : null;
   }
@@ -515,23 +515,24 @@ export class RuntimeSessionClient {
   }
 
   /**
-  Resolve the concrete runtime-session JSON FFI entrypoint name for one logical action.
-  为单个逻辑动作解析具体的运行时会话 JSON FFI 入口名称。
+  Resolve the concrete runtime-lease JSON FFI entrypoint name for one logical action.
+  为单个逻辑动作解析具体的运行时租约 JSON FFI 入口名称。
    */
-  private runtimeSessionFunctionName(action: string): string {
+  private runtimeLeaseFunctionName(action: string): string {
     if (!this.systemToolAuthority) {
-      return `luaskills_ffi_runtime_session_${action}_json`;
+      return `luaskills_ffi_runtime_lease_${action}_json`;
     }
-    return `luaskills_ffi_system_runtime_session_${action}_json`;
+    return `luaskills_ffi_system_runtime_lease_${action}_json`;
   }
 
   /**
-  Return whether this helper will dispatch runtime-session requests to dedicated system entrypoints.
-  返回当前辅助器是否会把运行时会话请求分发到专用 system 入口。
+  Return whether this helper will dispatch runtime-lease requests to dedicated system entrypoints.
+  返回当前辅助器是否会把运行时租约请求分发到专用 system 入口。
    */
-  usesSystemRuntimeSessionEndpoints(): boolean {
+  usesSystemRuntimeLeaseEndpoints(): boolean {
     return this.systemToolAuthority !== undefined;
   }
+
 }
 
 /**
@@ -567,11 +568,11 @@ export class SystemEngineJsonClient {
   }
 
   /**
-  Build one authority-bound runtime-session helper under the current engine wrapper.
-  在当前引擎包装器下构造一个绑定 authority 的运行时会话辅助器。
+  Build one authority-bound runtime-lease helper under the current engine wrapper.
+  在当前引擎包装器下构造一个绑定 authority 的运行时租约辅助器。
    */
-  runtimeSessions(): RuntimeSessionClient {
-    return new RuntimeSessionClient(this.client, this.engineId, this.authority);
+  runtimeLeases(): RuntimeLeaseClient {
+    return new RuntimeLeaseClient(this.client, this.engineId, this.authority);
   }
 
   /**
@@ -776,31 +777,31 @@ export class SystemEngineJsonClient {
 }
 
 /**
-Stable host-side runtime-session handle that carries lease identity guards automatically.
-自动携带租约身份护栏的稳定宿主侧运行时会话句柄。
+Stable host-side runtime-lease handle that carries lease identity guards automatically.
+自动携带租约身份护栏的稳定宿主侧运行时租约句柄。
  */
-export class RuntimeSessionHandle {
+export class RuntimeLeaseHandle {
   /**
   Bind one session client to one concrete lease identity triplet.
   将一个会话客户端绑定到一个具体的租约身份三元组。
    */
   constructor(
-    private readonly sessions: RuntimeSessionClient,
+    private readonly sessions: RuntimeLeaseClient,
     readonly leaseId: string,
     readonly sid: string,
     readonly generation: number,
   ) {}
 
   /**
-  Construct one runtime-session handle from one JSON payload that contains identity fields.
-  从包含身份字段的一份 JSON 载荷中构造一个运行时会话句柄。
+  Construct one runtime-lease handle from one JSON payload that contains identity fields.
+  从包含身份字段的一份 JSON 载荷中构造一个运行时租约句柄。
    */
-  static fromPayload(sessions: RuntimeSessionClient, payload: JsonMap): RuntimeSessionHandle {
-    return new RuntimeSessionHandle(
+  static fromPayload(sessions: RuntimeLeaseClient, payload: JsonMap): RuntimeLeaseHandle {
+    return new RuntimeLeaseHandle(
       sessions,
-      requireRuntimeSessionStringField(payload, "lease_id"),
-      requireRuntimeSessionStringField(payload, "sid"),
-      requireRuntimeSessionNumberField(payload, "generation"),
+      requireRuntimeLeaseStringField(payload, "lease_id"),
+      requireRuntimeLeaseStringField(payload, "sid"),
+      requireRuntimeLeaseNumberField(payload, "generation"),
     );
   }
 
@@ -808,7 +809,7 @@ export class RuntimeSessionHandle {
   Export the stable lease identity fields for persistence or raw FFI calls.
   导出稳定租约身份字段，供持久化或原始 FFI 调用使用。
    */
-  identityPayload(): RuntimeSessionIdentity {
+  identityPayload(): RuntimeLeaseIdentity {
     return {
       lease_id: this.leaseId,
       sid: this.sid,
@@ -849,35 +850,35 @@ export class RuntimeSessionHandle {
 }
 
 /**
-Require one runtime-session payload to report success.
-要求单个运行时会话载荷报告成功。
+Require one runtime-lease payload to report success.
+要求单个运行时租约载荷报告成功。
  */
-export function requireRuntimeSessionOK(payload: JsonMap, action: string): JsonMap {
+export function requireRuntimeLeaseOK(payload: JsonMap, action: string): JsonMap {
   if (payload.ok === true) {
     return payload;
   }
   throw new Error(
-    `${action} failed: ${String(payload.error_code || "unknown")}: ${String(payload.message || "Unknown runtime session error")}`,
+    `${action} failed: ${String(payload.error_code || "unknown")}: ${String(payload.message || "Unknown runtime lease error")}`,
   );
 }
 
 /**
-Read one required runtime-session string field from one JSON payload.
-从一份 JSON 载荷中读取一个必填的运行时会话字符串字段。
+Read one required runtime-lease string field from one JSON payload.
+从一份 JSON 载荷中读取一个必填的运行时租约字符串字段。
  */
-export function requireRuntimeSessionStringField(payload: JsonMap, fieldName: string): string {
+export function requireRuntimeLeaseStringField(payload: JsonMap, fieldName: string): string {
   const value = payload[fieldName];
   if (typeof value === "string" && value.length > 0) {
     return value;
   }
-  throw new Error(`runtime session payload is missing required string field: ${fieldName}`);
+  throw new Error(`runtime lease payload is missing required string field: ${fieldName}`);
 }
 
 /**
-Read one required runtime-session integer field from one JSON payload.
-从一份 JSON 载荷中读取一个必填的运行时会话整数字段。
+Read one required runtime-lease integer field from one JSON payload.
+从一份 JSON 载荷中读取一个必填的运行时租约整数字段。
  */
-export function requireRuntimeSessionNumberField(payload: JsonMap, fieldName: string): number {
+export function requireRuntimeLeaseNumberField(payload: JsonMap, fieldName: string): number {
   const value = payload[fieldName];
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -885,7 +886,7 @@ export function requireRuntimeSessionNumberField(payload: JsonMap, fieldName: st
   if (typeof value === "bigint") {
     return Number(value);
   }
-  throw new Error(`runtime session payload is missing required integer field: ${fieldName}`);
+  throw new Error(`runtime lease payload is missing required integer field: ${fieldName}`);
 }
 
 /**

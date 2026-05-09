@@ -337,12 +337,32 @@ struct RuntimeSessionCreateJsonRequest {
     sid: String,
     /// Requested lease TTL in seconds.
     /// 请求的租约有效期秒数。
-    #[serde(default = "default_ffi_runtime_session_ttl_sec")]
-    ttl_sec: u64,
+    #[serde(default)]
+    ttl_sec: Option<u64>,
     /// Whether an existing session with the same SID should be replaced.
     /// 是否替换同一 SID 下已经存在的会话。
     #[serde(default)]
     replace: bool,
+    /// Optional lease cwd controlled by the host.
+    /// 由宿主控制的可选租约 cwd。
+    #[serde(default)]
+    cwd: Option<String>,
+    /// Optional workspace root recorded on the lease.
+    /// 记录在租约上的可选工作区根目录。
+    #[serde(default)]
+    workspace_root: Option<String>,
+    /// Optional extra Lua module roots prepended to the lease VM.
+    /// 前置追加到租约虚拟机中的可选 Lua 模块根目录集合。
+    #[serde(default)]
+    lua_roots: Vec<String>,
+    /// Optional extra native module roots prepended to the lease VM.
+    /// 前置追加到租约虚拟机中的可选原生模块根目录集合。
+    #[serde(default)]
+    c_roots: Vec<String>,
+    /// Optional host-owned structured mount metadata.
+    /// 宿主拥有的可选结构化挂载元数据。
+    #[serde(default = "default_json_object")]
+    mounts: Value,
     /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
     /// system JSON 入口必填、普通入口忽略的可选权限等级。
     #[serde(default)]
@@ -378,6 +398,10 @@ struct RuntimeSessionEvalJsonRequest {
     /// 最大执行时长（毫秒）。
     #[serde(default = "default_ffi_runtime_session_timeout_ms")]
     timeout_ms: u64,
+    /// Optional invocation context injected into the runtime lease evaluation.
+    /// 注入到运行时租约执行中的可选调用上下文。
+    #[serde(default)]
+    invocation_context: Option<LuaInvocationContext>,
     /// Optional authority required by system JSON entrypoints and ignored by ordinary entrypoints.
     /// system JSON 入口必填、普通入口忽略的可选权限等级。
     #[serde(default)]
@@ -581,12 +605,6 @@ impl Drop for ActiveFfiEngineGuard {
 /// 返回默认的空 JSON 对象载荷。
 fn default_json_object() -> Value {
     Value::Object(serde_json::Map::new())
-}
-
-/// Return the default persistent runtime session TTL in seconds for FFI requests.
-/// 返回 FFI 请求使用的默认持久运行时会话 TTL 秒数。
-fn default_ffi_runtime_session_ttl_sec() -> u64 {
-    600
 }
 
 /// Return the default persistent runtime session eval timeout in milliseconds.
@@ -796,16 +814,16 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_skill_config_delete_json",
         "luaskills_ffi_call_skill_json",
         "luaskills_ffi_run_lua_json",
-        "luaskills_ffi_runtime_session_create_json",
-        "luaskills_ffi_runtime_session_eval_json",
-        "luaskills_ffi_runtime_session_status_json",
-        "luaskills_ffi_runtime_session_list_json",
-        "luaskills_ffi_runtime_session_close_json",
-        "luaskills_ffi_system_runtime_session_create_json",
-        "luaskills_ffi_system_runtime_session_eval_json",
-        "luaskills_ffi_system_runtime_session_status_json",
-        "luaskills_ffi_system_runtime_session_list_json",
-        "luaskills_ffi_system_runtime_session_close_json",
+        "luaskills_ffi_runtime_lease_create_json",
+        "luaskills_ffi_runtime_lease_eval_json",
+        "luaskills_ffi_runtime_lease_status_json",
+        "luaskills_ffi_runtime_lease_list_json",
+        "luaskills_ffi_runtime_lease_close_json",
+        "luaskills_ffi_system_runtime_lease_create_json",
+        "luaskills_ffi_system_runtime_lease_eval_json",
+        "luaskills_ffi_system_runtime_lease_status_json",
+        "luaskills_ffi_system_runtime_lease_list_json",
+        "luaskills_ffi_system_runtime_lease_close_json",
         "luaskills_ffi_disable_skill_json",
         "luaskills_ffi_system_disable_skill_json",
         "luaskills_ffi_enable_skill_json",
@@ -1288,15 +1306,15 @@ pub unsafe extern "C" fn luaskills_ffi_run_lua_json(
     }
 }
 
-/// Create one persistent runtime session through the JSON FFI surface.
-/// 通过 JSON FFI 入口创建单个持久运行时会话。
+/// Create one persistent public runtime lease through the JSON FFI surface.
+/// 通过 JSON FFI 入口创建单个公开持久运行时租约。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_runtime_session_create_json(
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_create_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionCreateJsonRequest>(
         input_json,
-        "luaskills_ffi_runtime_session_create_json",
+        "luaskills_ffi_runtime_lease_create_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
@@ -1305,55 +1323,77 @@ pub unsafe extern "C" fn luaskills_ffi_runtime_session_create_json(
         let payload = json!({
             "sid": request.sid,
             "ttl_sec": request.ttl_sec,
-            "replace": request.replace
+            "replace": request.replace,
+            "cwd": request.cwd,
+            "workspace_root": request.workspace_root,
+            "lua_roots": request.lua_roots,
+            "c_roots": request.c_roots,
+            "mounts": request.mounts
         });
-        let response = engine.create_runtime_session_json(&payload.to_string())?;
-        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_create_json")
+        let response = engine.create_runtime_lease_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_lease_create_json")
     }) {
         Ok(result) => ffi_ok::<Value>(result),
         Err(error) => ffi_error(error),
     }
 }
 
-/// Evaluate code inside one persistent runtime session through the JSON FFI surface.
-/// 通过 JSON FFI 入口在单个持久运行时会话中执行代码。
+/// Evaluate code inside one persistent public runtime lease through the JSON FFI surface.
+/// 通过 JSON FFI 入口在单个公开持久运行时租约中执行代码。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_runtime_session_eval_json(
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_eval_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionEvalJsonRequest>(
         input_json,
-        "luaskills_ffi_runtime_session_eval_json",
+        "luaskills_ffi_runtime_lease_eval_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
     match with_engine(request.engine_id, |engine| {
+        let request_context = request
+            .invocation_context
+            .as_ref()
+            .and_then(|context| context.request_context.clone());
+        let client_budget = request
+            .invocation_context
+            .as_ref()
+            .map(|context| context.client_budget.clone())
+            .unwrap_or_else(default_json_object);
+        let tool_config = request
+            .invocation_context
+            .as_ref()
+            .map(|context| context.tool_config.clone())
+            .unwrap_or_else(default_json_object);
         let payload = json!({
             "lease_id": request.lease_id,
             "sid": request.sid,
             "generation": request.generation,
             "code": request.code,
             "args": request.args,
-            "timeout_ms": request.timeout_ms
+            "timeout_ms": request.timeout_ms,
+            "request_context": request_context,
+            "client_budget": client_budget,
+            "tool_config": tool_config
         });
-        let response = engine.eval_runtime_session_json(&payload.to_string())?;
-        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_eval_json")
+        let response = engine.eval_runtime_lease_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_lease_eval_json")
     }) {
         Ok(result) => ffi_ok::<Value>(result),
         Err(error) => ffi_error(error),
     }
 }
 
-/// Return one persistent runtime session status through the JSON FFI surface.
-/// 通过 JSON FFI 入口返回单个持久运行时会话状态。
+/// Return one persistent public runtime lease status through the JSON FFI surface.
+/// 通过 JSON FFI 入口返回单个公开持久运行时租约状态。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_runtime_session_status_json(
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_status_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionLeaseJsonRequest>(
         input_json,
-        "luaskills_ffi_runtime_session_status_json",
+        "luaskills_ffi_runtime_lease_status_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
@@ -1364,46 +1404,46 @@ pub unsafe extern "C" fn luaskills_ffi_runtime_session_status_json(
             "sid": request.sid,
             "generation": request.generation
         });
-        let response = engine.runtime_session_status_json(&payload.to_string())?;
-        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_status_json")
+        let response = engine.runtime_lease_status_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_lease_status_json")
     }) {
         Ok(result) => ffi_ok::<Value>(result),
         Err(error) => ffi_error(error),
     }
 }
 
-/// List active persistent runtime sessions through the JSON FFI surface.
-/// 通过 JSON FFI 入口列出活跃持久运行时会话。
+/// List active persistent public runtime leases through the JSON FFI surface.
+/// 通过 JSON FFI 入口列出活跃公开持久运行时租约。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_runtime_session_list_json(
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_list_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionListJsonRequest>(
         input_json,
-        "luaskills_ffi_runtime_session_list_json",
+        "luaskills_ffi_runtime_lease_list_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
     match with_engine(request.engine_id, |engine| {
         let payload = json!({ "sid": request.sid });
-        let response = engine.list_runtime_sessions_json(&payload.to_string())?;
-        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_list_json")
+        let response = engine.list_runtime_leases_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_lease_list_json")
     }) {
         Ok(result) => ffi_ok::<Value>(result),
         Err(error) => ffi_error(error),
     }
 }
 
-/// Close one persistent runtime session through the JSON FFI surface.
-/// 通过 JSON FFI 入口关闭单个持久运行时会话。
+/// Close one persistent public runtime lease through the JSON FFI surface.
+/// 通过 JSON FFI 入口关闭单个公开持久运行时租约。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_runtime_session_close_json(
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_close_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionLeaseJsonRequest>(
         input_json,
-        "luaskills_ffi_runtime_session_close_json",
+        "luaskills_ffi_runtime_lease_close_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
@@ -1414,30 +1454,30 @@ pub unsafe extern "C" fn luaskills_ffi_runtime_session_close_json(
             "sid": request.sid,
             "generation": request.generation
         });
-        let response = engine.close_runtime_session_json(&payload.to_string())?;
-        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_session_close_json")
+        let response = engine.close_runtime_lease_json(&payload.to_string())?;
+        parse_runtime_session_engine_payload(response, "luaskills_ffi_runtime_lease_close_json")
     }) {
         Ok(result) => ffi_ok::<Value>(result),
         Err(error) => ffi_error(error),
     }
 }
 
-/// Create one persistent runtime session through the system JSON FFI surface.
-/// 通过 system JSON FFI 入口创建单个持久运行时会话。
+/// Create one persistent `system_lua_lib` runtime lease through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口创建单个持久 `system_lua_lib` 运行时租约。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_create_json(
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_create_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionCreateJsonRequest>(
         input_json,
-        "luaskills_ffi_system_runtime_session_create_json",
+        "luaskills_ffi_system_runtime_lease_create_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
     let _authority = match require_json_authority(
         request.authority,
-        "luaskills_ffi_system_runtime_session_create_json",
+        "luaskills_ffi_system_runtime_lease_create_json",
     ) {
         Ok(authority) => authority,
         Err(error) => return ffi_error(error),
@@ -1446,12 +1486,17 @@ pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_create_json(
         let payload = json!({
             "sid": request.sid,
             "ttl_sec": request.ttl_sec,
-            "replace": request.replace
+            "replace": request.replace,
+            "cwd": request.cwd,
+            "workspace_root": request.workspace_root,
+            "lua_roots": request.lua_roots,
+            "c_roots": request.c_roots,
+            "mounts": request.mounts
         });
-        let response = engine.create_runtime_session_json(&payload.to_string())?;
+        let response = engine.create_system_runtime_lease_json(&payload.to_string())?;
         parse_runtime_session_engine_payload(
             response,
-            "luaskills_ffi_system_runtime_session_create_json",
+            "luaskills_ffi_system_runtime_lease_create_json",
         )
     }) {
         Ok(result) => ffi_ok::<Value>(result),
@@ -1459,39 +1504,56 @@ pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_create_json(
     }
 }
 
-/// Evaluate code inside one persistent runtime session through the system JSON FFI surface.
-/// 通过 system JSON FFI 入口在单个持久运行时会话中执行代码。
+/// Evaluate code inside one persistent `system_lua_lib` runtime lease through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口在单个持久 `system_lua_lib` 运行时租约中执行代码。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_eval_json(
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_eval_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionEvalJsonRequest>(
         input_json,
-        "luaskills_ffi_system_runtime_session_eval_json",
+        "luaskills_ffi_system_runtime_lease_eval_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
     let _authority = match require_json_authority(
         request.authority,
-        "luaskills_ffi_system_runtime_session_eval_json",
+        "luaskills_ffi_system_runtime_lease_eval_json",
     ) {
         Ok(authority) => authority,
         Err(error) => return ffi_error(error),
     };
     match with_engine(request.engine_id, |engine| {
+        let request_context = request
+            .invocation_context
+            .as_ref()
+            .and_then(|context| context.request_context.clone());
+        let client_budget = request
+            .invocation_context
+            .as_ref()
+            .map(|context| context.client_budget.clone())
+            .unwrap_or_else(default_json_object);
+        let tool_config = request
+            .invocation_context
+            .as_ref()
+            .map(|context| context.tool_config.clone())
+            .unwrap_or_else(default_json_object);
         let payload = json!({
             "lease_id": request.lease_id,
             "sid": request.sid,
             "generation": request.generation,
             "code": request.code,
             "args": request.args,
-            "timeout_ms": request.timeout_ms
+            "timeout_ms": request.timeout_ms,
+            "request_context": request_context,
+            "client_budget": client_budget,
+            "tool_config": tool_config
         });
-        let response = engine.eval_runtime_session_json(&payload.to_string())?;
+        let response = engine.eval_system_runtime_lease_json(&payload.to_string())?;
         parse_runtime_session_engine_payload(
             response,
-            "luaskills_ffi_system_runtime_session_eval_json",
+            "luaskills_ffi_system_runtime_lease_eval_json",
         )
     }) {
         Ok(result) => ffi_ok::<Value>(result),
@@ -1499,22 +1561,22 @@ pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_eval_json(
     }
 }
 
-/// Return one persistent runtime session status through the system JSON FFI surface.
-/// 通过 system JSON FFI 入口返回单个持久运行时会话状态。
+/// Return one persistent `system_lua_lib` runtime lease status through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口返回单个持久 `system_lua_lib` 运行时租约状态。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_status_json(
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_status_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionLeaseJsonRequest>(
         input_json,
-        "luaskills_ffi_system_runtime_session_status_json",
+        "luaskills_ffi_system_runtime_lease_status_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
     let _authority = match require_json_authority(
         request.authority,
-        "luaskills_ffi_system_runtime_session_status_json",
+        "luaskills_ffi_system_runtime_lease_status_json",
     ) {
         Ok(authority) => authority,
         Err(error) => return ffi_error(error),
@@ -1525,10 +1587,10 @@ pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_status_json(
             "sid": request.sid,
             "generation": request.generation
         });
-        let response = engine.runtime_session_status_json(&payload.to_string())?;
+        let response = engine.system_runtime_lease_status_json(&payload.to_string())?;
         parse_runtime_session_engine_payload(
             response,
-            "luaskills_ffi_system_runtime_session_status_json",
+            "luaskills_ffi_system_runtime_lease_status_json",
         )
     }) {
         Ok(result) => ffi_ok::<Value>(result),
@@ -1536,32 +1598,32 @@ pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_status_json(
     }
 }
 
-/// List active persistent runtime sessions through the system JSON FFI surface.
-/// 通过 system JSON FFI 入口列出活跃持久运行时会话。
+/// List active persistent `system_lua_lib` runtime leases through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口列出活跃持久 `system_lua_lib` 运行时租约。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_list_json(
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_list_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionListJsonRequest>(
         input_json,
-        "luaskills_ffi_system_runtime_session_list_json",
+        "luaskills_ffi_system_runtime_lease_list_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
     let _authority = match require_json_authority(
         request.authority,
-        "luaskills_ffi_system_runtime_session_list_json",
+        "luaskills_ffi_system_runtime_lease_list_json",
     ) {
         Ok(authority) => authority,
         Err(error) => return ffi_error(error),
     };
     match with_engine(request.engine_id, |engine| {
         let payload = json!({ "sid": request.sid });
-        let response = engine.list_runtime_sessions_json(&payload.to_string())?;
+        let response = engine.list_system_runtime_leases_json(&payload.to_string())?;
         parse_runtime_session_engine_payload(
             response,
-            "luaskills_ffi_system_runtime_session_list_json",
+            "luaskills_ffi_system_runtime_lease_list_json",
         )
     }) {
         Ok(result) => ffi_ok::<Value>(result),
@@ -1569,22 +1631,22 @@ pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_list_json(
     }
 }
 
-/// Close one persistent runtime session through the system JSON FFI surface.
-/// 通过 system JSON FFI 入口关闭单个持久运行时会话。
+/// Close one persistent `system_lua_lib` runtime lease through the system JSON FFI surface.
+/// 通过 system JSON FFI 入口关闭单个持久 `system_lua_lib` 运行时租约。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_close_json(
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_close_json(
     input_json: FfiBorrowedBuffer,
 ) -> FfiOwnedBuffer {
     let request = match decode_json_request::<RuntimeSessionLeaseJsonRequest>(
         input_json,
-        "luaskills_ffi_system_runtime_session_close_json",
+        "luaskills_ffi_system_runtime_lease_close_json",
     ) {
         Ok(request) => request,
         Err(error) => return ffi_error(error),
     };
     let _authority = match require_json_authority(
         request.authority,
-        "luaskills_ffi_system_runtime_session_close_json",
+        "luaskills_ffi_system_runtime_lease_close_json",
     ) {
         Ok(authority) => authority,
         Err(error) => return ffi_error(error),
@@ -1595,10 +1657,10 @@ pub unsafe extern "C" fn luaskills_ffi_system_runtime_session_close_json(
             "sid": request.sid,
             "generation": request.generation
         });
-        let response = engine.close_runtime_session_json(&payload.to_string())?;
+        let response = engine.close_system_runtime_lease_json(&payload.to_string())?;
         parse_runtime_session_engine_payload(
             response,
-            "luaskills_ffi_system_runtime_session_close_json",
+            "luaskills_ffi_system_runtime_lease_close_json",
         )
     }) {
         Ok(result) => ffi_ok::<Value>(result),
@@ -1948,14 +2010,14 @@ mod tests {
         luaskills_ffi_is_skill_json, luaskills_ffi_list_entries_json,
         luaskills_ffi_list_skill_help_json, luaskills_ffi_prompt_argument_completions_json,
         luaskills_ffi_render_skill_help_detail_json, luaskills_ffi_run_lua_json,
-        luaskills_ffi_runtime_session_close_json, luaskills_ffi_runtime_session_create_json,
-        luaskills_ffi_runtime_session_eval_json, luaskills_ffi_runtime_session_list_json,
+        luaskills_ffi_runtime_lease_close_json, luaskills_ffi_runtime_lease_create_json,
+        luaskills_ffi_runtime_lease_eval_json, luaskills_ffi_runtime_lease_list_json,
         luaskills_ffi_skill_config_delete_json, luaskills_ffi_skill_config_get_json,
         luaskills_ffi_skill_config_list_json, luaskills_ffi_skill_config_set_json,
-        luaskills_ffi_skill_name_for_tool_json, luaskills_ffi_system_runtime_session_close_json,
-        luaskills_ffi_system_runtime_session_create_json,
-        luaskills_ffi_system_runtime_session_eval_json,
-        luaskills_ffi_system_runtime_session_list_json, with_engine,
+        luaskills_ffi_skill_name_for_tool_json, luaskills_ffi_system_runtime_lease_close_json,
+        luaskills_ffi_system_runtime_lease_create_json,
+        luaskills_ffi_system_runtime_lease_eval_json, luaskills_ffi_system_runtime_lease_list_json,
+        with_engine,
     };
     use crate::ffi_standard::{FfiBorrowedBuffer, FfiOwnedBuffer, luaskills_ffi_buffer_free};
     use crate::{
@@ -1995,10 +2057,10 @@ mod tests {
     /// 返回一把用于串行化访问全局引擎注册表的共享测试锁。
     fn ffi_test_guard() -> MutexGuard<'static, ()> {
         static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-        TEST_MUTEX
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("lock ffi test mutex")
+        match TEST_MUTEX.get_or_init(|| Mutex::new(())).lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     /// One test-only registered engine handle that cleans itself from the global registry on drop.
@@ -2051,7 +2113,7 @@ mod tests {
         )
         .expect("create request");
         let created = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_create_json(
+            decode_response_json(luaskills_ffi_runtime_lease_create_json(
                 borrowed_json_buffer(&create_request),
             ))
         };
@@ -2072,9 +2134,9 @@ mod tests {
         )
         .expect("first eval request");
         let first = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_eval_json(
-                borrowed_json_buffer(&first_request),
-            ))
+            decode_response_json(luaskills_ffi_runtime_lease_eval_json(borrowed_json_buffer(
+                &first_request,
+            )))
         };
         assert_eq!(first["ok"], true);
         assert_eq!(first["result"]["ok"], true);
@@ -2090,9 +2152,9 @@ mod tests {
         )
         .expect("second eval request");
         let second = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_eval_json(
-                borrowed_json_buffer(&second_request),
-            ))
+            decode_response_json(luaskills_ffi_runtime_lease_eval_json(borrowed_json_buffer(
+                &second_request,
+            )))
         };
         assert_eq!(second["ok"], true);
         assert_eq!(second["result"]["result"], serde_json::json!(2));
@@ -2106,7 +2168,7 @@ mod tests {
         )
         .expect("close request");
         let closed = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_close_json(
+            decode_response_json(luaskills_ffi_runtime_lease_close_json(
                 borrowed_json_buffer(&close_request),
             ))
         };
@@ -2131,7 +2193,7 @@ mod tests {
         )
         .expect("alpha create request");
         let alpha_created = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_create_json(
+            decode_response_json(luaskills_ffi_runtime_lease_create_json(
                 borrowed_json_buffer(&alpha_create_request),
             ))
         };
@@ -2151,7 +2213,7 @@ mod tests {
         )
         .expect("beta create request");
         let beta_created = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_create_json(
+            decode_response_json(luaskills_ffi_runtime_lease_create_json(
                 borrowed_json_buffer(&beta_create_request),
             ))
         };
@@ -2165,9 +2227,9 @@ mod tests {
         )
         .expect("list request");
         let listed = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_list_json(
-                borrowed_json_buffer(&list_request),
-            ))
+            decode_response_json(luaskills_ffi_runtime_lease_list_json(borrowed_json_buffer(
+                &list_request,
+            )))
         };
         assert_eq!(listed["ok"], true);
         assert_eq!(listed["result"]["ok"], true);
@@ -2182,7 +2244,7 @@ mod tests {
         )
         .expect("alpha close request");
         let closed = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_close_json(
+            decode_response_json(luaskills_ffi_runtime_lease_close_json(
                 borrowed_json_buffer(&close_request),
             ))
         };
@@ -2197,9 +2259,9 @@ mod tests {
         )
         .expect("filtered list request");
         let filtered = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_list_json(
-                borrowed_json_buffer(&filtered_request),
-            ))
+            decode_response_json(luaskills_ffi_runtime_lease_list_json(borrowed_json_buffer(
+                &filtered_request,
+            )))
         };
         assert_eq!(filtered["ok"], true);
         assert_eq!(
@@ -2224,7 +2286,7 @@ mod tests {
         )
         .expect("generation create request");
         let created = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_create_json(
+            decode_response_json(luaskills_ffi_runtime_lease_create_json(
                 borrowed_json_buffer(&create_request),
             ))
         };
@@ -2250,9 +2312,9 @@ mod tests {
         )
         .expect("generation eval request");
         let eval = unsafe {
-            decode_response_json(luaskills_ffi_runtime_session_eval_json(
-                borrowed_json_buffer(&eval_request),
-            ))
+            decode_response_json(luaskills_ffi_runtime_lease_eval_json(borrowed_json_buffer(
+                &eval_request,
+            )))
         };
         assert_eq!(eval["ok"], true);
         assert_eq!(eval["result"]["ok"], false);
@@ -2275,11 +2337,11 @@ mod tests {
             .iter()
             .filter_map(serde_json::Value::as_str)
             .collect();
-        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_create_json"));
-        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_eval_json"));
-        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_status_json"));
-        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_list_json"));
-        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_session_close_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_lease_create_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_lease_eval_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_lease_status_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_lease_list_json"));
+        assert!(exported_names.contains(&"luaskills_ffi_system_runtime_lease_close_json"));
     }
 
     /// Verify system runtime-session JSON FFI rejects requests that omit authority.
@@ -2298,7 +2360,7 @@ mod tests {
         )
         .expect("system create request");
         let created = unsafe {
-            decode_response_json(luaskills_ffi_system_runtime_session_create_json(
+            decode_response_json(luaskills_ffi_system_runtime_lease_create_json(
                 borrowed_json_buffer(&create_request),
             ))
         };
@@ -2329,7 +2391,7 @@ mod tests {
         )
         .expect("system create request");
         let created = unsafe {
-            decode_response_json(luaskills_ffi_system_runtime_session_create_json(
+            decode_response_json(luaskills_ffi_system_runtime_lease_create_json(
                 borrowed_json_buffer(&create_request),
             ))
         };
@@ -2360,7 +2422,7 @@ mod tests {
         )
         .expect("system first eval request");
         let first = unsafe {
-            decode_response_json(luaskills_ffi_system_runtime_session_eval_json(
+            decode_response_json(luaskills_ffi_system_runtime_lease_eval_json(
                 borrowed_json_buffer(&first_eval_request),
             ))
         };
@@ -2380,7 +2442,7 @@ mod tests {
         )
         .expect("system second eval request");
         let second = unsafe {
-            decode_response_json(luaskills_ffi_system_runtime_session_eval_json(
+            decode_response_json(luaskills_ffi_system_runtime_lease_eval_json(
                 borrowed_json_buffer(&second_eval_request),
             ))
         };
@@ -2397,7 +2459,7 @@ mod tests {
         )
         .expect("system list request");
         let listed = unsafe {
-            decode_response_json(luaskills_ffi_system_runtime_session_list_json(
+            decode_response_json(luaskills_ffi_system_runtime_lease_list_json(
                 borrowed_json_buffer(&list_request),
             ))
         };
@@ -2416,7 +2478,7 @@ mod tests {
         )
         .expect("system close request");
         let closed = unsafe {
-            decode_response_json(luaskills_ffi_system_runtime_session_close_json(
+            decode_response_json(luaskills_ffi_system_runtime_lease_close_json(
                 borrowed_json_buffer(&close_request),
             ))
         };
@@ -2716,6 +2778,7 @@ mod tests {
                     host_provided_tool_root: Some(temp_root.join("bin").join("tools")),
                     host_provided_lua_root: Some(temp_root.join("lua_packages")),
                     host_provided_ffi_root: Some(temp_root.join("libs")),
+                    system_lua_lib_dir: None,
                     download_cache_root: Some(temp_root.join("temp").join("downloads")),
                     dependency_dir_name: "dependencies".to_string(),
                     state_dir_name: "state".to_string(),
@@ -2787,6 +2850,7 @@ mod tests {
                     host_provided_tool_root: Some(temp_root.join("bin").join("tools")),
                     host_provided_lua_root: Some(temp_root.join("lua_packages")),
                     host_provided_ffi_root: Some(temp_root.join("libs")),
+                    system_lua_lib_dir: None,
                     download_cache_root: Some(temp_root.join("temp").join("downloads")),
                     dependency_dir_name: "dependencies".to_string(),
                     state_dir_name: "state".to_string(),

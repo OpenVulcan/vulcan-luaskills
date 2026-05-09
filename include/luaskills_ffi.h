@@ -73,6 +73,11 @@ typedef struct FfiLuaRuntimeHostOptions {
     const char *host_provided_tool_root;
     const char *host_provided_lua_root;
     const char *host_provided_ffi_root;
+    /*
+    Optional fixed host-owned `system_lua_lib` directory path.
+    可选固定宿主自有 `system_lua_lib` 目录路径。
+    */
+    const char *system_lua_lib_dir;
     const char *download_cache_root;
     const char *dependency_dir_name;
     const char *state_dir_name;
@@ -156,8 +161,8 @@ typedef struct FfiLuaRuntimeHostOptions {
     */
     const char *default_text_encoding;
     /*
-    Whether luaexec and runtime sessions must keep Lua's native `io` table.
-    luaexec 与持久运行时会话是否必须保留 Lua 原生 `io` 表。
+    Whether luaexec and runtime leases must keep Lua's native `io` table.
+    luaexec 与持久运行时租约是否必须保留 Lua 原生 `io` 表。
     */
     uint8_t disable_managed_io_compat;
 } FfiLuaRuntimeHostOptions;
@@ -348,12 +353,19 @@ typedef struct FfiRuntimeHelpDetail {
     FfiOwnedBuffer content;
 } FfiRuntimeHelpDetail;
 
+typedef struct FfiRuntimeHostResult {
+    FfiOwnedBuffer kind;
+    FfiOwnedBuffer payload_json;
+    size_t payload_bytes;
+} FfiRuntimeHostResult;
+
 typedef struct FfiRuntimeInvocationResult {
     FfiOwnedBuffer content;
     int32_t overflow_mode;
     FfiOwnedBuffer template_hint;
     size_t content_bytes;
     size_t content_lines;
+    FfiRuntimeHostResult *host_result;
 } FfiRuntimeInvocationResult;
 
 typedef struct FfiSkillApplyResult {
@@ -673,6 +685,116 @@ int32_t luaskills_ffi_run_lua(
     const char *code,
     FfiBorrowedBuffer args_json,
     const FfiLuaInvocationContext *invocation_context,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Open one public runtime lease through the standard C ABI surface.
+通过标准 C ABI 接口打开一个公共运行时租约。
+*/
+int32_t luaskills_ffi_runtime_lease_create(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Evaluate one public runtime lease through the standard C ABI surface.
+通过标准 C ABI 接口执行一个公共运行时租约。
+*/
+int32_t luaskills_ffi_runtime_lease_eval(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Read one public runtime lease status through the standard C ABI surface.
+通过标准 C ABI 接口读取一个公共运行时租约状态。
+*/
+int32_t luaskills_ffi_runtime_lease_status(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+List public runtime leases through the standard C ABI surface.
+通过标准 C ABI 接口列出公共运行时租约。
+*/
+int32_t luaskills_ffi_runtime_lease_list(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Close one public runtime lease through the standard C ABI surface.
+通过标准 C ABI 接口关闭一个公共运行时租约。
+*/
+int32_t luaskills_ffi_runtime_lease_close(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Open one system_lua_lib runtime lease through the standard C ABI surface.
+通过标准 C ABI 接口打开一个 system_lua_lib 运行时租约。
+*/
+int32_t luaskills_ffi_system_runtime_lease_create(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Evaluate one system_lua_lib runtime lease through the standard C ABI surface.
+通过标准 C ABI 接口执行一个 system_lua_lib 运行时租约。
+*/
+int32_t luaskills_ffi_system_runtime_lease_eval(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Read one system_lua_lib runtime lease status through the standard C ABI surface.
+通过标准 C ABI 接口读取一个 system_lua_lib 运行时租约状态。
+*/
+int32_t luaskills_ffi_system_runtime_lease_status(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+List system_lua_lib runtime leases through the standard C ABI surface.
+通过标准 C ABI 接口列出 system_lua_lib 运行时租约。
+*/
+int32_t luaskills_ffi_system_runtime_lease_list(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
+    FfiOwnedBuffer *result_json_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Close one system_lua_lib runtime lease through the standard C ABI surface.
+通过标准 C ABI 接口关闭一个 system_lua_lib 运行时租约。
+*/
+int32_t luaskills_ffi_system_runtime_lease_close(
+    uint64_t engine_id,
+    FfiBorrowedBuffer request_json,
     FfiOwnedBuffer *result_json_out,
     FfiOwnedBuffer *error_out
 );

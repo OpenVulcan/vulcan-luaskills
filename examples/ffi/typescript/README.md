@@ -5,7 +5,7 @@
 - `demo.ts`
 - `lifecycle_demo.ts`
 - `query_demo.ts`
-- `runtime_session_demo.ts`
+- `runtime_lease_demo.ts`
 
 ## 1. 安装依赖
 
@@ -51,5 +51,5 @@ npm run query
 持久运行时租约示例：
 
 ```powershell
-npm run runtime-session
+npm run runtime-lease
 ```

@@ -1,6 +1,6 @@
 """
-Minimal Python host demo for one persistent runtime session lease.
-演示单个持久运行时会话租约的最小 Python 宿主示例。
+Minimal Python host demo for one persistent runtime lease.
+演示单个持久运行时租约的最小 Python 宿主示例。
 """
 
 from demo import load_library, standard_fixture_runtime_root
@@ -11,7 +11,7 @@ from json_runtime import (
 )
 
 
-RUNTIME_SESSION_SID = "python-runtime-session-demo"
+RUNTIME_SESSION_SID = "python-runtime-lease-demo"
 
 
 def main() -> None:
@@ -44,10 +44,10 @@ def main() -> None:
             system.skill_name_for_tool("demo-standard-ffi-skill-ping"),
         )
 
-        sessions = system.runtime_sessions()
+        sessions = system.runtime_leases()
         print(
-            "Uses dedicated system runtime-session endpoints:",
-            sessions.uses_system_runtime_session_endpoints(),
+            "Uses dedicated system runtime-lease endpoints:",
+            sessions.uses_system_runtime_lease_endpoints(),
         )
         session = sessions.create_handle(RUNTIME_SESSION_SID, ttl_sec=600, replace=True)
         identity = session.identity_payload()
@@ -76,14 +76,14 @@ if not proc then
   proc = vulcan.process.session.open(spec)
 end
 counter = (counter or 0) + 1
-proc:write((args.input or "runtime-session-demo") .. "\\n")
+proc:write((args.input or "runtime-lease-demo") .. "\\n")
 return {
   opened = true,
   counter = counter,
   input = args.input,
 }
 """,
-            args={"input": "runtime-session-demo"},
+            args={"input": "runtime-lease-demo"},
         )
         print("Open eval result:", opened["result"])
 

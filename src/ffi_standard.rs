@@ -29,6 +29,7 @@ use crate::runtime_options::{
     LuaRuntimeRunLuaPoolConfig, LuaRuntimeSpaceControllerOptions,
     LuaRuntimeSpaceControllerProcessMode, RuntimeSkillRoot,
 };
+use crate::runtime_result::RuntimeHostResult;
 use crate::skill::manager::{SkillInstallRequest, SkillManagementAuthority, SkillUninstallOptions};
 use crate::skill::source::SkillInstallSourceType;
 use crate::tool_cache::ToolCacheConfig;
@@ -156,6 +157,9 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Optional host-provided FFI root path.
     /// 可选宿主提供 FFI 根目录路径。
     pub host_provided_ffi_root: *const c_char,
+    /// Optional fixed host-owned `system_lua_lib` directory path.
+    /// 可选固定宿主自有 `system_lua_lib` 目录路径。
+    pub system_lua_lib_dir: *const c_char,
     /// Optional download-cache root path.
     /// 可选下载缓存根目录路径。
     pub download_cache_root: *const c_char,
@@ -576,6 +580,21 @@ pub struct FfiRuntimeHelpDetail {
 /// Plain C ABI invocation result.
 /// 原生 C ABI 调用结果结构。
 #[repr(C)]
+pub struct FfiRuntimeHostResult {
+    /// Stable host-result kind.
+    /// 稳定宿主结果类型。
+    pub kind: FfiOwnedBuffer,
+    /// Serialized host-result payload JSON.
+    /// 序列化后的宿主结果载荷 JSON。
+    pub payload_json: FfiOwnedBuffer,
+    /// Serialized host-result payload byte size.
+    /// 序列化后宿主结果载荷字节数。
+    pub payload_bytes: usize,
+}
+
+/// Plain C ABI invocation result.
+/// 原生 C ABI 调用结果结构。
+#[repr(C)]
 pub struct FfiRuntimeInvocationResult {
     /// Tool body content.
     /// 工具正文内容。
@@ -592,6 +611,9 @@ pub struct FfiRuntimeInvocationResult {
     /// Content line count.
     /// 内容行数。
     pub content_lines: usize,
+    /// Optional structured host-side result pointer.
+    /// 可选结构化宿主结果指针。
+    pub host_result: *mut FfiRuntimeHostResult,
 }
 
 /// Plain C ABI install or update result.
@@ -868,6 +890,38 @@ fn parse_request_context_buffer(
     }
 }
 
+/// Execute one engine JSON-text method and write its returned UTF-8 JSON text into one owned buffer output.
+/// 执行单个引擎 JSON 文本方法，并把返回的 UTF-8 JSON 文本写入拥有型缓冲输出。
+fn run_engine_json_text_call<F>(
+    engine_id: u64,
+    request_json: &FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+    field_name: &str,
+    callback: F,
+) -> i32
+where
+    F: FnOnce(&LuaEngine, &str) -> Result<String, String>,
+{
+    clear_error_out(error_out);
+    clear_out_buffer(result_json_out);
+    if result_json_out.is_null() {
+        return ffi_error_status(error_out, "result_json_out must not be null");
+    }
+    let request_json = match parse_optional_borrowed_text(request_json, field_name) {
+        Ok(Some(text)) => text,
+        Ok(None) => return ffi_error_status(error_out, format!("{field_name} must not be empty")),
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match with_engine(engine_id, |engine| callback(engine, &request_json)) {
+        Ok(result_json) => {
+            unsafe { *result_json_out = alloc_owned_buffer_from_string(result_json) };
+            ffi_ok_status(error_out)
+        }
+        Err(error) => ffi_error_status(error_out, error),
+    }
+}
+
 /// Convert one C ABI cache config pointer into one Rust cache config.
 /// 将单个 C ABI 缓存配置指针转换为一个 Rust 缓存配置。
 fn parse_cache_config(value: *const FfiToolCacheConfig) -> Option<ToolCacheConfig> {
@@ -924,6 +978,8 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             "host_provided_ffi_root",
         )?
         .map(PathBuf::from),
+        system_lua_lib_dir: parse_optional_string(value.system_lua_lib_dir, "system_lua_lib_dir")?
+            .map(PathBuf::from),
         download_cache_root: parse_optional_string(
             value.download_cache_root,
             "download_cache_root",
@@ -1265,18 +1321,37 @@ fn alloc_help_detail(value: &RuntimeHelpDetail) -> FfiRuntimeHelpDetail {
 
 /// Convert one runtime invocation result into one C ABI result.
 /// 将单个运行时调用结果转换为一个 C ABI 结果结构。
+fn alloc_host_result(value: &RuntimeHostResult) -> Result<FfiRuntimeHostResult, String> {
+    let payload_json = serde_json::to_string(&value.payload)
+        .map_err(|error| format!("Failed to serialize host_result payload: {}", error))?;
+    Ok(FfiRuntimeHostResult {
+        kind: alloc_owned_buffer_from_string(&value.kind),
+        payload_json: alloc_owned_buffer_from_string(&payload_json),
+        payload_bytes: payload_json.len(),
+    })
+}
+
+/// Convert one runtime invocation result into one C ABI result.
+/// 将单个运行时调用结果转换为一个 C ABI 结果结构。
 fn alloc_invocation_result(value: &RuntimeInvocationResult) -> FfiRuntimeInvocationResult {
     let overflow_mode = match value.overflow_mode {
         None => 0,
         Some(crate::ToolOverflowMode::Truncate) => 1,
         Some(crate::ToolOverflowMode::Page) => 2,
     };
+    let host_result = value
+        .host_result
+        .as_ref()
+        .and_then(|host_result| alloc_host_result(host_result).ok())
+        .map(|host_result| Box::into_raw(Box::new(host_result)))
+        .unwrap_or(ptr::null_mut());
     FfiRuntimeInvocationResult {
         content: alloc_owned_buffer_from_string(&value.content),
         overflow_mode,
         template_hint: alloc_optional_owned_buffer_from_string(value.template_hint.as_deref()),
         content_bytes: value.content_bytes,
         content_lines: value.content_lines,
+        host_result,
     }
 }
 
@@ -2285,6 +2360,11 @@ pub unsafe extern "C" fn luaskills_ffi_invocation_result_free(
     let value = unsafe { *Box::from_raw(value) };
     unsafe { luaskills_ffi_buffer_free(value.content) };
     unsafe { luaskills_ffi_buffer_free(value.template_hint) };
+    if !value.host_result.is_null() {
+        let host_result = unsafe { *Box::from_raw(value.host_result) };
+        unsafe { luaskills_ffi_buffer_free(host_result.kind) };
+        unsafe { luaskills_ffi_buffer_free(host_result.payload_json) };
+    }
 }
 
 /// Free one install or update result allocated by the standard FFI layer.
@@ -2915,6 +2995,196 @@ pub unsafe extern "C" fn luaskills_ffi_run_lua(
         },
         Err(error) => ffi_error_status(error_out, error),
     }
+}
+
+/// Create one public runtime lease through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷创建一个公开运行时租约。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_create(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.create_runtime_lease_json(request_json),
+    )
+}
+
+/// Evaluate one public runtime lease through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷执行一个公开运行时租约。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_eval(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.eval_runtime_lease_json(request_json),
+    )
+}
+
+/// Return one public runtime lease status through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷返回一个公开运行时租约状态。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_status(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.runtime_lease_status_json(request_json),
+    )
+}
+
+/// List public runtime leases through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷列出公开运行时租约。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_list(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.list_runtime_leases_json(request_json),
+    )
+}
+
+/// Close one public runtime lease through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷关闭一个公开运行时租约。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_runtime_lease_close(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.close_runtime_lease_json(request_json),
+    )
+}
+
+/// Create one `system_lua_lib` runtime lease through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷创建一个 `system_lua_lib` 运行时租约。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_create(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.create_system_runtime_lease_json(request_json),
+    )
+}
+
+/// Evaluate one `system_lua_lib` runtime lease through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷执行一个 `system_lua_lib` 运行时租约。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_eval(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.eval_system_runtime_lease_json(request_json),
+    )
+}
+
+/// Return one `system_lua_lib` runtime lease status through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷返回一个 `system_lua_lib` 运行时租约状态。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_status(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.system_runtime_lease_status_json(request_json),
+    )
+}
+
+/// List `system_lua_lib` runtime leases through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷列出 `system_lua_lib` 运行时租约。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_list(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.list_system_runtime_leases_json(request_json),
+    )
+}
+
+/// Close one `system_lua_lib` runtime lease through the standard C ABI surface using one JSON request payload.
+/// 通过标准 C ABI 接口使用一段 JSON 请求载荷关闭一个 `system_lua_lib` 运行时租约。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_runtime_lease_close(
+    engine_id: u64,
+    request_json: FfiBorrowedBuffer,
+    result_json_out: *mut FfiOwnedBuffer,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    run_engine_json_text_call(
+        engine_id,
+        &request_json,
+        result_json_out,
+        error_out,
+        "request_json",
+        |engine, request_json| engine.close_system_runtime_lease_json(request_json),
+    )
 }
 
 /// Disable one skill through one ordered root chain via the standard C ABI surface.
@@ -3758,6 +4028,7 @@ mod tests {
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            system_lua_lib_dir: ptr::null(),
             download_cache_root: ptr::null(),
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
@@ -4074,6 +4345,7 @@ mod tests {
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            system_lua_lib_dir: ptr::null(),
             download_cache_root: ptr::null(),
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
@@ -4232,6 +4504,7 @@ mod tests {
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            system_lua_lib_dir: ptr::null(),
             download_cache_root: ptr::null(),
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
@@ -4388,6 +4661,7 @@ mod tests {
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            system_lua_lib_dir: ptr::null(),
             download_cache_root: ptr::null(),
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
@@ -4640,6 +4914,7 @@ mod tests {
             host_provided_tool_root: tool_root_dir_text.as_ptr(),
             host_provided_lua_root: lua_packages_dir_text.as_ptr(),
             host_provided_ffi_root: ffi_root_dir_text.as_ptr(),
+            system_lua_lib_dir: ptr::null(),
             download_cache_root: ptr::null(),
             dependency_dir_name: dependency_dir_name.as_ptr(),
             state_dir_name: state_dir_name.as_ptr(),
