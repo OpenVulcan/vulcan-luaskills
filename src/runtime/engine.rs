@@ -166,10 +166,7 @@ fn validate_runtime_relative_manifest_path(label: &str, relative_path: &str) -> 
         ));
     }
     if candidate.components().next().is_none() {
-        return Err(format!(
-            "packaged runtime is invalid: {} is empty",
-            label
-        ));
+        return Err(format!("packaged runtime is invalid: {} is empty", label));
     }
     Ok(())
 }
@@ -279,11 +276,7 @@ fn validate_packaged_runtime_packages_layout(resources_dir: &Path) -> Result<(),
         "module_help_root",
         &manifest.paths.module_help_root,
     )?;
-    validate_packaged_runtime_target(
-        runtime_root,
-        "license_index",
-        &manifest.paths.license_index,
-    )?;
+    validate_packaged_runtime_target(runtime_root, "license_index", &manifest.paths.license_index)?;
     Ok(())
 }
 
@@ -9265,7 +9258,9 @@ mod tests {
         }
         create_runtime_test_layout(&runtime_root);
         fs::write(
-            runtime_root.join("resources").join("lua-runtime-manifest.json"),
+            runtime_root
+                .join("resources")
+                .join("lua-runtime-manifest.json"),
             "{\n  \"schema_version\": 1,\n  \"layout\": \"luaskills-runtime-v1\"\n}\n",
         )
         .expect("write runtime manifest trigger file");

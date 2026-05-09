@@ -489,10 +489,8 @@ impl ManagedProcessSessionState {
     /// Return whether all output readers have already finished draining their pipes.
     /// 返回全部输出读取器是否都已经完成并排空各自管道。
     fn output_readers_drained(&self) -> Result<bool, String> {
-        Ok(
-            Self::reader_completed(&self.stdout_reader, "stdout")?
-                && Self::reader_completed(&self.stderr_reader, "stderr")?,
-        )
+        Ok(Self::reader_completed(&self.stdout_reader, "stdout")?
+            && Self::reader_completed(&self.stderr_reader, "stderr")?)
     }
 
     /// Drop the session stdin pipe so the child can observe EOF.
@@ -1040,11 +1038,9 @@ fn terminate_windows_process_tree_snapshot(child: &Child) -> Result<(), String> 
     for descendant in descendants.into_iter().rev() {
         if let Some(handle) = descendant.handle {
             let label = format!("process {}", descendant.pid);
-            if let Err(error) = terminate_windows_process_handle(
-                handle.as_raw_handle() as HANDLE,
-                &label,
-                false,
-            ) {
+            if let Err(error) =
+                terminate_windows_process_handle(handle.as_raw_handle() as HANDLE, &label, false)
+            {
                 if first_error.is_none() {
                     first_error = Some(error);
                 }
@@ -1194,8 +1190,10 @@ fn current_windows_time_ticks() -> Result<u64, String> {
     let unix_elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| format!("SystemTime before UNIX_EPOCH: {error}"))?;
-    Ok((unix_elapsed.as_secs() + WINDOWS_TO_UNIX_EPOCH_SECONDS) * 10_000_000
-        + u64::from(unix_elapsed.subsec_nanos() / 100))
+    Ok(
+        (unix_elapsed.as_secs() + WINDOWS_TO_UNIX_EPOCH_SECONDS) * 10_000_000
+            + u64::from(unix_elapsed.subsec_nanos() / 100),
+    )
 }
 
 #[cfg(windows)]
@@ -1918,27 +1916,26 @@ mod tests {
             .join_reader_threads()
             .expect("join real readers before installing test readers");
 
-        let install_test_reader =
-            || -> (SessionPipeReader, mpsc::Sender<()>, Arc<AtomicBool>) {
-                let (release_tx, release_rx) = mpsc::channel();
-                let (done_tx, done_rx) = mpsc::channel();
-                let done = Arc::new(AtomicBool::new(false));
-                let done_flag = done.clone();
-                let handle = thread::spawn(move || {
-                    release_rx.recv().expect("release synthetic session reader");
-                    done_flag.store(true, Ordering::Release);
-                    let _ = done_tx.send(());
-                });
-                (
-                    SessionPipeReader {
-                        handle,
-                        done_rx,
-                        done: done.clone(),
-                    },
-                    release_tx,
-                    done,
-                )
-            };
+        let install_test_reader = || -> (SessionPipeReader, mpsc::Sender<()>, Arc<AtomicBool>) {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let done = Arc::new(AtomicBool::new(false));
+            let done_flag = done.clone();
+            let handle = thread::spawn(move || {
+                release_rx.recv().expect("release synthetic session reader");
+                done_flag.store(true, Ordering::Release);
+                let _ = done_tx.send(());
+            });
+            (
+                SessionPipeReader {
+                    handle,
+                    done_rx,
+                    done: done.clone(),
+                },
+                release_tx,
+                done,
+            )
+        };
         let (stdout_reader, stdout_release_tx, _) = install_test_reader();
         let (stderr_reader, stderr_release_tx, _) = install_test_reader();
         *session
@@ -1972,9 +1969,7 @@ mod tests {
                 .expect("release synthetic stderr reader");
         });
         let options = lua.create_table().expect("create read options");
-        options
-            .set("timeout_ms", 3_000)
-            .expect("set read timeout");
+        options.set("timeout_ms", 3_000).expect("set read timeout");
         options
             .set("until_text", "child-ready")
             .expect("set read marker");
