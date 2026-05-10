@@ -9792,8 +9792,8 @@ mod tests {
         default_runlua_vm_pool_config, get_vulcan_context_table, get_vulcan_deps_table,
         get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
         normalize_host_visible_path_text, populate_vulcan_dependency_context,
-        populate_vulcan_file_context, populate_vulcan_internal_execution_context, runlua_cwd_guard,
-        render_host_visible_path,
+        populate_vulcan_file_context, populate_vulcan_internal_execution_context,
+        render_host_visible_path, runlua_cwd_guard,
     };
     use crate::host::callbacks::runtime_model_callback_test_guard;
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
@@ -12730,13 +12730,15 @@ return {
 
         let created: Value = serde_json::from_str(
             &engine
-                .create_system_runtime_lease_json(&json!({
-                    "authority": "system",
-                    "sid": "system-cwd-test",
-                    "ttl_sec": 60,
-                    "cwd": explicit_cwd.to_string_lossy()
-                })
-                .to_string())
+                .create_system_runtime_lease_json(
+                    &json!({
+                        "authority": "system",
+                        "sid": "system-cwd-test",
+                        "ttl_sec": 60,
+                        "cwd": explicit_cwd.to_string_lossy()
+                    })
+                    .to_string(),
+                )
                 .expect("create system runtime lease"),
         )
         .expect("system runtime lease create response json");
@@ -12760,17 +12762,22 @@ return {
 
         let status: Value = serde_json::from_str(
             &engine
-                .system_runtime_lease_status_json(&json!({
-                    "authority": "system",
-                    "lease_id": lease_id,
-                    "generation": generation
-                })
-                .to_string())
+                .system_runtime_lease_status_json(
+                    &json!({
+                        "authority": "system",
+                        "lease_id": lease_id,
+                        "generation": generation
+                    })
+                    .to_string(),
+                )
                 .expect("status system runtime lease"),
         )
         .expect("system runtime lease status response json");
         assert_eq!(status["ok"], true);
-        assert_eq!(status["cwd"], json!(render_host_visible_path(&explicit_cwd)));
+        assert_eq!(
+            status["cwd"],
+            json!(render_host_visible_path(&explicit_cwd))
+        );
         assert_eq!(
             status["system_lua_lib"],
             json!(render_host_visible_path(&fixed_system_dir))
@@ -12778,21 +12785,20 @@ return {
 
         let eval: Value = serde_json::from_str(
             &engine
-                .eval_system_runtime_lease_json(&json!({
-                    "authority": "system",
-                    "lease_id": lease_id,
-                    "generation": generation,
-                    "code": "return { cwd = vulcan.runtime.cwd() }"
-                })
-                .to_string())
+                .eval_system_runtime_lease_json(
+                    &json!({
+                        "authority": "system",
+                        "lease_id": lease_id,
+                        "generation": generation,
+                        "code": "return { cwd = vulcan.runtime.cwd() }"
+                    })
+                    .to_string(),
+                )
                 .expect("eval system runtime lease"),
         )
         .expect("system runtime lease eval response json");
         assert_eq!(eval["ok"], true);
-        assert_eq!(
-            eval["cwd"],
-            json!(render_host_visible_path(&explicit_cwd))
-        );
+        assert_eq!(eval["cwd"], json!(render_host_visible_path(&explicit_cwd)));
         assert_eq!(
             eval["system_lua_lib"],
             json!(render_host_visible_path(&fixed_system_dir))
