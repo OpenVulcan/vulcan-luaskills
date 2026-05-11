@@ -1,0 +1,1436 @@
+use super::lease::default_runlua_exec_args;
+use super::*;
+
+/// RunLua execution request accepted by `vulcan.runtime.lua.exec`.
+/// `vulcan.runtime.lua.exec` 接收的 RunLua 执行请求结构。
+#[derive(Debug, Deserialize, Serialize)]
+struct RunLuaExecRequest {
+    /// Human-readable task summary echoed in the result header.
+    /// 展示在结果头部的人类可读任务摘要。
+    #[serde(default)]
+    task: String,
+    /// Inline Lua source code executed inside the isolated runtime VM.
+    /// 在隔离运行时虚拟机中执行的内联 Lua 源代码。
+    #[serde(default)]
+    code: Option<String>,
+    /// Lua file path executed inside the isolated runtime VM.
+    /// 在隔离运行时虚拟机中执行的 Lua 文件路径。
+    #[serde(default)]
+    file: Option<String>,
+    /// Structured arguments exposed to Lua as `args`.
+    /// 以 `args` 变量形式暴露给 Lua 的结构化参数。
+    #[serde(default = "default_runlua_exec_args")]
+    args: Value,
+    /// Maximum execution time in milliseconds. Defaults to 60 seconds.
+    /// 最大执行时长（毫秒），默认 60 秒。
+    #[serde(default = "default_runlua_timeout_ms")]
+    timeout_ms: u64,
+    /// Internal caller tool name used to enforce luaexec reentrancy guards.
+    /// 用于执行 luaexec 重入保护的内部调用者工具名称。
+    #[serde(default)]
+    caller_tool_name: Option<String>,
+}
+
+/// Return the default timeout for runlua execution in milliseconds.
+/// 返回 runlua 执行的默认超时时间（毫秒）。
+pub(super) fn default_runlua_timeout_ms() -> u64 {
+    60_000
+}
+
+/// Return the process-wide current-directory guard used by lua file execution.
+/// 返回 Lua 文件执行期间用于保护进程工作目录切换的全局互斥锁。
+pub(super) fn runlua_cwd_guard() -> &'static Mutex<()> {
+    static RUNLUA_CWD_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    RUNLUA_CWD_GUARD.get_or_init(|| Mutex::new(()))
+}
+
+/// Build the restricted simulated request context used by internal luaexec tool calls.
+/// 构建内部 luaexec 工具调用使用的受限模拟请求上下文。
+fn build_luaexec_call_request_context() -> RuntimeRequestContext {
+    RuntimeRequestContext {
+        request_id: None,
+        client_name: None,
+        transport_name: Some("luaexec_call".to_string()),
+        session_id: Some("luaexec-call-internal".to_string()),
+        client_info: Some(RuntimeClientInfo {
+            kind: Some("runtime".to_string()),
+            name: Some("luaexec_call".to_string()),
+            version: Some("internal-runtime".to_string()),
+        }),
+        client_capabilities: json!({}),
+    }
+}
+
+/// One captured renderable runlua return item.
+/// 一项已捕获并可渲染的 runlua 返回值。
+#[derive(Debug)]
+struct RunLuaRenderedValue {
+    /// Render format of the current item, such as `text` or `json`.
+    /// 当前项的渲染格式，例如 `text` 或 `json`。
+    format: &'static str,
+    /// Rendered payload already formatted for Markdown code fences.
+    /// 已格式化好的载荷文本，可直接写入 Markdown 代码块。
+    content: String,
+}
+
+/// Detect whether a string looks like Lua's debug-style coercion output.
+/// 检测字符串是否像 Lua 对象被 `tostring` 后生成的调试文本。
+fn looks_like_lua_debug_value(text: &str) -> bool {
+    ["table: 0x", "function: 0x", "thread: 0x", "userdata: 0x"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+}
+
+/// Validate Windows-specific path syntax conservatively before touching the filesystem.
+/// 在真正访问文件系统之前，对 Windows 路径语法做保守校验。
+#[cfg(windows)]
+pub(super) fn has_invalid_windows_path_syntax(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.starts_with(r"\\?\") {
+        return false;
+    }
+
+    let first_char = trimmed.chars().next();
+    for (index, ch) in trimmed.char_indices() {
+        if ch.is_control() {
+            return true;
+        }
+        if matches!(ch, '<' | '>' | '"' | '|' | '?' | '*') {
+            return true;
+        }
+        if ch == ':' {
+            let is_drive_prefix =
+                index == 1 && first_char.map(|c| c.is_ascii_alphabetic()).unwrap_or(false);
+            if !is_drive_prefix {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Require an exact UTF-8 Lua string and reject empty/blank values when needed.
+/// 要求参数必须是精确的 UTF-8 Lua 字符串，并在需要时拒绝空值或纯空白值。
+pub(super) fn require_string_arg(
+    value: LuaValue,
+    fn_name: &str,
+    param_name: &str,
+    allow_blank: bool,
+) -> mlua::Result<String> {
+    let raw = match value {
+        LuaValue::String(text) => text
+            .to_str()
+            .map_err(|_| {
+                mlua::Error::runtime(format!(
+                    "{fn_name}: {param_name} must be a valid UTF-8 string"
+                ))
+            })?
+            .to_string(),
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "{fn_name}: {param_name} must be a string, got {}",
+                lua_value_type_name(&other)
+            )));
+        }
+    };
+
+    if !allow_blank && raw.trim().is_empty() {
+        return Err(mlua::Error::runtime(format!(
+            "{fn_name}: {param_name} must not be empty"
+        )));
+    }
+    if raw.contains('\0') {
+        return Err(mlua::Error::runtime(format!(
+            "{fn_name}: {param_name} must not contain NUL bytes"
+        )));
+    }
+    Ok(raw)
+}
+
+/// Validate path-like text before using it in filesystem operations.
+/// 在文件系统函数真正使用路径文本前，先进行统一校验。
+fn validate_path_text(text: &str, fn_name: &str, param_name: &str) -> mlua::Result<()> {
+    if looks_like_lua_debug_value(text) {
+        return Err(mlua::Error::runtime(format!(
+            "{fn_name}: {param_name} looks like a coerced Lua object string `{text}`"
+        )));
+    }
+
+    #[cfg(windows)]
+    if has_invalid_windows_path_syntax(text) {
+        return Err(mlua::Error::runtime(format!(
+            "{fn_name}: {param_name} contains invalid Windows path syntax"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Require a validated path string from Lua input.
+/// 从 Lua 输入中提取并校验路径字符串参数。
+pub(super) fn require_path_arg(
+    value: LuaValue,
+    fn_name: &str,
+    param_name: &str,
+) -> mlua::Result<String> {
+    let text = require_string_arg(value, fn_name, param_name, false)?;
+    validate_path_text(&text, fn_name, param_name)?;
+    Ok(text)
+}
+
+/// Read an optional non-negative integer argument from Lua.
+/// 从 Lua 读取可选的非负整数参数。
+pub(super) fn optional_u64_arg(
+    value: LuaValue,
+    fn_name: &str,
+    param_name: &str,
+) -> mlua::Result<Option<u64>> {
+    match value {
+        LuaValue::Nil => Ok(None),
+        LuaValue::Integer(v) if v >= 0 => Ok(Some(v as u64)),
+        LuaValue::Number(v) if v.is_finite() && v >= 0.0 && v.fract() == 0.0 => Ok(Some(v as u64)),
+        other => Err(mlua::Error::runtime(format!(
+            "{fn_name}: {param_name} must be a non-negative integer: {}",
+            lua_value_type_name(&other)
+        ))),
+    }
+}
+
+/// Require a Lua table argument without silent coercion.
+/// 要求参数必须是 Lua table，禁止静默类型转换。
+pub(super) fn require_table_arg(
+    value: LuaValue,
+    fn_name: &str,
+    param_name: &str,
+) -> mlua::Result<Table> {
+    match value {
+        LuaValue::Table(table) => Ok(table),
+        other => Err(mlua::Error::runtime(format!(
+            "{fn_name}: {param_name} must be a table, got {}",
+            lua_value_type_name(&other)
+        ))),
+    }
+}
+
+/// Execution mode supported by `vulcan.exec`.
+/// `vulcan.exec` 支持的执行模式。
+pub(super) enum ExecMode {
+    Shell { command: String },
+    Program { program: String, args: Vec<String> },
+}
+
+/// Parsed process execution request from Lua.
+/// 从 Lua 解析得到的进程执行请求。
+pub(super) struct ExecRequest {
+    /// Process launch mode requested by Lua.
+    /// Lua 请求的进程启动模式。
+    mode: ExecMode,
+    /// Optional process working directory.
+    /// 可选的进程工作目录。
+    cwd: Option<String>,
+    /// Environment variables applied to the child process.
+    /// 应用到子进程的环境变量。
+    env: HashMap<String, String>,
+    /// Optional text written to child process stdin.
+    /// 可选的子进程标准输入文本。
+    stdin: Option<String>,
+    /// Optional process timeout in milliseconds.
+    /// 可选的进程超时时间（毫秒）。
+    timeout_ms: Option<u64>,
+    /// Encoding used to decode captured stdout bytes.
+    /// 用于解码已捕获 stdout 字节的编码。
+    stdout_encoding: RuntimeTextEncoding,
+    /// Encoding used to decode captured stderr bytes.
+    /// 用于解码已捕获 stderr 字节的编码。
+    stderr_encoding: RuntimeTextEncoding,
+    /// Encoding used to encode stdin text bytes.
+    /// 用于编码 stdin 文本字节的编码。
+    stdin_encoding: RuntimeTextEncoding,
+}
+
+/// Process execution result returned back to Lua.
+/// 返回给 Lua 的进程执行结果。
+pub(super) struct ExecResult {
+    /// Whether the process completed successfully.
+    /// 进程是否成功完成。
+    ok: bool,
+    /// Whether the process completed successfully without timeout.
+    /// 进程是否未超时且成功完成。
+    success: bool,
+    /// Process exit code when available.
+    /// 可用时的进程退出码。
+    code: Option<i32>,
+    /// Decoded stdout text or Base64 text in byte-preserving mode.
+    /// 已解码 stdout 文本，或字节保留模式下的 Base64 文本。
+    stdout: String,
+    /// Decoded stderr text or Base64 text in byte-preserving mode.
+    /// 已解码 stderr 文本，或字节保留模式下的 Base64 文本。
+    stderr: String,
+    /// Whether the process timed out.
+    /// 进程是否超时。
+    timed_out: bool,
+    /// Process-level error summary when execution failed.
+    /// 执行失败时的进程级错误摘要。
+    error: Option<String>,
+    /// Actual stdout encoding used by the decoder.
+    /// 解码器实际使用的 stdout 编码。
+    stdout_encoding: String,
+    /// Actual stderr encoding used by the decoder.
+    /// 解码器实际使用的 stderr 编码。
+    stderr_encoding: String,
+    /// Whether stdout decoding used replacement or fallback behavior.
+    /// stdout 解码是否使用了替换或兜底行为。
+    stdout_lossy: bool,
+    /// Whether stderr decoding used replacement or fallback behavior.
+    /// stderr 解码是否使用了替换或兜底行为。
+    stderr_lossy: bool,
+    /// Byte-preserving stdout payload when available.
+    /// 可用时的 stdout 字节保留载荷。
+    stdout_base64: Option<String>,
+    /// Byte-preserving stderr payload when available.
+    /// 可用时的 stderr 字节保留载荷。
+    stderr_base64: Option<String>,
+}
+
+/// Require a scalar text-like value for exec arguments and environment values.
+/// 为 exec 的参数和环境变量值提取标量文本，拒绝 table/function 等复杂类型。
+fn require_exec_scalar_text(
+    value: LuaValue,
+    fn_name: &str,
+    param_name: &str,
+    allow_blank: bool,
+) -> mlua::Result<String> {
+    match value {
+        LuaValue::String(_) => require_string_arg(value, fn_name, param_name, allow_blank),
+        LuaValue::Integer(number) => Ok(number.to_string()),
+        LuaValue::Number(number) => {
+            if !number.is_finite() {
+                return Err(mlua::Error::runtime(format!(
+                    "{fn_name}: {param_name} must be a finite number"
+                )));
+            }
+            Ok(number.to_string())
+        }
+        LuaValue::Boolean(flag) => Ok(flag.to_string()),
+        other => Err(mlua::Error::runtime(format!(
+            "{fn_name}: {param_name} must be a string: {}",
+            lua_value_type_name(&other)
+        ))),
+    }
+}
+
+/// Read an optional string field from a Lua table with strict validation.
+/// 从 Lua table 中读取可选字符串字段，并执行严格校验。
+fn table_get_optional_string_field(
+    table: &Table,
+    fn_name: &str,
+    field_name: &str,
+    allow_blank: bool,
+) -> mlua::Result<Option<String>> {
+    let value: LuaValue = table.get(field_name)?;
+    match value {
+        LuaValue::Nil => Ok(None),
+        other => Ok(Some(require_string_arg(
+            other,
+            fn_name,
+            field_name,
+            allow_blank,
+        )?)),
+    }
+}
+
+/// Read an optional boolean field from a Lua table.
+/// 从 Lua table 中读取可选布尔字段。
+fn table_get_optional_bool_field(
+    table: &Table,
+    fn_name: &str,
+    field_name: &str,
+) -> mlua::Result<Option<bool>> {
+    let value: LuaValue = table.get(field_name)?;
+    match value {
+        LuaValue::Nil => Ok(None),
+        LuaValue::Boolean(flag) => Ok(Some(flag)),
+        other => Err(mlua::Error::runtime(format!(
+            "{fn_name}: {field_name} must be a boolean when provided: {}",
+            lua_value_type_name(&other)
+        ))),
+    }
+}
+
+/// Read an optional timeout field in milliseconds from a Lua table.
+/// 从 Lua table 中读取可选的毫秒级超时字段。
+fn table_get_optional_timeout_field(
+    table: &Table,
+    fn_name: &str,
+    field_name: &str,
+) -> mlua::Result<Option<u64>> {
+    let value: LuaValue = table.get(field_name)?;
+    match value {
+        LuaValue::Nil => Ok(None),
+        LuaValue::Integer(number) if number > 0 => Ok(Some(number as u64)),
+        LuaValue::Number(number) if number.is_finite() && number.fract() == 0.0 && number > 0.0 => {
+            Ok(Some(number as u64))
+        }
+        other => Err(mlua::Error::runtime(format!(
+            "{fn_name}: {field_name} must be a positive integer in milliseconds: {}",
+            lua_value_type_name(&other)
+        ))),
+    }
+}
+
+/// Read an optional runtime text encoding field from a Lua table.
+/// 从 Lua table 中读取可选的运行时文本编码字段。
+fn table_get_optional_encoding_field(
+    table: &Table,
+    fn_name: &str,
+    field_name: &str,
+) -> mlua::Result<Option<RuntimeTextEncoding>> {
+    let Some(label) = table_get_optional_string_field(table, fn_name, field_name, false)? else {
+        return Ok(None);
+    };
+    RuntimeTextEncoding::parse(&label)
+        .map(Some)
+        .map_err(|error| mlua::Error::runtime(format!("{fn_name}: {field_name}: {error}")))
+}
+
+/// Read an optional string-like array field from a Lua table.
+/// 从 Lua table 中读取可选的字符串类数组字段。
+fn table_get_string_list_field(
+    table: &Table,
+    fn_name: &str,
+    field_name: &str,
+) -> mlua::Result<Vec<String>> {
+    let value: LuaValue = table.get(field_name)?;
+    match value {
+        LuaValue::Nil => Ok(Vec::new()),
+        other => {
+            let list = require_table_arg(other, fn_name, field_name)?;
+            let mut items = Vec::new();
+            for (index, item) in list.sequence_values::<LuaValue>().enumerate() {
+                let item = item.map_err(|error| {
+                    mlua::Error::runtime(format!(
+                        "{fn_name}: failed to read {field_name}[{}]: {}, {}",
+                        index + 1,
+                        index + 1,
+                        error
+                    ))
+                })?;
+                items.push(require_exec_scalar_text(
+                    item,
+                    fn_name,
+                    &format!("{field_name}[{}]", index + 1),
+                    true,
+                )?);
+            }
+            Ok(items)
+        }
+    }
+}
+
+/// Read an optional string map field from a Lua table.
+/// 从 Lua table 中读取可选的字符串映射字段。
+fn table_get_string_map_field(
+    table: &Table,
+    fn_name: &str,
+    field_name: &str,
+) -> mlua::Result<HashMap<String, String>> {
+    let value: LuaValue = table.get(field_name)?;
+    match value {
+        LuaValue::Nil => Ok(HashMap::new()),
+        other => {
+            let map_table = require_table_arg(other, fn_name, field_name)?;
+            let mut items = HashMap::new();
+            for pair in map_table.pairs::<LuaValue, LuaValue>() {
+                let (key_value, field_value) = pair.map_err(|_error| {
+                    mlua::Error::runtime(format!("{fn_name}: failed to read {field_name}"))
+                })?;
+                let key =
+                    require_string_arg(key_value, fn_name, &format!("{field_name}.<key>"), false)?;
+                let value_text = require_exec_scalar_text(
+                    field_value,
+                    fn_name,
+                    &format!("{field_name}.{key}"),
+                    true,
+                )?;
+                items.insert(key, value_text);
+            }
+            Ok(items)
+        }
+    }
+}
+
+/// Resolve the host-configured default runtime text encoding.
+/// 解析宿主配置的默认运行时文本编码。
+pub(super) fn resolve_host_default_text_encoding(
+    host_options: &LuaRuntimeHostOptions,
+) -> Result<RuntimeTextEncoding, String> {
+    match host_options.default_text_encoding.as_deref() {
+        Some(label) if !label.trim().is_empty() => RuntimeTextEncoding::parse(label),
+        _ => Ok(default_runtime_text_encoding()),
+    }
+}
+
+/// Parse Lua input into an executable process request.
+/// 将 Lua 输入解析为可执行的进程请求。
+pub(super) fn parse_exec_request(
+    value: LuaValue,
+    fn_name: &str,
+    default_encoding: RuntimeTextEncoding,
+) -> mlua::Result<ExecRequest> {
+    match value {
+        LuaValue::String(command_text) => Ok(ExecRequest {
+            mode: ExecMode::Shell {
+                command: require_string_arg(
+                    LuaValue::String(command_text),
+                    fn_name,
+                    "command",
+                    false,
+                )?,
+            },
+            cwd: None,
+            env: HashMap::new(),
+            stdin: None,
+            timeout_ms: None,
+            stdout_encoding: default_encoding,
+            stderr_encoding: default_encoding,
+            stdin_encoding: default_encoding,
+        }),
+        LuaValue::Table(spec) => {
+            let command = table_get_optional_string_field(&spec, fn_name, "command", false)?;
+            let program = table_get_optional_string_field(&spec, fn_name, "program", false)?;
+            let args = table_get_string_list_field(&spec, fn_name, "args")?;
+            let cwd = table_get_optional_string_field(&spec, fn_name, "cwd", false)?;
+            let env = table_get_string_map_field(&spec, fn_name, "env")?;
+            let stdin = table_get_optional_string_field(&spec, fn_name, "stdin", true)?;
+            let timeout_ms = table_get_optional_timeout_field(&spec, fn_name, "timeout_ms")?;
+            let shell_override = table_get_optional_bool_field(&spec, fn_name, "shell")?;
+            let encoding = table_get_optional_encoding_field(&spec, fn_name, "encoding")?
+                .unwrap_or(default_encoding);
+            let stdout_encoding =
+                table_get_optional_encoding_field(&spec, fn_name, "stdout_encoding")?
+                    .unwrap_or(encoding);
+            let stderr_encoding =
+                table_get_optional_encoding_field(&spec, fn_name, "stderr_encoding")?
+                    .unwrap_or(encoding);
+            let stdin_encoding =
+                table_get_optional_encoding_field(&spec, fn_name, "stdin_encoding")?
+                    .unwrap_or(encoding);
+
+            if let Some(current_dir) = cwd.as_deref() {
+                validate_path_text(current_dir, fn_name, "cwd")?;
+            }
+
+            let mode = match (command, program) {
+                (Some(command_text), None) => {
+                    if matches!(shell_override, Some(false)) {
+                        return Err(mlua::Error::runtime(format!(
+                            "{fn_name}: shell=false cannot be used with command mode"
+                        )));
+                    }
+                    if !args.is_empty() {
+                        return Err(mlua::Error::runtime(format!(
+                            "{fn_name}: args is only supported with program mode"
+                        )));
+                    }
+                    ExecMode::Shell {
+                        command: command_text,
+                    }
+                }
+                (None, Some(program_path)) => {
+                    if matches!(shell_override, Some(true)) {
+                        return Err(mlua::Error::runtime(format!(
+                            "{fn_name}: shell=true requires command mode"
+                        )));
+                    }
+                    ExecMode::Program {
+                        program: program_path,
+                        args,
+                    }
+                }
+                (Some(_), Some(_)) => {
+                    return Err(mlua::Error::runtime(format!(
+                        "{fn_name}: command and program are mutually exclusive"
+                    )));
+                }
+                (None, None) => {
+                    return Err(mlua::Error::runtime(format!(
+                        "{fn_name}: expected a string command or a table with command"
+                    )));
+                }
+            };
+
+            Ok(ExecRequest {
+                mode,
+                cwd,
+                env,
+                stdin,
+                timeout_ms,
+                stdout_encoding,
+                stderr_encoding,
+                stdin_encoding,
+            })
+        }
+        other => Err(mlua::Error::runtime(format!(
+            "{fn_name}: expected a string or table, got {}",
+            lua_value_type_name(&other)
+        ))),
+    }
+}
+
+/// Return the default shell program and command flag for the current platform.
+/// 返回当前平台默认的 shell 程序及命令参数开关。
+#[cfg(windows)]
+fn default_shell_launcher() -> (&'static str, &'static str) {
+    ("cmd.exe", "/C")
+}
+
+/// Return the default shell program and command flag for the current platform.
+/// 返回当前平台默认的 shell 程序及命令参数开关。
+#[cfg(not(windows))]
+fn default_shell_launcher() -> (&'static str, &'static str) {
+    ("sh", "-c")
+}
+
+/// Spawn a background reader for a child process output pipe as raw bytes.
+/// 为子进程输出管道启动后台读取线程，并以原始字节形式返回。
+fn spawn_pipe_reader<R>(mut reader: R) -> thread::JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = reader.read_to_end(&mut buffer);
+        buffer
+    })
+}
+
+/// Spawn a background writer for a child process stdin pipe.
+/// 为子进程标准输入管道启动后台写入线程。
+fn spawn_stdin_writer<W>(mut writer: W, input: Vec<u8>) -> thread::JoinHandle<()>
+where
+    W: Write + Send + 'static,
+{
+    thread::spawn(move || {
+        let _ = writer.write_all(&input);
+        let _ = writer.flush();
+    })
+}
+
+/// Build a structured process error result before stdout/stderr bytes are available.
+/// 在 stdout/stderr 字节可用之前构建结构化进程错误结果。
+fn exec_error_result(error_text: String, request: &ExecRequest, timed_out: bool) -> ExecResult {
+    ExecResult {
+        ok: false,
+        success: false,
+        code: None,
+        stdout: String::new(),
+        stderr: error_text.clone(),
+        timed_out,
+        error: Some(error_text),
+        stdout_encoding: request.stdout_encoding.requested_label().to_string(),
+        stderr_encoding: request.stderr_encoding.requested_label().to_string(),
+        stdout_lossy: false,
+        stderr_lossy: false,
+        stdout_base64: None,
+        stderr_base64: None,
+    }
+}
+
+/// Execute a process request and capture its structured result.
+/// 执行进程请求并捕获结构化结果。
+pub(super) fn execute_exec_request(request: ExecRequest) -> ExecResult {
+    let stdin_bytes = match request.stdin.as_deref() {
+        Some(input) => match encode_runtime_text(input, request.stdin_encoding) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                let error_text = format!("failed to encode process stdin: {error}");
+                return exec_error_result(error_text, &request, false);
+            }
+        },
+        None => None,
+    };
+
+    let mut command = match &request.mode {
+        ExecMode::Shell { command } => {
+            let (shell_program, shell_flag) = default_shell_launcher();
+            let mut process = Command::new(shell_program);
+            process.arg(shell_flag).arg(command);
+            process
+        }
+        ExecMode::Program { program, args } => {
+            let mut process = Command::new(program);
+            process.args(args);
+            process
+        }
+    };
+
+    if let Some(current_dir) = &request.cwd {
+        command.current_dir(current_dir);
+    }
+    if !request.env.is_empty() {
+        command.envs(&request.env);
+    }
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    command.stdin(if stdin_bytes.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let error_text = format!("failed to spawn process: {}", error);
+            return exec_error_result(error_text, &request, false);
+        }
+    };
+
+    let stdout_handle = child.stdout.take().map(spawn_pipe_reader);
+    let stderr_handle = child.stderr.take().map(spawn_pipe_reader);
+    let stdin_handle = match (stdin_bytes, child.stdin.take()) {
+        (Some(input), Some(stdin)) => Some(spawn_stdin_writer(stdin, input)),
+        _ => None,
+    };
+
+    let mut timed_out = false;
+    let timeout = request.timeout_ms.map(Duration::from_millis);
+    let started_at = Instant::now();
+
+    let final_status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break Some(status);
+            }
+            Ok(None) => {
+                if let Some(limit) = timeout {
+                    if started_at.elapsed() >= limit {
+                        timed_out = true;
+                        let _ = child.kill();
+                        break child.wait().ok();
+                    }
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                let error_text = format!("failed to wait for process: {}", error);
+                return exec_error_result(error_text, &request, timed_out);
+            }
+        }
+    };
+
+    if let Some(handle) = stdin_handle {
+        let _ = handle.join();
+    }
+
+    let stdout_bytes = stdout_handle
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr_bytes = stderr_handle
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    let decoded_stdout = decode_runtime_text(&stdout_bytes, request.stdout_encoding);
+    let decoded_stderr = decode_runtime_text(&stderr_bytes, request.stderr_encoding);
+    let stdout = decoded_stdout.text;
+    let mut stderr = decoded_stderr.text;
+
+    let status = match final_status {
+        Some(status) => status,
+        None => {
+            let error_text = "process finished without status".to_string();
+            return ExecResult {
+                ok: false,
+                success: false,
+                code: None,
+                stdout,
+                stderr: error_text.clone(),
+                timed_out,
+                error: Some(error_text),
+                stdout_encoding: decoded_stdout.encoding,
+                stderr_encoding: decoded_stderr.encoding,
+                stdout_lossy: decoded_stdout.lossy,
+                stderr_lossy: decoded_stderr.lossy,
+                stdout_base64: decoded_stdout.base64,
+                stderr_base64: decoded_stderr.base64,
+            };
+        }
+    };
+
+    let code = status.code();
+    let success = !timed_out && status.success();
+    let mut error = None;
+
+    if timed_out {
+        let timeout_value = request.timeout_ms.unwrap_or_default();
+        let timeout_text = format!("process execution timed out after {} ms", timeout_value);
+        if !stderr.is_empty() {
+            stderr.push('\n');
+        }
+        stderr.push_str(&timeout_text);
+        error = Some(timeout_text);
+    } else if !success {
+        error = Some(match code {
+            Some(exit_code) => format!("process exited with code {}", exit_code),
+            None => "process terminated without an exit code".to_string(),
+        });
+    }
+
+    ExecResult {
+        ok: success,
+        success,
+        code,
+        stdout,
+        stderr,
+        timed_out,
+        error,
+        stdout_encoding: decoded_stdout.encoding,
+        stderr_encoding: decoded_stderr.encoding,
+        stdout_lossy: decoded_stdout.lossy,
+        stderr_lossy: decoded_stderr.lossy,
+        stdout_base64: decoded_stdout.base64,
+        stderr_base64: decoded_stderr.base64,
+    }
+}
+
+/// Convert an exec result into a Lua table for skill consumption.
+/// 将 exec 结果转换为供 skill 消费的 Lua table。
+pub(super) fn exec_result_to_lua_table(lua: &Lua, result: ExecResult) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    table.set("ok", result.ok)?;
+    table.set("success", result.success)?;
+    table.set("stdout", result.stdout)?;
+    table.set("stderr", result.stderr)?;
+    table.set("stdout_encoding", result.stdout_encoding)?;
+    table.set("stderr_encoding", result.stderr_encoding)?;
+    table.set("stdout_lossy", result.stdout_lossy)?;
+    table.set("stderr_lossy", result.stderr_lossy)?;
+    match result.stdout_base64 {
+        Some(stdout_base64) => table.set("stdout_base64", stdout_base64)?,
+        None => table.set("stdout_base64", LuaValue::Nil)?,
+    }
+    match result.stderr_base64 {
+        Some(stderr_base64) => table.set("stderr_base64", stderr_base64)?,
+        None => table.set("stderr_base64", LuaValue::Nil)?,
+    }
+    table.set("timed_out", result.timed_out)?;
+    match result.code {
+        Some(code) => table.set("code", code)?,
+        None => table.set("code", LuaValue::Nil)?,
+    }
+    match result.error {
+        Some(error_text) => table.set("error", error_text)?,
+        None => table.set("error", LuaValue::Nil)?,
+    }
+    Ok(table)
+}
+
+impl LuaEngine {
+    /// Populate the `vulcan.runtime.lua.exec` bridge for normal skill VMs.
+    /// 为普通 skill 虚拟机注入 `vulcan.runtime.lua.exec` 桥接函数。
+    pub(super) fn populate_vulcan_luaexec_bridge(
+        lua: &Lua,
+        host_options: Arc<LuaRuntimeHostOptions>,
+        runlua_pool: Arc<LuaVmPool>,
+        skill_config_store: Arc<SkillConfigStore>,
+        skills: Arc<HashMap<String, LoadedSkill>>,
+        entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
+        runtime_skill_roots: Vec<RuntimeSkillRoot>,
+        lancedb_host: Option<Arc<LanceDbSkillHost>>,
+        sqlite_host: Option<Arc<SqliteSkillHost>>,
+    ) -> Result<(), String> {
+        let runtime_lua = get_vulcan_runtime_lua_table(lua)?;
+
+        let exec_fn = lua
+            .create_function(move |lua, input: LuaValue| {
+                let input_table = require_table_arg(input, "runtime.lua.exec", "input")?;
+                let input_json = lua_value_to_json(&LuaValue::Table(input_table))
+                    .map_err(mlua::Error::runtime)?;
+                let mut request: RunLuaExecRequest =
+                    serde_json::from_value(input_json).map_err(|error| {
+                        mlua::Error::runtime(format!("luaexec input is invalid: {}", error))
+                    })?;
+                let internal =
+                    get_vulcan_runtime_internal_table(lua).map_err(mlua::Error::runtime)?;
+                let caller_tool_name: Option<String> =
+                    internal.get("tool_name").map_err(mlua::Error::runtime)?;
+                request.caller_tool_name = caller_tool_name
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                let rendered = LuaEngine::execute_runlua_request_inline_with_runtime(
+                    &request,
+                    runlua_pool.clone(),
+                    skills.clone(),
+                    entry_registry.clone(),
+                    host_options.clone(),
+                    skill_config_store.clone(),
+                    runtime_skill_roots.clone(),
+                    lancedb_host.clone(),
+                    sqlite_host.clone(),
+                )
+                .map_err(mlua::Error::runtime)?;
+                Ok(LuaValue::String(
+                    lua.create_string(&rendered).map_err(mlua::Error::runtime)?,
+                ))
+            })
+            .map_err(|error| format!("Failed to create vulcan.runtime.lua.exec: {}", error))?;
+        runtime_lua
+            .set("exec", exec_fn)
+            .map_err(|error| format!("Failed to set vulcan.runtime.lua.exec: {}", error))?;
+        Ok(())
+    }
+
+    /// Execute arbitrary Lua code inside one already selected VM lease.
+    /// 在一个已经选定的虚拟机租约中执行任意 Lua 代码。
+    fn run_lua_with_lease(
+        &self,
+        lease: &mut LuaVmLease,
+        code: &str,
+        args: &Value,
+        invocation_context: Option<&LuaInvocationContext>,
+    ) -> Result<Value, String> {
+        let scope_guard = LuaVmRequestScopeGuard::new(lease, self.host_options.as_ref())?;
+        let lua = scope_guard.lua();
+        Self::populate_vulcan_request_context(lua, invocation_context)?;
+        populate_vulcan_internal_execution_context(
+            lua,
+            &VulcanInternalExecutionContext::default(),
+        )?;
+        populate_vulcan_file_context(lua, None, None)?;
+        populate_vulcan_dependency_context(lua, self.host_options.as_ref(), None, None)?;
+        Self::populate_vulcan_lancedb_context(lua, None, None)?;
+        Self::populate_vulcan_sqlite_context(lua, None, None)?;
+
+        // Build a wrapper that passes args as a local variable.
+        // 构造包装代码，将 args 作为局部变量传入 Lua 片段。
+        let args_table = json_to_lua_table(lua, args)?;
+        lua.globals()
+            .set("__runlua_args", args_table)
+            .map_err(|e| format!("Failed to set args: {}", e))?;
+
+        let wrapper = format!(
+            "return (function()\n  local args = __runlua_args\n  {}\nend)()",
+            code
+        );
+
+        let run_result = (|| {
+            let result = lua.load(&wrapper).eval::<LuaValue>().map_err(|e| {
+                let msg = format!("Lua run_lua error: {}", e);
+                log_error(format!("[LuaSkill:error] {}", msg));
+                msg
+            })?;
+
+            lua_value_to_json(&result)
+        })();
+        let cleanup_result = scope_guard.finish();
+        match (run_result, cleanup_result) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(run_error), Ok(())) => Err(run_error),
+            (Err(run_error), Err(cleanup_error)) => Err(format!(
+                "{}; pooled Lua VM cleanup failed: {}",
+                run_error, cleanup_error
+            )),
+        }
+    }
+
+    /// Execute arbitrary Lua code against the current active runtime view and return the result.
+    /// 针对当前已激活运行时视图执行任意 Lua 代码并返回结果。
+    pub fn run_lua(
+        &self,
+        code: &str,
+        args: &Value,
+        invocation_context: Option<&LuaInvocationContext>,
+    ) -> Result<Value, String> {
+        let mut lease = self.acquire_vm()?;
+        self.run_lua_with_lease(&mut lease, code, args, invocation_context)
+    }
+
+    /// Return the effective fixed `system_lua_lib` directory for the current engine.
+    /// 返回当前引擎生效的固定 `system_lua_lib` 目录。
+    fn acquire_runlua_vm(
+        runlua_pool: Arc<LuaVmPool>,
+        skills: Arc<HashMap<String, LoadedSkill>>,
+        entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
+        host_options: Arc<LuaRuntimeHostOptions>,
+        skill_config_store: Arc<SkillConfigStore>,
+        runtime_skill_roots: Vec<RuntimeSkillRoot>,
+        lancedb_host: Option<Arc<LanceDbSkillHost>>,
+        sqlite_host: Option<Arc<SqliteSkillHost>>,
+    ) -> Result<LuaVmLease, String> {
+        runlua_pool.acquire(move || {
+            Self::create_runlua_vm(
+                skills.as_ref(),
+                entry_registry.as_ref(),
+                host_options.clone(),
+                skill_config_store.clone(),
+                runtime_skill_roots.clone(),
+                lancedb_host.clone(),
+                sqlite_host.clone(),
+            )
+        })
+    }
+
+    /// Execute one isolated runlua request through the dedicated pooled runtime.
+    /// 通过独立的池化运行时执行一次隔离 runlua 请求。
+    fn execute_runlua_request_inline_with_runtime(
+        request: &RunLuaExecRequest,
+        runlua_pool: Arc<LuaVmPool>,
+        skills: Arc<HashMap<String, LoadedSkill>>,
+        entry_registry: Arc<BTreeMap<String, ResolvedEntryTarget>>,
+        host_options: Arc<LuaRuntimeHostOptions>,
+        skill_config_store: Arc<SkillConfigStore>,
+        runtime_skill_roots: Vec<RuntimeSkillRoot>,
+        lancedb_host: Option<Arc<LanceDbSkillHost>>,
+        sqlite_host: Option<Arc<SqliteSkillHost>>,
+    ) -> Result<String, String> {
+        if request.timeout_ms == 0 {
+            return Err("luaexec timeout_ms must be greater than 0".to_string());
+        }
+        let (resolved_code, entry_file) = Self::resolve_runlua_source(request)?;
+        let mut lease = Self::acquire_runlua_vm(
+            runlua_pool,
+            skills,
+            entry_registry,
+            host_options.clone(),
+            skill_config_store,
+            runtime_skill_roots,
+            lancedb_host,
+            sqlite_host,
+        )?;
+        let scope_guard = LuaVmRequestScopeGuard::new(&mut lease, host_options.as_ref())?;
+        let lua = scope_guard.lua();
+        let simulated_request_context = build_luaexec_call_request_context();
+        let simulated_invocation_context = LuaInvocationContext::new(
+            Some(simulated_request_context),
+            Value::Object(serde_json::Map::new()),
+            Value::Object(serde_json::Map::new()),
+        );
+        Self::populate_vulcan_request_context(lua, Some(&simulated_invocation_context))?;
+        populate_vulcan_internal_execution_context(
+            lua,
+            &VulcanInternalExecutionContext {
+                tool_name: None,
+                skill_name: None,
+                entry_name: None,
+                root_name: None,
+                luaexec_active: true,
+                luaexec_caller_tool_name: request.caller_tool_name.clone(),
+            },
+        )?;
+        populate_vulcan_file_context(lua, None, entry_file.as_deref())?;
+        Self::populate_vulcan_lancedb_context(lua, None, None)?;
+        Self::populate_vulcan_sqlite_context(lua, None, None)?;
+
+        let captured_output: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        Self::configure_runlua_execution_environment(
+            lua,
+            captured_output.clone(),
+            host_options.as_ref(),
+        )?;
+
+        let args_table = json_to_lua_table(lua, &request.args)?;
+        lua.globals()
+            .set("__runlua_args", args_table)
+            .map_err(|error| format!("Failed to set runlua args: {}", error))?;
+
+        let wrapper = format!(
+            "return (function()\n  local args = __runlua_args\n  return table.pack((function()\n{}\nend)())\nend)()",
+            resolved_code
+        );
+
+        Self::install_runlua_timeout_guard(lua, request.timeout_ms)
+            .map_err(|error| error.to_string())?;
+        let execution_result = Self::execute_runlua_wrapper(lua, &wrapper, entry_file.as_deref());
+        Self::remove_runlua_timeout_guard(lua);
+        let printed_output = captured_output
+            .lock()
+            .map_err(|_| "Failed to lock runlua output capture".to_string())?
+            .clone();
+
+        let render_result = match execution_result {
+            Ok(returned_values) => {
+                let rendered_values = Self::collect_runlua_return_values(&returned_values)?;
+                Ok(Self::render_runlua_success_markdown(
+                    request,
+                    &printed_output,
+                    &rendered_values,
+                ))
+            }
+            Err(error) => Ok(Self::render_runlua_error_markdown(
+                request,
+                &printed_output,
+                error.to_string().as_str(),
+            )),
+        };
+        let cleanup_result = scope_guard.finish();
+        match (render_result, cleanup_result) {
+            (Ok(rendered), Ok(())) => Ok(rendered),
+            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(render_error), Ok(())) => Err(render_error),
+            (Err(render_error), Err(cleanup_error)) => Err(format!(
+                "{}; pooled runlua VM cleanup failed: {}",
+                render_error, cleanup_error
+            )),
+        }
+    }
+
+    /// Execute one isolated runlua request using the current engine snapshots.
+    /// 使用当前引擎快照执行一次隔离 runlua 请求。
+    fn execute_runlua_request_inline(&self, request: &RunLuaExecRequest) -> Result<String, String> {
+        Self::execute_runlua_request_inline_with_runtime(
+            request,
+            self.runlua_pool.clone(),
+            Arc::new(self.skills.clone()),
+            Arc::new(self.entry_registry.clone()),
+            self.host_options.clone(),
+            self.skill_config_store.clone(),
+            self.runtime_skill_roots.clone(),
+            self.lancedb_host.clone(),
+            self.sqlite_host.clone(),
+        )
+    }
+
+    /// Resolve one runlua request into concrete source text and optional entry file context.
+    /// 将一次 runlua 请求解析成具体源代码文本及可选入口文件上下文。
+    fn resolve_runlua_source(
+        request: &RunLuaExecRequest,
+    ) -> Result<(String, Option<PathBuf>), String> {
+        let inline_code = request
+            .code
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
+        let file_path = request
+            .file
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
+
+        match (inline_code, file_path) {
+            (Some(_), Some(_)) => {
+                Err("luaexec accepts either code or file, but not both".to_string())
+            }
+            (None, None) => Err("luaexec requires code or file".to_string()),
+            (Some(code), None) => Ok((code, None)),
+            (None, Some(file_text)) => {
+                validate_path_text(&file_text, "luaexec", "file")
+                    .map_err(|error| error.to_string())?;
+                let raw_file_path = PathBuf::from(&file_text);
+                let file_path = if raw_file_path.is_absolute() {
+                    raw_file_path
+                } else {
+                    std::env::current_dir()
+                        .map_err(|error| {
+                            format!("Failed to resolve luaexec relative file path: {}", error)
+                        })?
+                        .join(raw_file_path)
+                };
+                let source = std::fs::read_to_string(&file_path).map_err(|error| {
+                    format!(
+                        "Failed to read luaexec file {}: {}: {}",
+                        file_path.display(),
+                        error,
+                        error
+                    )
+                })?;
+                Ok((source, Some(file_path)))
+            }
+        }
+    }
+
+    /// Execute one inline runlua request from raw JSON text.
+    /// 从原始 JSON 文本执行一次进程内 runlua 请求。
+    pub fn execute_runlua_request_json_inline(&self, request_json: &str) -> Result<String, String> {
+        let request: RunLuaExecRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("Invalid luaexec request JSON: {}", error))?;
+        self.execute_runlua_request_inline(&request)
+    }
+
+    /// Execute the runlua wrapper, optionally switching the process current directory to the entry file directory.
+    /// 执行 runlua 包装器，并在需要时临时切换进程工作目录到入口文件目录。
+    fn execute_runlua_wrapper(
+        lua: &Lua,
+        wrapper: &str,
+        entry_file: Option<&Path>,
+    ) -> Result<Table, mlua::Error> {
+        match entry_file.and_then(Path::parent) {
+            Some(entry_dir) => {
+                let _cwd_guard = runlua_cwd_guard()
+                    .lock()
+                    .map_err(|_| mlua::Error::runtime("luaexec cwd guard lock poisoned"))?;
+                let original_dir = std::env::current_dir()
+                    .map_err(|error| mlua::Error::runtime(format!("luaexec cwd: {}", error)))?;
+                std::env::set_current_dir(entry_dir)
+                    .map_err(|error| mlua::Error::runtime(format!("luaexec set cwd: {}", error)))?;
+                let execution = lua.load(wrapper).eval::<Table>();
+                let restore_result = std::env::set_current_dir(&original_dir).map_err(|error| {
+                    mlua::Error::runtime(format!("luaexec restore cwd: {}", error))
+                });
+                match (execution, restore_result) {
+                    (Ok(table), Ok(())) => Ok(table),
+                    (Err(error), Ok(())) => Err(error),
+                    (_, Err(error)) => Err(error),
+                }
+            }
+            None => lua.load(wrapper).eval::<Table>(),
+        }
+    }
+
+    /// Configure the isolated runlua execution VM.
+    /// 配置隔离 runlua 执行虚拟机的运行时环境。
+    fn configure_runlua_execution_environment(
+        lua: &Lua,
+        captured_output: Arc<Mutex<Vec<String>>>,
+        host_options: &LuaRuntimeHostOptions,
+    ) -> Result<(), String> {
+        let runtime = get_vulcan_runtime_table(lua)?;
+        let runtime_lua = get_vulcan_runtime_lua_table(lua)?;
+        let vulcan = get_vulcan_table(lua)?;
+        let cache = vulcan
+            .get::<Table>("cache")
+            .map_err(|error| format!("Failed to get vulcan.cache: {}", error))?;
+        let vulcan_io = vulcan
+            .get::<Table>("io")
+            .map_err(|error| format!("Failed to get vulcan.io: {}", error))?;
+
+        let print_capture = captured_output.clone();
+        let print_fn = lua
+            .create_function(move |_, args: MultiValue| {
+                let mut parts = Vec::new();
+                for value in args.into_iter() {
+                    parts.push(LuaEngine::render_lua_value_inline(&value));
+                }
+                let mut guard = print_capture
+                    .lock()
+                    .map_err(|_| mlua::Error::runtime("runlua print capture lock poisoned"))?;
+                guard.push(parts.join("\t"));
+                Ok(())
+            })
+            .map_err(|error| format!("Failed to create runlua print capture: {}", error))?;
+        lua.globals()
+            .set("print", print_fn)
+            .map_err(|error| format!("Failed to override global print for runlua: {}", error))?;
+
+        lua.load(
+            r#"
+if jit and type(jit.off) == "function" then
+    jit.off(true, true)
+end
+if jit and type(jit.flush) == "function" then
+    jit.flush()
+end
+"#,
+        )
+        .exec()
+        .map_err(|error| format!("Failed to disable JIT for runlua: {}", error))?;
+
+        runtime
+            .set("log", LuaValue::Nil)
+            .map_err(|error| format!("Failed to clear vulcan.runtime.log for runlua: {}", error))?;
+        cache
+            .set("put", LuaValue::Nil)
+            .map_err(|error| format!("Failed to clear vulcan.cache.put for runlua: {}", error))?;
+        cache
+            .set("get", LuaValue::Nil)
+            .map_err(|error| format!("Failed to clear vulcan.cache.get for runlua: {}", error))?;
+        cache.set("delete", LuaValue::Nil).map_err(|error| {
+            format!("Failed to clear vulcan.cache.delete for runlua: {}", error)
+        })?;
+        runtime_lua.set("exec", LuaValue::Nil).map_err(|error| {
+            format!(
+                "Failed to clear vulcan.runtime.lua.exec for runlua: {}",
+                error
+            )
+        })?;
+        if host_options.capabilities.enable_managed_io_compat {
+            let default_encoding = resolve_host_default_text_encoding(host_options)?;
+            install_managed_io_compat(lua, &vulcan_io, default_encoding).map_err(|error| {
+                format!(
+                    "Failed to install managed io compatibility for runlua: {}",
+                    error
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Install a hard timeout guard for the isolated luaexec VM.
+    /// 为隔离 luaexec 虚拟机安装硬超时保护。
+    pub(super) fn install_runlua_timeout_guard(lua: &Lua, timeout_ms: u64) -> mlua::Result<()> {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let timeout_text = format!("luaexec execution timed out after {} ms", timeout_ms);
+
+        lua.set_hook(
+            HookTriggers::new().every_nth_instruction(1_000),
+            move |_, _| {
+                if Instant::now() >= deadline {
+                    return Err(mlua::Error::runtime(timeout_text.clone()));
+                }
+                Ok(VmState::Continue)
+            },
+        )
+    }
+
+    /// Remove the previously installed timeout guard from the isolated luaexec VM.
+    /// 移除隔离 luaexec 虚拟机上已安装的超时保护。
+    pub(super) fn remove_runlua_timeout_guard(lua: &Lua) {
+        lua.remove_hook();
+    }
+
+    /// Collect packed Lua return values from the isolated runlua wrapper.
+    /// 从隔离 runlua 包装器返回的打包结果中提取所有返回值。
+    fn collect_runlua_return_values(
+        result_table: &Table,
+    ) -> Result<Vec<RunLuaRenderedValue>, String> {
+        let value_count = result_table
+            .get::<i64>("n")
+            .map_err(|error| format!("Failed to read runlua return count: {}", error))?
+            .max(0) as usize;
+
+        let mut rendered_values = Vec::new();
+        if value_count == 0 {
+            rendered_values.push(RunLuaRenderedValue {
+                format: "json",
+                content: "null".to_string(),
+            });
+            return Ok(rendered_values);
+        }
+
+        for index in 1..=value_count {
+            let value: LuaValue = result_table.raw_get(index).map_err(|error| {
+                format!("Failed to read runlua return value {}: {}", index, error)
+            })?;
+            rendered_values.push(Self::render_runlua_value(&value));
+        }
+
+        Ok(rendered_values)
+    }
+
+    /// Render one Lua return value into a Markdown-ready block payload.
+    /// 将单个 Lua 返回值渲染为可直接写入 Markdown 代码块的载荷。
+    fn render_runlua_value(value: &LuaValue) -> RunLuaRenderedValue {
+        match value {
+            LuaValue::String(text) => RunLuaRenderedValue {
+                format: "text",
+                content: text
+                    .to_str()
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            },
+            _ => match lua_value_to_json(value) {
+                Ok(json_value) => RunLuaRenderedValue {
+                    format: "json",
+                    content: serde_json::to_string_pretty(&json_value)
+                        .unwrap_or_else(|_| "null".to_string()),
+                },
+                Err(_) => RunLuaRenderedValue {
+                    format: "text",
+                    content: Self::render_lua_value_inline(value),
+                },
+            },
+        }
+    }
+
+    /// Render one Lua value into a compact single-line textual form.
+    /// 将单个 Lua 值渲染为紧凑的单行文本形式。
+    fn render_lua_value_inline(value: &LuaValue) -> String {
+        match value {
+            LuaValue::String(text) => text
+                .to_str()
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            LuaValue::Integer(number) => number.to_string(),
+            LuaValue::Number(number) => number.to_string(),
+            LuaValue::Boolean(flag) => flag.to_string(),
+            LuaValue::Nil => "nil".to_string(),
+            _ => format!("{:?}", value),
+        }
+    }
+
+    /// Render a successful runlua execution result into Markdown text.
+    /// 将成功的 runlua 执行结果渲染为 Markdown 文本。
+    fn render_runlua_success_markdown(
+        request: &RunLuaExecRequest,
+        printed_output: &[String],
+        rendered_values: &[RunLuaRenderedValue],
+    ) -> String {
+        let mut lines = vec![
+            "# Runtime Execution Result".to_string(),
+            "".to_string(),
+            "## Task".to_string(),
+            if request.task.trim().is_empty() {
+                "Execute Lua runtime code".to_string()
+            } else {
+                request.task.trim().to_string()
+            },
+            "".to_string(),
+            "## Status".to_string(),
+            "SUCCESS".to_string(),
+        ];
+
+        if !printed_output.is_empty() {
+            lines.extend([
+                "".to_string(),
+                "## Printed Output".to_string(),
+                "```text".to_string(),
+                printed_output.join("\n"),
+                "```".to_string(),
+            ]);
+        }
+
+        lines.extend(["".to_string(), "## Returned Values".to_string()]);
+
+        for (index, value) in rendered_values.iter().enumerate() {
+            lines.push(format!("{}. ", index + 1));
+            lines.push(format!("```{}", value.format));
+            lines.push(value.content.clone());
+            lines.push("```".to_string());
+            if index + 1 < rendered_values.len() {
+                lines.push("".to_string());
+            }
+        }
+
+        lines.join("\n")
+    }
+
+    /// Render a failed runlua execution result into Markdown text.
+    /// 将失败的 runlua 执行结果渲染为 Markdown 文本。
+    fn render_runlua_error_markdown(
+        request: &RunLuaExecRequest,
+        printed_output: &[String],
+        error_text: &str,
+    ) -> String {
+        let mut lines = vec![
+            "# Runtime Execution Error".to_string(),
+            "".to_string(),
+            "## Task".to_string(),
+            if request.task.trim().is_empty() {
+                "Execute Lua runtime code".to_string()
+            } else {
+                request.task.trim().to_string()
+            },
+            "".to_string(),
+            "## Status".to_string(),
+            "FAILED".to_string(),
+            "".to_string(),
+            "## Error".to_string(),
+            "```text".to_string(),
+            error_text.to_string(),
+            "```".to_string(),
+        ];
+
+        if !printed_output.is_empty() {
+            lines.extend([
+                "".to_string(),
+                "## Printed Output".to_string(),
+                "```text".to_string(),
+                printed_output.join("\n"),
+                "```".to_string(),
+            ]);
+        }
+
+        lines.join("\n")
+    }
+}
