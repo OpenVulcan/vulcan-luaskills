@@ -155,13 +155,13 @@ GitHub 托管 skill 的仓库派生或显式 `skill_id`、release zip 前缀、c
 
 ## 生态统一发布顺序
 
-如果要做一次类似 `0.4.0` 的生态统一发布，推荐顺序如下：
+如果要做一次类似 `0.4.1` 的生态统一发布，推荐顺序如下：
 
 1. 先发布 `LuaSkills/luaskills-packages`，确保新的兼容协议线下 `lua-runtime-packages-*` 与 `lua-deps-*` 已经存在。
-2. 再发布 `LuaSkills/luaskills`，完成 crate 版本以及主仓库 `luaskills-ffi-sdk-*` 和 demo 资产的 `v0.4.0` release。
-3. 再发布 TypeScript SDK `@luaskills/sdk@0.4.0`。
-4. 再发布 Python SDK `luaskills-sdk==0.4.0`。
-5. 再发布 Go SDK module tag `v0.4.0`。
+2. 再发布 `LuaSkills/luaskills`，完成 crate 版本以及主仓库 `luaskills-ffi-sdk-*` 和 demo 资产的 `v0.4.1` release。
+3. 再发布 TypeScript SDK `@luaskills/sdk@0.4.1`。
+4. 再发布 Python SDK `luaskills-sdk==0.4.1`。
+5. 再发布 Go SDK module tag `v0.4.1`。
 6. 最后分别运行各 SDK 仓库的 **Examples Release** 工作流，并确保对应包或 module tag 已经在上游可见。
 
 这样可以保证安装器、示例工作流和默认 runtime 资产都只会指向已经发布完成的 packages 资产、core 资产和 SDK 包。

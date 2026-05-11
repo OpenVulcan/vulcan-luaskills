@@ -1014,6 +1014,10 @@ runtime-config(action, skill_id?, key?, value?)
 - `host_result` 默认关闭，只有宿主通过 `request_context.client_capabilities.host_result.enabled = true` 显式开启时才允许 skill 返回第四返回值。
 - 支持结构化结果的 skill 应返回 `content, overflow_mode, template_hint, host_result`，其中 `host_result = { kind = "...", payload = { ... } }`。
 - 当前推荐的标准结果种类是 `change_set`，用于把 IDE 每轮操作级结果独立返回给宿主，而不是依赖全局 `git diff` 兜底。
+- `change_set.payload.files` 现在应始终存在；`modify` 文件记录应携带非空 `hunks`，每个 hunk 使用 `before + delete[] + insert[] + after` 表达具体“从什么改成了什么”。
+- `before` 与 `after` 应表示紧贴修改块前后的连续上下文字符串，而不是整文件快照。
+- `delete[].line` 使用旧文件行号，`insert[].line` 使用插入后的新文件行号；二者都应按升序排列，且行内容通过 `content` 明确给出。
+- `create` / `delete` 文件记录应直接提供完整文件 `content`；`rename` 文件记录应提供 `old_path` 与 `new_path`。
 
 ### 9.5 生命周期接口
 

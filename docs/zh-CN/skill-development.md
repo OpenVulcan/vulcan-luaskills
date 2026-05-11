@@ -866,10 +866,27 @@ return content, overflow_mode, template_hint, host_result
 return "Applied 1 edit.", nil, nil, {
     kind = "change_set",
     payload = {
+        mode = "applied",
+        summary = "Updated one file.",
         files = {
             {
-                path = "src/example.lua",
-                action = "update",
+                change = "modify",
+                path = "D:/projects/demo/src/example.lua",
+                hunks = {
+                    {
+                        before = "local a = 1\nlocal b = 2",
+                        delete = {
+                            { line = 10, content = "local x = 1" },
+                            { line = 11, content = "return x" },
+                        },
+                        insert = {
+                            { line = 10, content = "local x = 2" },
+                            { line = 11, content = "local y = 3" },
+                            { line = 12, content = "return x + y" },
+                        },
+                        after = "end\nreturn M",
+                    },
+                },
             },
         },
     },
@@ -881,6 +898,12 @@ return "Applied 1 edit.", nil, nil, {
 - 宿主未开启 `host_result` 时，第四返回值会被忽略。
 - `host_result` 应保持可 JSON 化。
 - 对 skill 来说，`change_set` 的目标是提供操作级结果，不是替代 `git diff`。
+- `change_set.payload.files` 现在应始终存在，并使用绝对路径。
+- `change = "modify"` 时，必须提供非空 `hunks`；每个 `hunk` 都必须包含 `before`、`after`、`delete`、`insert`。
+- `before` 与 `after` 应表示紧贴修改块前后的连续上下文字符串，不应误用为整文件快照。
+- `delete[].line` 表示旧文件中的被删行号，`insert[].line` 表示新文件中的插入后行号，两者都应按升序排列。
+- `change = "create"` 或 `change = "delete"` 时，应直接提供完整文件 `content`。
+- `change = "rename"` 时，应提供 `old_path` 与 `new_path`，两者都必须是绝对路径。
 
 ## 13. `vulcan.deps.*`
 

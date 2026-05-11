@@ -8,7 +8,7 @@ param(
     [string]$LuaRuntimeSeries = "0.1",
     [string]$LuaRuntimeVersion = "",
     [string]$LuaSkillsRepo = "LuaSkills/luaskills",
-    [string]$LuaSkillsVersion = "v0.4.0",
+    [string]$LuaSkillsVersion = "v0.4.1",
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",
     [string]$VldbControllerVersion = "v0.2.1",
     [string]$VldbSQLiteRepo = "OpenVulcan/vldb-sqlite",

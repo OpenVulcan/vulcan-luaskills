@@ -251,5 +251,7 @@ ROOT -> PROJECT -> USER
 - `system_runtime_lease` 在宿主未显式传入 `cwd` 时会按预期回落到 `system_lua_lib_dir` 或默认 `skills`
 - 宿主未开启 `host_result` 时，skill 第四返回值会被忽略
 - 宿主开启 `host_result` 时，支持的 skill 可以返回 `change_set` 等结构化结果，且宿主能独立读取
+- `change_set` 的 `modify` 结果会稳定返回 `before + delete[] + insert[] + after` 形式的 hunk，而不是只给模糊 summary 或可选 patch
+- `change_set` 的 `create` / `delete` / `rename` 结果已分别带上完整文件内容或 `old_path/new_path`
 
 只要这组检查全部通过，宿主接入通常就已经具备稳定联调基础。

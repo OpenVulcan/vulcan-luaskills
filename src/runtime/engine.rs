@@ -4160,58 +4160,20 @@ fn validate_change_set_payload(display_name: &str, payload: &Value) -> Result<()
             ));
         }
     }
-    if let Some(files) = object.get("files") {
-        let Value::Array(files) = files else {
-            return Err(format!(
-                "Lua skill '{}' change_set.files must be an array when present",
-                display_name
-            ));
-        };
-        for (index, file) in files.iter().enumerate() {
-            let Value::Object(file) = file else {
-                return Err(format!(
-                    "Lua skill '{}' change_set.files[{}] must be an object",
-                    display_name, index
-                ));
-            };
-            let path = file
-                .get("path")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    format!(
-                        "Lua skill '{}' change_set.files[{}].path must be one non-empty string",
-                        display_name, index
-                    )
-                })?;
-            if !Path::new(path).is_absolute() {
-                return Err(format!(
-                    "Lua skill '{}' change_set.files[{}].path must be absolute",
-                    display_name, index
-                ));
-            }
-            let change = file.get("change").and_then(Value::as_str).ok_or_else(|| {
-                format!(
-                    "Lua skill '{}' change_set.files[{}].change must be a string",
-                    display_name, index
-                )
-            })?;
-            if !matches!(change, "create" | "modify" | "delete" | "rename") {
-                return Err(format!(
-                    "Lua skill '{}' change_set.files[{}].change is unsupported",
-                    display_name, index
-                ));
-            }
-            if let Some(patch) = file.get("patch") {
-                if !patch.is_string() && !patch.is_null() {
-                    return Err(format!(
-                        "Lua skill '{}' change_set.files[{}].patch must be a string when present",
-                        display_name, index
-                    ));
-                }
-            }
-        }
+    let files = object.get("files").ok_or_else(|| {
+        format!(
+            "Lua skill '{}' change_set.files must be present as one array",
+            display_name
+        )
+    })?;
+    let Value::Array(files) = files else {
+        return Err(format!(
+            "Lua skill '{}' change_set.files must be an array",
+            display_name
+        ));
+    };
+    for (index, file) in files.iter().enumerate() {
+        validate_change_set_file_payload(display_name, index, file)?;
     }
     if let Some(diagnostics) = object.get("diagnostics") {
         let Value::Array(diagnostics) = diagnostics else {
@@ -4248,6 +4210,256 @@ fn validate_change_set_payload(display_name: &str, payload: &Value) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Validate one file-level record inside one canonical `change_set` payload.
+/// 校验 canonical `change_set` 载荷中的单个文件级记录。
+fn validate_change_set_file_payload(
+    display_name: &str,
+    file_index: usize,
+    file: &Value,
+) -> Result<(), String> {
+    let Value::Object(file) = file else {
+        return Err(format!(
+            "Lua skill '{}' change_set.files[{}] must be an object",
+            display_name, file_index
+        ));
+    };
+    let change = file.get("change").and_then(Value::as_str).ok_or_else(|| {
+        format!(
+            "Lua skill '{}' change_set.files[{}].change must be a string",
+            display_name, file_index
+        )
+    })?;
+    if let Some(patch) = file.get("patch") {
+        if !patch.is_string() && !patch.is_null() {
+            return Err(format!(
+                "Lua skill '{}' change_set.files[{}].patch must be a string when present",
+                display_name, file_index
+            ));
+        }
+    }
+    match change {
+        "modify" => {
+            let _path =
+                validate_change_set_absolute_path_field(display_name, file_index, file, "path")?;
+            let hunks = file.get("hunks").ok_or_else(|| {
+                format!(
+                    "Lua skill '{}' change_set.files[{}].hunks must be present as one non-empty array for modify changes",
+                    display_name, file_index
+                )
+            })?;
+            let Value::Array(hunks) = hunks else {
+                return Err(format!(
+                    "Lua skill '{}' change_set.files[{}].hunks must be a non-empty array for modify changes",
+                    display_name, file_index
+                ));
+            };
+            if hunks.is_empty() {
+                return Err(format!(
+                    "Lua skill '{}' change_set.files[{}].hunks must be a non-empty array for modify changes",
+                    display_name, file_index
+                ));
+            }
+            for (hunk_index, hunk) in hunks.iter().enumerate() {
+                validate_change_set_modify_hunk(display_name, file_index, hunk_index, hunk)?;
+            }
+        }
+        "create" => {
+            let _path =
+                validate_change_set_absolute_path_field(display_name, file_index, file, "path")?;
+            validate_change_set_required_string_field(
+                display_name,
+                &format!("change_set.files[{}].content", file_index),
+                file.get("content"),
+            )?;
+        }
+        "delete" => {
+            let _path =
+                validate_change_set_absolute_path_field(display_name, file_index, file, "path")?;
+            validate_change_set_required_string_field(
+                display_name,
+                &format!("change_set.files[{}].content", file_index),
+                file.get("content"),
+            )?;
+        }
+        "rename" => {
+            let _old_path = validate_change_set_absolute_path_field(
+                display_name,
+                file_index,
+                file,
+                "old_path",
+            )?;
+            let _new_path = validate_change_set_absolute_path_field(
+                display_name,
+                file_index,
+                file,
+                "new_path",
+            )?;
+        }
+        _ => {
+            return Err(format!(
+                "Lua skill '{}' change_set.files[{}].change is unsupported",
+                display_name, file_index
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate one absolute path field inside one canonical `change_set` file record.
+/// 校验 canonical `change_set` 文件记录中的单个绝对路径字段。
+fn validate_change_set_absolute_path_field(
+    display_name: &str,
+    file_index: usize,
+    file: &serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Result<String, String> {
+    let path = file
+        .get(field_name)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Lua skill '{}' change_set.files[{}].{} must be one non-empty string",
+                display_name, file_index, field_name
+            )
+        })?;
+    if !Path::new(path).is_absolute() {
+        return Err(format!(
+            "Lua skill '{}' change_set.files[{}].{} must be absolute",
+            display_name, file_index, field_name
+        ));
+    }
+    Ok(path.to_string())
+}
+
+/// Validate one required string field inside one canonical `change_set` object path.
+/// 校验 canonical `change_set` 对象路径中的单个必填字符串字段。
+fn validate_change_set_required_string_field(
+    display_name: &str,
+    field_path: &str,
+    value: Option<&Value>,
+) -> Result<(), String> {
+    match value {
+        Some(Value::String(_)) => Ok(()),
+        _ => Err(format!(
+            "Lua skill '{}' {} must be a string",
+            display_name, field_path
+        )),
+    }
+}
+
+/// Validate one modify hunk record inside one canonical `change_set` file.
+/// 校验 canonical `change_set` 文件中的单个 modify hunk 记录。
+fn validate_change_set_modify_hunk(
+    display_name: &str,
+    file_index: usize,
+    hunk_index: usize,
+    hunk: &Value,
+) -> Result<(), String> {
+    let Value::Object(hunk) = hunk else {
+        return Err(format!(
+            "Lua skill '{}' change_set.files[{}].hunks[{}] must be an object",
+            display_name, file_index, hunk_index
+        ));
+    };
+    validate_change_set_required_string_field(
+        display_name,
+        &format!(
+            "change_set.files[{}].hunks[{}].before",
+            file_index, hunk_index
+        ),
+        hunk.get("before"),
+    )?;
+    validate_change_set_required_string_field(
+        display_name,
+        &format!(
+            "change_set.files[{}].hunks[{}].after",
+            file_index, hunk_index
+        ),
+        hunk.get("after"),
+    )?;
+    let deleted_count = validate_change_set_hunk_line_entries(
+        display_name,
+        file_index,
+        hunk_index,
+        "delete",
+        hunk.get("delete"),
+    )?;
+    let inserted_count = validate_change_set_hunk_line_entries(
+        display_name,
+        file_index,
+        hunk_index,
+        "insert",
+        hunk.get("insert"),
+    )?;
+    if deleted_count == 0 && inserted_count == 0 {
+        return Err(format!(
+            "Lua skill '{}' change_set.files[{}].hunks[{}] must include at least one deleted or inserted line",
+            display_name, file_index, hunk_index
+        ));
+    }
+    Ok(())
+}
+
+/// Validate one ordered delete/insert line list inside one canonical `change_set` hunk.
+/// 校验 canonical `change_set` hunk 中的单个有序 delete/insert 行列表。
+fn validate_change_set_hunk_line_entries(
+    display_name: &str,
+    file_index: usize,
+    hunk_index: usize,
+    entry_name: &str,
+    value: Option<&Value>,
+) -> Result<usize, String> {
+    let value = value.ok_or_else(|| {
+        format!(
+            "Lua skill '{}' change_set.files[{}].hunks[{}].{} must be an array",
+            display_name, file_index, hunk_index, entry_name
+        )
+    })?;
+    let Value::Array(entries) = value else {
+        return Err(format!(
+            "Lua skill '{}' change_set.files[{}].hunks[{}].{} must be an array",
+            display_name, file_index, hunk_index, entry_name
+        ));
+    };
+    let mut previous_line = 0_i64;
+    for (entry_index, entry) in entries.iter().enumerate() {
+        let Value::Object(entry) = entry else {
+            return Err(format!(
+                "Lua skill '{}' change_set.files[{}].hunks[{}].{}[{}] must be an object",
+                display_name, file_index, hunk_index, entry_name, entry_index
+            ));
+        };
+        let line = entry
+            .get("line")
+            .and_then(Value::as_i64)
+            .filter(|line| *line > 0)
+            .ok_or_else(|| {
+                format!(
+                    "Lua skill '{}' change_set.files[{}].hunks[{}].{}[{}].line must be one positive integer",
+                    display_name, file_index, hunk_index, entry_name, entry_index
+                )
+            })?;
+        if entry_index > 0 && line <= previous_line {
+            return Err(format!(
+                "Lua skill '{}' change_set.files[{}].hunks[{}].{} line numbers must be strictly increasing",
+                display_name, file_index, hunk_index, entry_name
+            ));
+        }
+        previous_line = line;
+        validate_change_set_required_string_field(
+            display_name,
+            &format!(
+                "change_set.files[{}].hunks[{}].{}[{}].content",
+                file_index, hunk_index, entry_name, entry_index
+            ),
+            entry.get("content"),
+        )?;
+    }
+    Ok(entries.len())
 }
 
 /// Parse Lua multi-return values into the host's unified string-result protocol.
@@ -9793,7 +10005,7 @@ mod tests {
         get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
         normalize_host_visible_path_text, populate_vulcan_dependency_context,
         populate_vulcan_file_context, populate_vulcan_internal_execution_context,
-        render_host_visible_path, runlua_cwd_guard,
+        render_host_visible_path, runlua_cwd_guard, validate_change_set_payload,
     };
     use crate::host::callbacks::runtime_model_callback_test_guard;
     use crate::host::database::RuntimeDatabaseProviderCallbacks;
@@ -9951,6 +10163,12 @@ mod tests {
         ))
     }
 
+    /// Build one stable absolute file path string for payload-validation tests.
+    /// 为载荷校验测试构造一条稳定绝对文件路径字符串。
+    fn make_change_set_test_path(file_name: &str) -> String {
+        render_host_visible_path(&std::env::temp_dir().join(file_name))
+    }
+
     /// Create one minimal runtime directory layout used by skill-config tests.
     /// 创建技能配置测试使用的最小运行时目录结构。
     fn create_runtime_test_layout(runtime_root: &Path) {
@@ -10100,6 +10318,161 @@ mod tests {
         fs::write(skill_dir.join("runtime").join("ping.lua"), lua_source)
             .expect("write model test runtime entry");
         skill_dir
+    }
+
+    /// Verify the canonical `change_set` validator accepts explicit AI-oriented modify hunks and file lifecycle records.
+    /// 验证 canonical `change_set` 校验器会接受面向 AI 的显式 modify hunk 与文件生命周期记录。
+    #[test]
+    fn validate_change_set_payload_accepts_hunks_and_file_lifecycle_changes() {
+        let modify_path = make_change_set_test_path("luaskills_change_set_modify.lua");
+        let create_path = make_change_set_test_path("luaskills_change_set_create.lua");
+        let delete_path = make_change_set_test_path("luaskills_change_set_delete.lua");
+        let rename_old_path = make_change_set_test_path("luaskills_change_set_old.lua");
+        let rename_new_path = make_change_set_test_path("luaskills_change_set_new.lua");
+        let payload = json!({
+            "mode": "applied",
+            "summary": "Updated one file and lifecycle metadata.",
+            "files": [
+                {
+                    "change": "modify",
+                    "path": modify_path,
+                    "hunks": [
+                        {
+                            "before": "local a = 1\nlocal b = 2",
+                            "delete": [
+                                { "line": 10, "content": "local x = 1" },
+                                { "line": 11, "content": "return x" }
+                            ],
+                            "insert": [
+                                { "line": 10, "content": "local x = 2" },
+                                { "line": 11, "content": "local y = 3" },
+                                { "line": 12, "content": "return x + y" }
+                            ],
+                            "after": "end\nreturn M"
+                        }
+                    ]
+                },
+                {
+                    "change": "create",
+                    "path": create_path,
+                    "content": "local M = {}\nreturn M\n"
+                },
+                {
+                    "change": "delete",
+                    "path": delete_path,
+                    "content": "return legacy\n"
+                },
+                {
+                    "change": "rename",
+                    "old_path": rename_old_path,
+                    "new_path": rename_new_path
+                }
+            ]
+        });
+
+        validate_change_set_payload("demo.skill", &payload)
+            .expect("change_set payload should be accepted");
+    }
+
+    /// Verify modify file records must carry at least one non-empty hunk list.
+    /// 验证 modify 文件记录必须携带至少一个非空 hunk 列表。
+    #[test]
+    fn validate_change_set_payload_rejects_modify_without_hunks() {
+        let modify_path =
+            make_change_set_test_path("luaskills_change_set_modify_missing_hunks.lua");
+        let payload = json!({
+            "mode": "applied",
+            "files": [
+                {
+                    "change": "modify",
+                    "path": modify_path
+                }
+            ]
+        });
+
+        let error = validate_change_set_payload("demo.skill", &payload)
+            .expect_err("modify file record should require hunks");
+        assert!(error.contains("change_set.files[0].hunks"));
+    }
+
+    /// Verify modify hunks must carry at least one deleted or inserted line block.
+    /// 验证 modify hunk 必须至少携带一组删除或插入行块。
+    #[test]
+    fn validate_change_set_payload_rejects_empty_modify_hunk() {
+        let modify_path = make_change_set_test_path("luaskills_change_set_modify_empty_hunk.lua");
+        let payload = json!({
+            "mode": "applied",
+            "files": [
+                {
+                    "change": "modify",
+                    "path": modify_path,
+                    "hunks": [
+                        {
+                            "before": "",
+                            "delete": [],
+                            "insert": [],
+                            "after": ""
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let error = validate_change_set_payload("demo.skill", &payload)
+            .expect_err("modify hunk should require deleted or inserted lines");
+        assert!(error.contains("must include at least one deleted or inserted line"));
+    }
+
+    /// Verify rename records must expose both old and new absolute file paths.
+    /// 验证 rename 记录必须同时暴露旧绝对路径与新绝对路径。
+    #[test]
+    fn validate_change_set_payload_rejects_rename_without_both_paths() {
+        let rename_old_path = make_change_set_test_path("luaskills_change_set_old_only.lua");
+        let payload = json!({
+            "mode": "applied",
+            "files": [
+                {
+                    "change": "rename",
+                    "old_path": rename_old_path
+                }
+            ]
+        });
+
+        let error = validate_change_set_payload("demo.skill", &payload)
+            .expect_err("rename record should require both old_path and new_path");
+        assert!(error.contains("change_set.files[0].new_path"));
+    }
+
+    /// Verify modify line blocks must keep ascending line numbers so hosts and models can replay them deterministically.
+    /// 验证 modify 行块必须保持递增行号，确保宿主与模型可以确定性回放。
+    #[test]
+    fn validate_change_set_payload_rejects_out_of_order_hunk_lines() {
+        let modify_path =
+            make_change_set_test_path("luaskills_change_set_modify_unordered_lines.lua");
+        let payload = json!({
+            "mode": "applied",
+            "files": [
+                {
+                    "change": "modify",
+                    "path": modify_path,
+                    "hunks": [
+                        {
+                            "before": "local a = 1",
+                            "delete": [
+                                { "line": 11, "content": "return x" },
+                                { "line": 10, "content": "local x = 1" }
+                            ],
+                            "insert": [],
+                            "after": "return M"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let error = validate_change_set_payload("demo.skill", &payload)
+            .expect_err("modify hunk line numbers should be strictly increasing");
+        assert!(error.contains("line numbers must be strictly increasing"));
     }
 
     /// Verify ROOT keeps priority over PROJECT and USER for identical skill ids.

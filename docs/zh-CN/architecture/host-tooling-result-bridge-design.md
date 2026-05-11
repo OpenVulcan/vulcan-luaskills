@@ -204,11 +204,11 @@ pub struct RuntimeHostResultEnvelope {
 
 第一版必须明确如下规则：
 
-1. 宿主未开启 `enable_host_result_bridge` 时，第四返回值直接忽略。
-2. `client_capabilities.host_result.enabled` 不为 `true` 时，直接忽略。
-3. `kind` 不在 `allowed_kinds` 中时，直接忽略并记录调试日志。
-4. 结构化结果体积超过 `max_payload_bytes` 时，直接忽略并记录调试日志。
-5. 以上情况都**不能让 skill 调用失败**。
+1. 只有 `request_context.client_capabilities.host_result.enabled == true` 时，第四返回值才进入结构化结果主链。
+2. 宿主未开启 `host_result` 时，第四返回值直接忽略。
+3. 宿主已开启 `host_result` 时，`kind`、`payload`、大小限制和 `change_set` 结构都必须严格校验。
+4. 一旦宿主显式开启而 skill 返回了不合法的结构化结果，本次 skill 调用应明确失败，而不是静默吞掉。
+5. 这条规则只影响第四返回值，不改变 `content` 仍是主文本结果这件事。
 
 这组规则的原因很简单：`host_result` 是宿主消费能力，不是 skill 的必达主链结果。主链结果仍然是 `content`。
 
@@ -481,7 +481,7 @@ enum SkillOperationPlane {
 至少需要关注：
 
 1. `FfiLuaRuntimeHostOptions`
-   - 需要承载 `enable_host_result_bridge`。
+   - 不应再增加 `enable_host_result_bridge` 一类宿主级总开关；`host_result` 的唯一开启入口应保持在请求级 `client_capabilities`。
 2. `FfiRuntimeEntryDescriptor`
    - 需要承载 `exposure`，未来若引入 `management_plane` 也可能需要承载。
 3. `FfiRuntimeInvocationResult`
@@ -551,7 +551,7 @@ return content, overflow_mode, template_hint, host_result
 1. 这一次工具调用是否真正修改了工作区。
 2. 修改的是哪些文件。
 3. 每个文件的状态是什么。
-4. 每个文件的 diff 是什么。
+4. 每个修改文件的每个修改块，具体删除了哪些旧行、插入了哪些新行，以及修改块前后的连续上下文是什么。
 5. 当前结果是 `preview` 还是 `applied`。
 
 只有把它定义成“操作级结果”，IDE 才能稳定生成每轮执行结果，而不是靠外部 `git diff` 去推测本轮发生了什么。
@@ -689,9 +689,9 @@ pub enum RuntimeEntryExposure {
 
 runtime 只需要负责：
 
-- 校验
-- 过滤
-- 转交
+- 在 Lua 上下注入标准化 `vulcan.context.host_result` helper
+- 在未开启时忽略第四返回值
+- 在开启时严格校验并转交合法的结构化结果
 
 不需要要求所有 `host_owned + host_custom` 的结果类型都进入公共市场语义。
 
@@ -841,7 +841,7 @@ runtime 只需要负责：
 | --- | --- | --- |
 | `src/runtime/result.rs` | 统一文本结果模型 | 增加 `host_result` 字段与统一信封结构；新增校验辅助函数 |
 | `src/runtime/engine.rs` | Lua 返回解析、entry 列表、skill 调用主链 | 将 `parse_tool_call_output()` 扩成四返回值；增加 `host_result` 校验逻辑；为后续基于现有 runtime session 的系统租约路由预留承载点 |
-| `src/host/options.rs` | 宿主能力开关 | 在 `LuaRuntimeCapabilityOptions` 中增加 `enable_host_result_bridge` |
+| `src/runtime_context.rs` / `src/runtime_options.rs` | 请求级上下文与调用参数 | 保持 `request_context.client_capabilities.host_result` 作为唯一开启入口，不再引入宿主级 `enable_host_result_bridge` 总开关 |
 | `src/runtime/context.rs` | 请求级上下文 | 保持 `client_capabilities` 原位；补充“skill 语义上下文”和“宿主 LuaRuntime 上下文”的区分 |
 | `src/runtime/engine.rs` 的 runtime session 相关结构 | 当前 `0.3` 租约底座 | 建议直接扩展现有 session / lease 模型，支持系统租约入口与无限期生命周期策略 |
 | `src/skill/manifest.rs` | skill.yaml 元数据来源 | 对 `managed skills` 的 `SkillToolMeta` 增加 `exposure`；必要时增加 `ownership` / `management_plane` / `state_model` / `contract_kind` 的可声明字段 |
@@ -863,7 +863,7 @@ runtime 只需要负责：
 目标：
 
 1. `RuntimeInvocationResult` 增加 `host_result`。
-2. `LuaRuntimeCapabilityOptions` 增加 `enable_host_result_bridge`。
+2. 明确 `request_context.client_capabilities.host_result` 是唯一开启入口。
 3. `parse_tool_call_output()` 支持第四返回值。
 4. runtime 内部完成 `host_result` 校验与忽略策略。
 5. 公共 `_json` FFI 同步打通新字段。
@@ -879,9 +879,10 @@ runtime 只需要负责：
 第一版建议约束：
 
 1. 只处理文本文件。
-2. 只要求统一 diff。
+2. `modify` 必须返回 `hunks[]`，每个 hunk 使用 `before + delete[] + insert[] + after` 表达具体修改块。
 3. 只区分 `preview` 与 `applied`。
 4. `content` 只保留简短摘要。
+5. `create` / `delete` 直接返回完整文件 `content`，`rename` 返回 `old_path/new_path`。
 
 这一步优先级应高于系统租约扩展，因为它直接决定 IDE 是否能获得“每轮 AI 操作结果”。
 
@@ -958,9 +959,9 @@ runtime 只需要负责：
 正式落地后，至少应满足以下验收标准：
 
 1. 旧 skill 无需修改仍可正常加载和调用。
-2. 宿主未开启 `enable_host_result_bridge` 时，第四返回值不会导致报错。
+2. 宿主未开启 `request_context.client_capabilities.host_result.enabled` 时，第四返回值不会导致报错。
 3. `_json` FFI 能稳定返回 `host_result`。
-4. `vulcan-file-edit` 能返回最小 `change_set`。
+4. `vulcan-file-edit` 能返回最小但结构明确的 `change_set`，包括 `modify` 的 hunk 级 `before/delete/insert/after` 信息。
 5. 宿主可直接消费 `change_set` 驱动每轮执行结果面板，而不是依赖外部 `git diff` 反推。
 6. `RuntimeEntryDescriptor` 能稳定输出 `exposure`，并为后续 `ownership` 等维度扩展预留空间。
 7. 宿主可注册或加载 `host_owned` / `host_custom` 入口，且它们不进入普通市场安装治理面。

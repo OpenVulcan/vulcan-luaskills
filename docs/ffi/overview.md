@@ -22,7 +22,7 @@ Current stable host-facing features include:
 - Authority-bound `system_runtime_lease` endpoints for host-owned system leases and `system_lua_lib` directory semantics.
 - Host-owned path context fields on lease creation such as `cwd`, `workspace_root`, `lua_roots`, `c_roots`, and `mounts`.
 - Optional `host_result` bridging so one skill may return `content, overflow_mode, template_hint, host_result`.
-- The first canonical structured host result kind: `change_set`, used for IDE-grade operation results without replacing the main text payload.
+- The first canonical structured host result kind: `change_set`, now carrying explicit file lifecycle records plus hunk-level `before + delete[] + insert[] + after` blocks for IDE-grade edit results.
 
 ## How To Choose
 

@@ -867,10 +867,27 @@ Recommended shape:
 return "Applied 1 edit.", nil, nil, {
     kind = "change_set",
     payload = {
+        mode = "applied",
+        summary = "Updated one file.",
         files = {
             {
-                path = "src/example.lua",
-                action = "update",
+                change = "modify",
+                path = "D:/projects/demo/src/example.lua",
+                hunks = {
+                    {
+                        before = "local a = 1\nlocal b = 2",
+                        delete = {
+                            { line = 10, content = "local x = 1" },
+                            { line = 11, content = "return x" },
+                        },
+                        insert = {
+                            { line = 10, content = "local x = 2" },
+                            { line = 11, content = "local y = 3" },
+                            { line = 12, content = "return x + y" },
+                        },
+                        after = "end\nreturn M",
+                    },
+                },
             },
         },
     },
@@ -882,6 +899,12 @@ Notes:
 - When the host does not enable `host_result`, the fourth return value is ignored.
 - `host_result` should stay JSON-serializable.
 - For skill authors, `change_set` exists to provide operation-level results, not to replace `git diff`.
+- `change_set.payload.files` should now always be present and should use absolute paths.
+- When `change = "modify"`, one file record must provide one non-empty `hunks` array; every hunk must include `before`, `after`, `delete`, and `insert`.
+- `before` and `after` should be contiguous context strings immediately adjacent to the changed block, not whole-file snapshots.
+- `delete[].line` uses old-file line numbers, while `insert[].line` uses new-file line numbers after insertion, and both lists should stay sorted in ascending order.
+- When `change = "create"` or `change = "delete"`, the file record should directly provide full-file `content`.
+- When `change = "rename"`, the file record should provide both `old_path` and `new_path`, and both must be absolute paths.
 
 ## 13. `vulcan.deps.*`
 
