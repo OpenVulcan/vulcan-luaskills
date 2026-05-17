@@ -19,6 +19,7 @@ include = [
     "/deny.toml",
     "/include/**",
     "/src/**",
+    "/skills/**",
 ]
 
 [lib]

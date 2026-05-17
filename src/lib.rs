@@ -13,9 +13,11 @@ pub use host::callbacks::{
     RuntimeModelEmbedRequest, RuntimeModelEmbedResponse, RuntimeModelError, RuntimeModelErrorCode,
     RuntimeModelLlmCallback, RuntimeModelLlmRequest, RuntimeModelLlmResponse, RuntimeModelUsage,
     RuntimeSkillLifecycleCallback, RuntimeSkillLifecycleEvent, RuntimeSkillManagementAction,
-    RuntimeSkillManagementCallback, RuntimeSkillManagementRequest, set_entry_registry_callback,
-    set_host_tool_callback, set_model_embed_callback, set_model_llm_callback,
-    set_skill_lifecycle_callback, set_skill_management_callback,
+    RuntimeSkillManagementCallback, RuntimeSkillManagementRequest,
+    RuntimeSkillOperationProgressCallback, RuntimeSkillOperationProgressEvent,
+    set_entry_registry_callback, set_host_tool_callback, set_model_embed_callback,
+    set_model_llm_callback, set_skill_lifecycle_callback, set_skill_management_callback,
+    set_skill_operation_progress_callback,
 };
 pub use host::database::{
     LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,

@@ -10,7 +10,9 @@ use crate::host::callbacks::{
     RuntimeHostToolCallback, RuntimeHostToolRequest, RuntimeModelEmbedCallback,
     RuntimeModelEmbedRequest, RuntimeModelEmbedResponse, RuntimeModelError, RuntimeModelErrorCode,
     RuntimeModelLlmCallback, RuntimeModelLlmRequest, RuntimeModelLlmResponse,
+    RuntimeSkillOperationProgressCallback, RuntimeSkillOperationProgressEvent,
     set_host_tool_callback, set_model_embed_callback, set_model_llm_callback,
+    set_skill_operation_progress_callback,
 };
 use crate::host::database::{
     LuaRuntimeDatabaseCallbackMode, LuaRuntimeDatabaseProviderMode, RuntimeDatabaseBindingContext,
@@ -44,6 +46,8 @@ const FFI_STATUS_ERROR: i32 = 1;
 const FFI_SOURCE_TYPE_ABSENT: i32 = -1;
 const FFI_SOURCE_TYPE_GITHUB: i32 = 0;
 const FFI_SOURCE_TYPE_URL: i32 = 1;
+const FFI_SOURCE_TYPE_OFFICIAL_HUB: i32 = 2;
+const FFI_SOURCE_TYPE_PRIVATE_URL_MANIFEST: i32 = 3;
 const FFI_PROVIDER_MODE_DYNAMIC_LIBRARY: i32 = 0;
 const FFI_PROVIDER_MODE_HOST_CALLBACK: i32 = 1;
 const FFI_PROVIDER_MODE_SPACE_CONTROLLER: i32 = 2;
@@ -420,6 +424,16 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             value.github_api_base_url,
             "github_api_base_url",
         )?,
+        official_skill_hub_base_url: parse_optional_string(
+            value.official_skill_hub_base_url,
+            "official_skill_hub_base_url",
+        )?,
+        enable_private_url_skill_install: value.enable_private_url_skill_install != 0,
+        private_skill_source_allowlist: parse_string_array(
+            value.private_skill_source_allowlist,
+            value.private_skill_source_allowlist_len,
+            "private_skill_source_allowlist",
+        )?,
         default_text_encoding: parse_optional_string(
             value.default_text_encoding,
             "default_text_encoding",
@@ -609,6 +623,8 @@ fn parse_source_type(value: i32) -> Result<SkillInstallSourceType, String> {
     match value {
         FFI_SOURCE_TYPE_GITHUB => Ok(SkillInstallSourceType::Github),
         FFI_SOURCE_TYPE_URL => Ok(SkillInstallSourceType::Url),
+        FFI_SOURCE_TYPE_OFFICIAL_HUB => Ok(SkillInstallSourceType::OfficialHub),
+        FFI_SOURCE_TYPE_PRIVATE_URL_MANIFEST => Ok(SkillInstallSourceType::PrivateUrlManifest),
         _ => Err(format!("Unsupported source_type '{}'", value)),
     }
 }
@@ -780,6 +796,8 @@ fn alloc_skill_apply_result(value: &SkillApplyResult) -> FfiSkillApplyResult {
         None => FFI_SOURCE_TYPE_ABSENT,
         Some(SkillInstallSourceType::Github) => FFI_SOURCE_TYPE_GITHUB,
         Some(SkillInstallSourceType::Url) => FFI_SOURCE_TYPE_URL,
+        Some(SkillInstallSourceType::OfficialHub) => FFI_SOURCE_TYPE_OFFICIAL_HUB,
+        Some(SkillInstallSourceType::PrivateUrlManifest) => FFI_SOURCE_TYPE_PRIVATE_URL_MANIFEST,
     };
     FfiSkillApplyResult {
         skill_id: alloc_owned_buffer_from_string(&value.skill_id),
@@ -1630,6 +1648,27 @@ pub unsafe extern "C" fn luaskills_ffi_set_host_tool_json_callback(
         }) as RuntimeHostToolCallback
     });
     set_host_tool_callback(wrapped);
+    ffi_ok_status(error_out)
+}
+
+/// Register or clear one skill-operation progress JSON callback for host UI integration.
+/// 为宿主 UI 集成注册或清理一个技能操作进度 JSON 回调。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_set_skill_operation_progress_json_callback(
+    callback: Option<FfiJsonProviderCallback>,
+    user_data: *mut c_void,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    let wrapped = callback.map(|callback_fn| {
+        let user_data = user_data as usize;
+        std::sync::Arc::new(move |event: &RuntimeSkillOperationProgressEvent| {
+            if let Ok(request_json) = serde_json::to_string(event) {
+                let _ = invoke_json_provider_callback(callback_fn, user_data, &request_json);
+            }
+        }) as RuntimeSkillOperationProgressCallback
+    });
+    set_skill_operation_progress_callback(wrapped);
     ffi_ok_status(error_out)
 }
 

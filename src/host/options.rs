@@ -178,6 +178,18 @@ pub struct LuaRuntimeHostOptions {
     /// Optional GitHub API base URL override used to resolve release metadata.
     /// 可选的 GitHub API 基址覆盖，用于解析 release 元数据。
     pub github_api_base_url: Option<String>,
+    /// Optional official LuaSkills Hub base URL used by managed Hub installs.
+    /// 受管 Hub 安装使用的可选官方 LuaSkills Hub 基址。
+    #[serde(default)]
+    pub official_skill_hub_base_url: Option<String>,
+    /// Whether trusted system operations may install from private URL manifests.
+    /// 可信 system 操作是否允许从私有 URL manifest 安装。
+    #[serde(default)]
+    pub enable_private_url_skill_install: bool,
+    /// Host-controlled URL prefixes allowed for private skill manifests.
+    /// 宿主管控的私有技能 manifest 允许 URL 前缀。
+    #[serde(default)]
+    pub private_skill_source_allowlist: Vec<String>,
     /// Optional default text encoding label used by managed IO and process APIs.
     /// 托管 IO 与进程 API 使用的可选默认文本编码标签。
     #[serde(default)]

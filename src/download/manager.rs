@@ -1,5 +1,7 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
 
 use reqwest::StatusCode;
@@ -10,6 +12,10 @@ use crate::dependency::types::DependencySourceType;
 use crate::download::github::{GithubReleaseApiResponse, rewrite_github_download_url};
 use crate::runtime_logging::info as log_info;
 use crate::skill::dependencies::GithubReleaseSourceSpec;
+
+/// Callback type used by callers to observe byte-level download progress.
+/// 调用方用于观察字节级下载进度的回调类型。
+pub type DownloadProgressCallback = Arc<dyn Fn(&DownloadProgress) + Send + Sync>;
 
 /// One resolved GitHub release asset with the tag/version metadata needed by install flows.
 /// 安装流程需要的单个已解析 GitHub release 资产及其标签/版本元数据。
@@ -50,6 +56,24 @@ pub struct DownloadManagerConfig {
     pub github_api_base_url: Option<String>,
 }
 
+/// One byte-level progress sample emitted by the shared downloader.
+/// 共享下载器发出的单个字节级进度样本。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadProgress {
+    /// Exact source locator currently being downloaded or served from cache.
+    /// 当前正在下载或从缓存命中的精确来源定位值。
+    pub source_locator: String,
+    /// Number of bytes read so far.
+    /// 当前已经读取的字节数。
+    pub bytes_done: u64,
+    /// Optional total byte count reported by the remote server or cache metadata.
+    /// 远端服务器或缓存元数据报告的可选总字节数。
+    pub bytes_total: Option<u64>,
+    /// Whether this progress sample represents a cache hit.
+    /// 当前进度样本是否表示缓存命中。
+    pub cached: bool,
+}
+
 /// One normalized download request consumed by the shared download layer.
 /// 由共享下载层消费的单次标准化下载请求。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,13 +93,29 @@ pub struct DownloadRequest {
 /// 供依赖解析与安装流程共用的共享下载器。
 pub struct DownloadManager {
     config: DownloadManagerConfig,
+    progress_callback: Option<DownloadProgressCallback>,
 }
 
 impl DownloadManager {
     /// Create one shared downloader from configuration.
     /// 基于配置创建一个共享下载器。
     pub fn new(config: DownloadManagerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            progress_callback: None,
+        }
+    }
+
+    /// Create one shared downloader with an optional progress callback.
+    /// 基于配置与可选进度回调创建一个共享下载器。
+    pub fn new_with_progress(
+        config: DownloadManagerConfig,
+        progress_callback: Option<DownloadProgressCallback>,
+    ) -> Self {
+        Self {
+            config,
+            progress_callback,
+        }
     }
 
     /// Download one binary payload into the cache directory and return the cached file path.
@@ -90,12 +130,19 @@ impl DownloadManager {
             )
         })?;
 
-        let file_extension = infer_download_extension(&request.source_locator);
-        let target_path = self
-            .config
-            .cache_root
-            .join(format!("{}{}", request.cache_key, file_extension));
+        let target_path = self.cached_path_for_request(request);
         if target_path.exists() {
+            if let Some(callback) = self.progress_callback.as_ref() {
+                let bytes_done = fs::metadata(&target_path)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or_default();
+                callback(&DownloadProgress {
+                    source_locator: request.source_locator.clone(),
+                    bytes_done,
+                    bytes_total: Some(bytes_done),
+                    cached: true,
+                });
+            }
             return Ok(target_path);
         }
 
@@ -104,21 +151,60 @@ impl DownloadManager {
             request.cache_key, request.source_locator
         ));
         let source_locator = request.source_locator.clone();
+        let progress_callback = self.progress_callback.clone();
         let bytes = self.run_http_task(move |client| {
-            let response = client
+            let mut response = client
                 .get(&source_locator)
                 .send()
                 .map_err(|error| format!("Failed to download {}: {}", source_locator, error))?
                 .error_for_status()
                 .map_err(|error| format!("Failed to download {}: {}", source_locator, error))?;
-            response
-                .bytes()
-                .map(|value| value.to_vec())
-                .map_err(|error| format!("Failed to read {}: {}", source_locator, error))
+            let bytes_total = response.content_length();
+            let mut buffer = [0_u8; 64 * 1024];
+            let mut bytes = Vec::new();
+            let mut bytes_done = 0_u64;
+            loop {
+                let read = response
+                    .read(&mut buffer)
+                    .map_err(|error| format!("Failed to read {}: {}", source_locator, error))?;
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..read]);
+                bytes_done = bytes_done.saturating_add(read as u64);
+                if let Some(callback) = progress_callback.as_ref() {
+                    callback(&DownloadProgress {
+                        source_locator: source_locator.clone(),
+                        bytes_done,
+                        bytes_total,
+                        cached: false,
+                    });
+                }
+            }
+            Ok(bytes)
         })?;
         fs::write(&target_path, &bytes)
             .map_err(|error| format!("Failed to write {}: {}", target_path.display(), error))?;
         Ok(target_path)
+    }
+
+    /// Fetch one UTF-8 text resource over HTTP after dropping any stale cached copy.
+    /// 删除可能陈旧的缓存副本后通过 HTTP 获取单个 UTF-8 文本资源。
+    pub fn fetch_text_fresh(&self, url: &str, cache_key: &str) -> Result<String, String> {
+        let request = DownloadRequest {
+            source_type: DependencySourceType::Url,
+            source_locator: url.to_string(),
+            cache_key: cache_key.to_string(),
+        };
+        let cached_path = self.cached_path_for_request(&request);
+        if cached_path.exists() {
+            fs::remove_file(&cached_path).map_err(|error| {
+                format!("Failed to remove {}: {}", cached_path.display(), error)
+            })?;
+        }
+        let downloaded_path = self.download(&request)?;
+        fs::read_to_string(&downloaded_path)
+            .map_err(|error| format!("Failed to read {}: {}", downloaded_path.display(), error))
     }
 
     /// Download one binary payload and verify one expected SHA-256 checksum.
@@ -364,6 +450,15 @@ impl DownloadManager {
         })
         .join()
         .map_err(|_| "Blocking HTTP worker thread panicked".to_string())?
+    }
+
+    /// Return the deterministic cache path for one download request.
+    /// 返回单个下载请求对应的确定性缓存路径。
+    fn cached_path_for_request(&self, request: &DownloadRequest) -> PathBuf {
+        let file_extension = infer_download_extension(&request.source_locator);
+        self.config
+            .cache_root
+            .join(format!("{}{}", request.cache_key, file_extension))
     }
 
     /// Build one blocking HTTP client only when a network operation is actually needed.

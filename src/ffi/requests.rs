@@ -491,6 +491,32 @@ pub(super) struct ApplySkillJsonRequest {
     pub(super) authority: Option<SkillManagementAuthority>,
 }
 
+/// One JSON request used by host-private URL-manifest skill installation entrypoints.
+/// 供宿主私有 URL manifest 技能安装入口使用的 JSON 请求。
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct PrivateUrlManifestSkillJsonRequest {
+    /// Stable numeric FFI handle id of the target engine.
+    /// 目标引擎的稳定数值 FFI 句柄标识。
+    pub(super) engine_id: u64,
+    /// Ordered skill roots used by the current lifecycle operation.
+    /// 当前生命周期操作使用的有序技能根链。
+    pub(super) skill_roots: Vec<RuntimeSkillRoot>,
+    /// Stable target skill identifier expected inside the private manifest.
+    /// 私有 manifest 内必须匹配的稳定目标技能标识符。
+    pub(super) skill_id: String,
+    /// Host-approved private manifest URL.
+    /// 宿主已批准的私有 manifest URL。
+    pub(super) manifest_url: String,
+    /// Optional explicit target root used by advanced SDK wrappers.
+    /// 高级 SDK 封装使用的可选显式目标根。
+    #[serde(default)]
+    pub(super) target_root: Option<RuntimeSkillRoot>,
+    /// Required system authority injected by the host.
+    /// 宿主注入的必填 system 权限。
+    #[serde(default)]
+    pub(super) authority: Option<SkillManagementAuthority>,
+}
+
 /// One JSON result that lists the currently exported FFI entrypoints.
 /// 列出当前已导出 FFI 入口点的 JSON 结果。
 #[derive(Debug, Serialize, Deserialize)]

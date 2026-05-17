@@ -9,9 +9,15 @@ pub enum SkillInstallSourceType {
     /// 通过仓库与发布标签追踪的 GitHub Release 来源。
     #[default]
     Github,
+    /// Official LuaSkills Hub source resolved by skill id.
+    /// 通过技能标识符解析的官方 LuaSkills Hub 来源。
+    OfficialHub,
     /// Remote source YAML URL that describes one skill package.
     /// 描述单个技能包的远程 source YAML 地址。
     Url,
+    /// Host-private URL manifest source available only to trusted system operations.
+    /// 仅可信 system 操作可用的宿主私有 URL manifest 来源。
+    PrivateUrlManifest,
 }
 
 /// Stable source descriptor persisted for one managed skill installation.

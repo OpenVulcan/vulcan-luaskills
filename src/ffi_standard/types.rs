@@ -103,6 +103,18 @@ pub struct FfiLuaRuntimeHostOptions {
     /// Optional GitHub API base URL.
     /// 可选 GitHub API 基址。
     pub github_api_base_url: *const c_char,
+    /// Optional official LuaSkills Hub base URL.
+    /// 可选官方 LuaSkills Hub 基址。
+    pub official_skill_hub_base_url: *const c_char,
+    /// Whether trusted system operations may install from private URL manifests.
+    /// 可信 system 操作是否允许从私有 URL manifest 安装。
+    pub enable_private_url_skill_install: u8,
+    /// Host-controlled private skill source URL allowlist.
+    /// 宿主管控的私有技能来源 URL 允许列表。
+    pub private_skill_source_allowlist: *const *const c_char,
+    /// Number of private skill source allowlist entries.
+    /// 私有技能来源允许列表条目数量。
+    pub private_skill_source_allowlist_len: usize,
     /// Optional host SQLite dynamic library path.
     /// 可选宿主 SQLite 动态库路径。
     pub sqlite_library_path: *const c_char,

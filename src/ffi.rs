@@ -13,7 +13,7 @@ use crate::runtime_help::{RuntimeHelpDetail, RuntimeSkillHelpDescriptor};
 
 use crate::{
     LuaEngine, RuntimeEntryDescriptor, RuntimeInvocationResult, SkillApplyResult,
-    SkillManagementAuthority, SkillUninstallResult,
+    SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority, SkillUninstallResult,
 };
 
 mod requests;
@@ -141,6 +141,22 @@ fn require_json_authority(
             function_name
         )
     })
+}
+
+/// Require full system authority for one host-private JSON FFI entrypoint.
+/// 为单个宿主私有 JSON FFI 入口要求完整 system 权限。
+fn require_system_json_authority(
+    authority: Option<SkillManagementAuthority>,
+    function_name: &str,
+) -> Result<SkillManagementAuthority, String> {
+    let authority = require_json_authority(authority, function_name)?;
+    if authority == SkillManagementAuthority::System {
+        return Ok(authority);
+    }
+    Err(format!(
+        "{} requires system authority for private URL manifest operations",
+        function_name
+    ))
 }
 
 /// Return the global engine registry used by the FFI layer.
@@ -299,6 +315,7 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_set_sqlite_provider_json_callback",
         "luaskills_ffi_set_lancedb_provider_json_callback",
         "luaskills_ffi_set_host_tool_json_callback",
+        "luaskills_ffi_set_skill_operation_progress_json_callback",
         "luaskills_ffi_set_model_embed_json_callback",
         "luaskills_ffi_set_model_llm_json_callback",
         "luaskills_ffi_string_clone",
@@ -338,8 +355,10 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_system_uninstall_skill_json",
         "luaskills_ffi_install_skill_json",
         "luaskills_ffi_system_install_skill_json",
+        "luaskills_ffi_system_private_install_skill_from_url_manifest_json",
         "luaskills_ffi_update_skill_json",
         "luaskills_ffi_system_update_skill_json",
+        "luaskills_ffi_system_private_update_skill_from_url_manifest_json",
         "luaskills_ffi_string_free",
         "luaskills_ffi_bytes_clone",
         "luaskills_ffi_bytes_free",
@@ -1438,6 +1457,52 @@ pub unsafe extern "C" fn luaskills_ffi_system_install_skill_json(
     }
 }
 
+/// Install one private URL-manifest skill through a host-private system JSON FFI surface.
+/// 通过宿主私有 system JSON FFI 入口安装单个私有 URL manifest 技能。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_private_install_skill_from_url_manifest_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<PrivateUrlManifestSkillJsonRequest>(
+        input_json,
+        "luaskills_ffi_system_private_install_skill_from_url_manifest_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    let authority = match require_system_json_authority(
+        request.authority,
+        "luaskills_ffi_system_private_install_skill_from_url_manifest_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
+    let install_request = SkillInstallRequest {
+        skill_id: Some(request.skill_id),
+        source: Some(request.manifest_url),
+        source_type: SkillInstallSourceType::PrivateUrlManifest,
+    };
+    match with_engine_mut(request.engine_id, |engine| {
+        if let Some(target_root) = request.target_root.as_ref() {
+            engine
+                .system_install_skill_in_root(
+                    &request.skill_roots,
+                    target_root,
+                    authority,
+                    &install_request,
+                )
+                .map_err(|error| error.to_string())
+        } else {
+            engine
+                .system_install_skill(&request.skill_roots, authority, &install_request)
+                .map_err(|error| error.to_string())
+        }
+    }) {
+        Ok(result) => ffi_ok::<SkillApplyResult>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
 /// Update one managed skill through the ordinary skills plane via the JSON FFI surface.
 /// 通过 JSON FFI 入口在普通 skills 平面更新单个受管技能。
 #[unsafe(no_mangle)]
@@ -1498,6 +1563,52 @@ pub unsafe extern "C" fn luaskills_ffi_system_update_skill_json(
         } else {
             engine
                 .system_update_skill(&request.skill_roots, authority, &request.request)
+                .map_err(|error| error.to_string())
+        }
+    }) {
+        Ok(result) => ffi_ok::<SkillApplyResult>(result),
+        Err(error) => ffi_error(error),
+    }
+}
+
+/// Update one private URL-manifest skill through a host-private system JSON FFI surface.
+/// 通过宿主私有 system JSON FFI 入口更新单个私有 URL manifest 技能。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_system_private_update_skill_from_url_manifest_json(
+    input_json: FfiBorrowedBuffer,
+) -> FfiOwnedBuffer {
+    let request = match decode_json_request::<PrivateUrlManifestSkillJsonRequest>(
+        input_json,
+        "luaskills_ffi_system_private_update_skill_from_url_manifest_json",
+    ) {
+        Ok(request) => request,
+        Err(error) => return ffi_error(error),
+    };
+    let authority = match require_system_json_authority(
+        request.authority,
+        "luaskills_ffi_system_private_update_skill_from_url_manifest_json",
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return ffi_error(error),
+    };
+    let update_request = SkillInstallRequest {
+        skill_id: Some(request.skill_id),
+        source: Some(request.manifest_url),
+        source_type: SkillInstallSourceType::PrivateUrlManifest,
+    };
+    match with_engine_mut(request.engine_id, |engine| {
+        if let Some(target_root) = request.target_root.as_ref() {
+            engine
+                .system_update_skill_in_root(
+                    &request.skill_roots,
+                    target_root,
+                    authority,
+                    &update_request,
+                )
+                .map_err(|error| error.to_string())
+        } else {
+            engine
+                .system_update_skill(&request.skill_roots, authority, &update_request)
                 .map_err(|error| error.to_string())
         }
     }) {

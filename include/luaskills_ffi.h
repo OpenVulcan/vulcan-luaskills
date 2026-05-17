@@ -90,6 +90,26 @@ typedef struct FfiLuaRuntimeHostOptions {
     uint8_t allow_network_download;
     const char *github_base_url;
     const char *github_api_base_url;
+    /*
+    Optional official LuaSkills Hub base URL used by managed Hub installs.
+    受管 Hub 安装使用的可选官方 LuaSkills Hub 基址。
+    */
+    const char *official_skill_hub_base_url;
+    /*
+    Whether trusted system operations may install from private URL manifests.
+    可信 system 操作是否允许从私有 URL manifest 安装。
+    */
+    uint8_t enable_private_url_skill_install;
+    /*
+    Host-controlled URL prefixes allowed for private skill manifests.
+    宿主管控的私有技能 manifest 允许 URL 前缀。
+    */
+    const char **private_skill_source_allowlist;
+    /*
+    Number of private skill manifest allowlist entries.
+    私有技能 manifest 允许前缀数量。
+    */
+    size_t private_skill_source_allowlist_len;
     const char *sqlite_library_path;
     /*
     SQLite provider mode where 0=dynamic_library, 1=host_callback, and 2=space_controller.
@@ -190,7 +210,9 @@ Stable source-type integers used by standard install and update requests/results
 enum {
     FFI_SOURCE_TYPE_ABSENT = -1,
     FFI_SOURCE_TYPE_GITHUB = 0,
-    FFI_SOURCE_TYPE_URL = 1
+    FFI_SOURCE_TYPE_URL = 1,
+    FFI_SOURCE_TYPE_OFFICIAL_HUB = 2,
+    FFI_SOURCE_TYPE_PRIVATE_URL_MANIFEST = 3
 };
 
 enum {
@@ -252,8 +274,8 @@ enum {
 typedef struct FfiSkillInstallRequest {
     const char *skill_id;
     const char *source;
-    /* FFI_SOURCE_TYPE_GITHUB or FFI_SOURCE_TYPE_URL. */
-    /* FFI_SOURCE_TYPE_GITHUB 或 FFI_SOURCE_TYPE_URL。 */
+    /* FFI_SOURCE_TYPE_GITHUB, FFI_SOURCE_TYPE_OFFICIAL_HUB, FFI_SOURCE_TYPE_URL, or FFI_SOURCE_TYPE_PRIVATE_URL_MANIFEST. */
+    /* FFI_SOURCE_TYPE_GITHUB、FFI_SOURCE_TYPE_OFFICIAL_HUB、FFI_SOURCE_TYPE_URL 或 FFI_SOURCE_TYPE_PRIVATE_URL_MANIFEST。 */
     int32_t source_type;
 } FfiSkillInstallRequest;
 
@@ -373,8 +395,8 @@ typedef struct FfiSkillApplyResult {
     FfiOwnedBuffer status;
     FfiOwnedBuffer message;
     FfiOwnedBuffer version;
-    /* FFI_SOURCE_TYPE_ABSENT, FFI_SOURCE_TYPE_GITHUB, or FFI_SOURCE_TYPE_URL. */
-    /* FFI_SOURCE_TYPE_ABSENT、FFI_SOURCE_TYPE_GITHUB 或 FFI_SOURCE_TYPE_URL。 */
+    /* FFI_SOURCE_TYPE_ABSENT, FFI_SOURCE_TYPE_GITHUB, FFI_SOURCE_TYPE_OFFICIAL_HUB, FFI_SOURCE_TYPE_URL, or FFI_SOURCE_TYPE_PRIVATE_URL_MANIFEST. */
+    /* FFI_SOURCE_TYPE_ABSENT、FFI_SOURCE_TYPE_GITHUB、FFI_SOURCE_TYPE_OFFICIAL_HUB、FFI_SOURCE_TYPE_URL 或 FFI_SOURCE_TYPE_PRIVATE_URL_MANIFEST。 */
     int32_t source_type;
     FfiOwnedBuffer source_locator;
 } FfiSkillApplyResult;

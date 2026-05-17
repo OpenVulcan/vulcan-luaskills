@@ -1,12 +1,21 @@
+use crate::download::manager::{DownloadProgress, DownloadProgressCallback};
 use crate::runtime::entry::RuntimeEntryDescriptor;
 use crate::skill::manager::{SkillLifecycleAction, SkillManagementAuthority, SkillOperationPlane};
+use crate::skill::source::SkillInstallSourceType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Callback type used by hosts to receive runtime skill-lifecycle events.
 /// 宿主用于接收运行时技能生命周期事件的回调类型。
 pub type RuntimeSkillLifecycleCallback = Arc<dyn Fn(&RuntimeSkillLifecycleEvent) + Send + Sync>;
+
+/// Callback type used by hosts to receive fine-grained skill-operation progress events.
+/// 宿主用于接收细粒度技能操作进度事件的回调类型。
+pub type RuntimeSkillOperationProgressCallback =
+    Arc<dyn Fn(&RuntimeSkillOperationProgressEvent) + Send + Sync>;
 
 /// Callback type used by hosts to receive runtime entry-registry change events.
 /// 宿主用于接收运行时入口注册表变化事件的回调类型。
@@ -300,6 +309,203 @@ pub struct RuntimeSkillLifecycleEvent {
     pub message: Option<String>,
 }
 
+/// Fine-grained progress event emitted during one skill install or update operation.
+/// 单次技能安装或更新操作过程中发出的细粒度进度事件。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RuntimeSkillOperationProgressEvent {
+    /// Stable operation id shared by all events from the same lifecycle operation.
+    /// 同一生命周期操作全部事件共享的稳定操作标识符。
+    pub operation_id: String,
+    /// Monotonic sequence number within the current operation.
+    /// 当前操作内单调递增的序号。
+    pub sequence: u64,
+    /// Operation plane that owns the current lifecycle operation.
+    /// 当前生命周期操作所属的操作平面。
+    pub plane: SkillOperationPlane,
+    /// Lifecycle action represented by the current operation.
+    /// 当前操作所表示的生命周期动作。
+    pub action: SkillLifecycleAction,
+    /// Machine-readable phase name such as `resolving_source` or `downloading_archive`.
+    /// 机器可读阶段名称，例如 `resolving_source` 或 `downloading_archive`。
+    pub phase: String,
+    /// Machine-readable status such as `started`, `progress`, `completed`, or `failed`.
+    /// 机器可读状态，例如 `started`、`progress`、`completed` 或 `failed`。
+    pub status: String,
+    /// Optional skill id targeted by the operation.
+    /// 当前操作目标的可选技能标识符。
+    pub skill_id: Option<String>,
+    /// Optional named skill root targeted by the operation.
+    /// 当前操作目标的可选命名技能根。
+    pub root_name: Option<String>,
+    /// Optional source type involved in the current phase.
+    /// 当前阶段涉及的可选来源类型。
+    pub source_type: Option<SkillInstallSourceType>,
+    /// Optional source locator involved in the current phase.
+    /// 当前阶段涉及的可选来源定位值。
+    pub source_locator: Option<String>,
+    /// Optional completed byte count for download phases.
+    /// 下载阶段的可选已完成字节数。
+    pub bytes_done: Option<u64>,
+    /// Optional total byte count for download phases.
+    /// 下载阶段的可选总字节数。
+    pub bytes_total: Option<u64>,
+    /// Optional percentage for determinate progress phases.
+    /// 确定性进度阶段的可选百分比。
+    pub percent: Option<f64>,
+    /// Optional human-readable progress message.
+    /// 可选的人类可读进度消息。
+    pub message: Option<String>,
+}
+
+/// Lightweight helper that preserves operation identity and progress ordering.
+/// 用于保持操作身份与进度顺序的轻量辅助器。
+#[derive(Clone)]
+pub(crate) struct RuntimeSkillOperationProgressEmitter {
+    /// Stable operation id emitted on every progress event.
+    /// 每条进度事件都会携带的稳定操作标识符。
+    operation_id: String,
+    /// Shared monotonic sequence counter for this operation.
+    /// 当前操作共享的单调序号计数器。
+    sequence: Arc<AtomicU64>,
+    /// Operation plane emitted on every progress event.
+    /// 每条进度事件都会携带的操作平面。
+    plane: SkillOperationPlane,
+    /// Lifecycle action emitted on every progress event.
+    /// 每条进度事件都会携带的生命周期动作。
+    action: SkillLifecycleAction,
+    /// Optional root name emitted on every progress event.
+    /// 每条进度事件都会携带的可选根名称。
+    root_name: Option<String>,
+    /// Optional default skill id emitted when a phase does not override it.
+    /// 阶段没有覆盖时使用的可选默认技能标识符。
+    skill_id: Option<String>,
+}
+
+impl RuntimeSkillOperationProgressEmitter {
+    /// Create one progress emitter for a single lifecycle operation.
+    /// 为单次生命周期操作创建一个进度发射器。
+    pub(crate) fn new(
+        plane: SkillOperationPlane,
+        action: SkillLifecycleAction,
+        root_name: Option<String>,
+        skill_id: Option<String>,
+    ) -> Self {
+        Self {
+            operation_id: build_skill_operation_id(action, skill_id.as_deref()),
+            sequence: Arc::new(AtomicU64::new(0)),
+            plane,
+            action,
+            root_name,
+            skill_id,
+        }
+    }
+
+    /// Emit one phase-level progress event.
+    /// 发出一条阶段级进度事件。
+    pub(crate) fn emit(&self, phase: &str, status: &str, message: Option<String>) {
+        self.emit_detail(RuntimeSkillOperationProgressDetail {
+            phase,
+            status,
+            skill_id: None,
+            source_type: None,
+            source_locator: None,
+            bytes_done: None,
+            bytes_total: None,
+            message,
+        });
+    }
+
+    /// Emit one detailed progress event with optional source and byte metadata.
+    /// 发出一条携带可选来源与字节元数据的详细进度事件。
+    pub(crate) fn emit_detail(&self, detail: RuntimeSkillOperationProgressDetail<'_>) {
+        let bytes_total = detail.bytes_total;
+        let percent = match (detail.bytes_done, bytes_total) {
+            (Some(done), Some(total)) if total > 0 => {
+                Some(((done as f64 / total as f64) * 100.0).min(100.0))
+            }
+            _ => None,
+        };
+        emit_skill_operation_progress_event(&RuntimeSkillOperationProgressEvent {
+            operation_id: self.operation_id.clone(),
+            sequence: self.sequence.fetch_add(1, Ordering::SeqCst) + 1,
+            plane: self.plane,
+            action: self.action,
+            phase: detail.phase.to_string(),
+            status: detail.status.to_string(),
+            skill_id: detail
+                .skill_id
+                .map(ToOwned::to_owned)
+                .or_else(|| self.skill_id.clone()),
+            root_name: self.root_name.clone(),
+            source_type: detail.source_type,
+            source_locator: detail.source_locator.map(ToOwned::to_owned),
+            bytes_done: detail.bytes_done,
+            bytes_total,
+            percent,
+            message: detail.message,
+        });
+    }
+
+    /// Build a download progress callback bound to this lifecycle operation.
+    /// 构造绑定到当前生命周期操作的下载进度回调。
+    pub(crate) fn download_callback(
+        &self,
+        source_type: SkillInstallSourceType,
+        skill_id: String,
+    ) -> DownloadProgressCallback {
+        let emitter = self.clone();
+        Arc::new(move |progress: &DownloadProgress| {
+            emitter.emit_detail(RuntimeSkillOperationProgressDetail {
+                phase: "downloading_archive",
+                status: if progress.cached {
+                    "cached"
+                } else {
+                    "progress"
+                },
+                skill_id: Some(skill_id.as_str()),
+                source_type: Some(source_type),
+                source_locator: Some(progress.source_locator.as_str()),
+                bytes_done: Some(progress.bytes_done),
+                bytes_total: progress.bytes_total,
+                message: if progress.cached {
+                    Some("download cache hit".to_string())
+                } else {
+                    None
+                },
+            });
+        })
+    }
+}
+
+/// Borrowed detail object used to build one progress event without a long parameter list.
+/// 用于构造单条进度事件并避免冗长参数列表的借用详情对象。
+pub(crate) struct RuntimeSkillOperationProgressDetail<'a> {
+    /// Machine-readable progress phase.
+    /// 机器可读进度阶段。
+    pub phase: &'a str,
+    /// Machine-readable progress status.
+    /// 机器可读进度状态。
+    pub status: &'a str,
+    /// Optional phase-specific skill id.
+    /// 阶段特定的可选技能标识符。
+    pub skill_id: Option<&'a str>,
+    /// Optional phase-specific source type.
+    /// 阶段特定的可选来源类型。
+    pub source_type: Option<SkillInstallSourceType>,
+    /// Optional phase-specific source locator.
+    /// 阶段特定的可选来源定位值。
+    pub source_locator: Option<&'a str>,
+    /// Optional downloaded byte count.
+    /// 可选已下载字节数。
+    pub bytes_done: Option<u64>,
+    /// Optional total byte count.
+    /// 可选总字节数。
+    pub bytes_total: Option<u64>,
+    /// Optional human-readable message.
+    /// 可选人类可读消息。
+    pub message: Option<String>,
+}
+
 /// Structured entry-registry delta emitted when one reload changes exposed runtime entries.
 /// 当一次重载改变已暴露运行时入口时发出的结构化入口注册表差异。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -319,6 +525,16 @@ pub struct RuntimeEntryRegistryDelta {
 /// 安装或清理供宿主使用的进程级技能生命周期回调。
 pub fn set_skill_lifecycle_callback(callback: Option<RuntimeSkillLifecycleCallback>) {
     let registry = skill_lifecycle_callback_registry();
+    let mut guard = registry.lock().unwrap();
+    *guard = callback;
+}
+
+/// Install or clear the process-wide skill-operation progress callback used by the host.
+/// 安装或清理供宿主使用的进程级技能操作进度回调。
+pub fn set_skill_operation_progress_callback(
+    callback: Option<RuntimeSkillOperationProgressCallback>,
+) {
+    let registry = skill_operation_progress_callback_registry();
     let mut guard = registry.lock().unwrap();
     *guard = callback;
 }
@@ -400,6 +616,19 @@ pub(crate) fn runtime_model_callback_test_guard() -> RuntimeModelCallbackTestGua
 /// 当宿主已注册回调时向其发送一条技能生命周期事件。
 pub(crate) fn emit_skill_lifecycle_event(event: &RuntimeSkillLifecycleEvent) {
     let registry = skill_lifecycle_callback_registry();
+    let callback = {
+        let guard = registry.lock().unwrap();
+        guard.clone()
+    };
+    if let Some(callback) = callback {
+        callback(event);
+    }
+}
+
+/// Emit one skill-operation progress event to the currently registered host callback when it exists.
+/// 当宿主已注册回调时向其发送一条技能操作进度事件。
+pub(crate) fn emit_skill_operation_progress_event(event: &RuntimeSkillOperationProgressEvent) {
+    let registry = skill_operation_progress_callback_registry();
     let callback = {
         let guard = registry.lock().unwrap();
         guard.clone()
@@ -556,10 +785,49 @@ pub(crate) fn try_has_model_llm_callback() -> Result<bool, String> {
     Ok(guard.is_some())
 }
 
+/// Build one host-visible skill operation id from action, skill id, and current time.
+/// 根据动作、技能标识符与当前时间构造一个宿主可见的技能操作标识符。
+fn build_skill_operation_id(action: SkillLifecycleAction, skill_id: Option<&str>) -> String {
+    let action_name = match action {
+        SkillLifecycleAction::Install => "install",
+        SkillLifecycleAction::Update => "update",
+        SkillLifecycleAction::Reload => "reload",
+        SkillLifecycleAction::Uninstall => "uninstall",
+        SkillLifecycleAction::Enable => "enable",
+        SkillLifecycleAction::Disable => "disable",
+    };
+    let skill_fragment = skill_id
+        .map(|value| {
+            value
+                .chars()
+                .map(|ch| match ch {
+                    'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => ch,
+                    _ => '-',
+                })
+                .collect::<String>()
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("skill-{}-{}-{}", action_name, skill_fragment, timestamp)
+}
+
 /// Return the process-wide lifecycle callback storage.
 /// 返回进程级生命周期回调存储。
 fn skill_lifecycle_callback_registry() -> &'static Mutex<Option<RuntimeSkillLifecycleCallback>> {
     static REGISTRY: OnceLock<Mutex<Option<RuntimeSkillLifecycleCallback>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(None))
+}
+
+/// Return the process-wide skill-operation progress callback storage.
+/// 返回进程级技能操作进度回调存储。
+fn skill_operation_progress_callback_registry()
+-> &'static Mutex<Option<RuntimeSkillOperationProgressCallback>> {
+    static REGISTRY: OnceLock<Mutex<Option<RuntimeSkillOperationProgressCallback>>> =
+        OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(None))
 }
 
@@ -596,4 +864,85 @@ fn model_embed_callback_registry() -> &'static Mutex<Option<RuntimeModelEmbedCal
 fn model_llm_callback_registry() -> &'static Mutex<Option<RuntimeModelLlmCallback>> {
     static REGISTRY: OnceLock<Mutex<Option<RuntimeModelLlmCallback>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RuntimeSkillOperationProgressCallback, RuntimeSkillOperationProgressDetail,
+        RuntimeSkillOperationProgressEmitter, RuntimeSkillOperationProgressEvent,
+        set_skill_operation_progress_callback,
+    };
+    use crate::skill::manager::{SkillLifecycleAction, SkillOperationPlane};
+    use crate::skill::source::SkillInstallSourceType;
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
+    /// Return one shared guard that serializes tests touching the global progress callback.
+    /// 返回一把用于串行化访问全局进度回调的共享测试锁。
+    fn progress_callback_test_guard() -> MutexGuard<'static, ()> {
+        static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        match TEST_MUTEX.get_or_init(|| Mutex::new(())).lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Verify progress emitters preserve operation ordering and compute determinate percentages.
+    /// 验证进度发射器会保持操作内顺序并计算确定性百分比。
+    #[test]
+    fn progress_emitter_reports_sequence_and_percent() {
+        let _guard = progress_callback_test_guard();
+        let captured = Arc::new(Mutex::new(Vec::<RuntimeSkillOperationProgressEvent>::new()));
+        let callback_events = captured.clone();
+        let callback: RuntimeSkillOperationProgressCallback =
+            Arc::new(move |event: &RuntimeSkillOperationProgressEvent| {
+                callback_events
+                    .lock()
+                    .expect("capture progress events")
+                    .push(event.clone());
+            });
+        set_skill_operation_progress_callback(Some(callback));
+
+        let emitter = RuntimeSkillOperationProgressEmitter::new(
+            SkillOperationPlane::System,
+            SkillLifecycleAction::Install,
+            Some("ROOT".to_string()),
+            Some("demo-skill".to_string()),
+        );
+        emitter.emit_detail(RuntimeSkillOperationProgressDetail {
+            phase: "downloading_archive",
+            status: "progress",
+            skill_id: Some("demo-skill"),
+            source_type: Some(SkillInstallSourceType::OfficialHub),
+            source_locator: Some("https://hub.example.invalid/demo.zip"),
+            bytes_done: Some(5),
+            bytes_total: Some(10),
+            message: None,
+        });
+        emitter.emit("completed", "completed", Some("done".to_string()));
+        set_skill_operation_progress_callback(None);
+
+        let events = captured.lock().expect("read captured progress events");
+        let operation_id = events
+            .iter()
+            .find(|event| {
+                event.skill_id.as_deref() == Some("demo-skill")
+                    && event.phase == "downloading_archive"
+            })
+            .expect("download progress event should be captured")
+            .operation_id
+            .clone();
+        let operation_events = events
+            .iter()
+            .filter(|event| event.operation_id == operation_id)
+            .collect::<Vec<_>>();
+        assert_eq!(operation_events.len(), 2);
+        assert_eq!(operation_events[0].sequence, 1);
+        assert_eq!(operation_events[1].sequence, 2);
+        assert_eq!(operation_events[0].percent, Some(50.0));
+        assert_eq!(
+            operation_events[0].source_type,
+            Some(SkillInstallSourceType::OfficialHub)
+        );
+    }
 }

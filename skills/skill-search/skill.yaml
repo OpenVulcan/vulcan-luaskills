@@ -1,0 +1,44 @@
+name: skill-search
+version: 0.1.0
+enable: true
+entries:
+  - name: search
+    description: Search official LuaSkills Hub skills through a host-provided bridge.
+    lua_entry: runtime/search.lua
+    lua_module: skill_search_search
+    parameters:
+      - name: q
+        type: string
+        description: Search keyword.
+        required: false
+      - name: platform
+        type: string
+        description: Optional platform filter.
+        required: false
+  - name: detail
+    description: Fetch one official LuaSkills Hub skill detail through a host-provided bridge.
+    lua_entry: runtime/detail.lua
+    lua_module: skill_search_detail
+    parameters:
+      - name: skill_id
+        type: string
+        description: Stable skill id to inspect.
+        required: true
+  - name: resolve
+    description: Resolve one official LuaSkills Hub skill package manifest through a host-provided bridge.
+    lua_entry: runtime/resolve.lua
+    lua_module: skill_search_resolve
+    parameters:
+      - name: skill_id
+        type: string
+        description: Stable skill id to resolve.
+        required: true
+      - name: version
+        type: string
+        description: Optional version, defaults to latest.
+        required: false
+  - name: sources
+    description: List host-approved skill install source capabilities.
+    lua_entry: runtime/sources.lua
+    lua_module: skill_search_sources
+    parameters: []

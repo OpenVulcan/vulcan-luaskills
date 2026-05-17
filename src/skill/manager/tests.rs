@@ -1,7 +1,7 @@
 use super::{
     SkillInstallRequest, SkillInstallSourceType, SkillManager, SkillManagerConfig,
     SkillOperationPlane, TempDirGuard, collect_effective_skill_instances,
-    resolve_effective_skill_instance,
+    is_allowed_private_source_url, resolve_effective_skill_instance, resolve_requested_skill_id,
 };
 use crate::runtime_options::RuntimeSkillRoot;
 
@@ -18,6 +18,9 @@ fn test_manager_config(
         allow_network_download: false,
         github_base_url: None,
         github_api_base_url: None,
+        official_skill_hub_base_url: None,
+        enable_private_url_skill_install: false,
+        private_skill_source_allowlist: Vec::new(),
     }
 }
 
@@ -82,6 +85,113 @@ fn skill_manager_persists_disabled_state() {
     assert!(manager.is_skill_enabled("vulcan-codekit").unwrap());
 
     let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+/// Verify public URL installs are rejected by the managed source policy.
+/// 验证公开 URL 安装会被受管来源策略拒绝。
+#[test]
+fn public_url_install_is_rejected_by_source_policy() {
+    let temp_root = std::env::temp_dir().join(format!(
+        "luaskills_public_url_policy_test_{}",
+        std::process::id()
+    ));
+    if temp_root.exists() {
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+    let skill_root = temp_root.join("skills");
+    std::fs::create_dir_all(&skill_root).expect("skill root should be created");
+    let manager = SkillManager::new(test_manager_config(
+        &temp_root,
+        RuntimeSkillRoot {
+            name: "USER".to_string(),
+            skills_dir: skill_root,
+        },
+    ));
+    let error = manager
+        .prepare_install_skill(
+            SkillOperationPlane::Skills,
+            &[RuntimeSkillRoot {
+                name: "USER".to_string(),
+                skills_dir: temp_root.join("skills"),
+            }],
+            &SkillInstallRequest {
+                skill_id: Some("demo-skill".to_string()),
+                source: Some("https://example.com/demo.yaml".to_string()),
+                source_type: SkillInstallSourceType::Url,
+            },
+        )
+        .expect_err("public URL install should be rejected");
+    assert!(error.contains("public URL skill install is disabled"));
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+/// Verify official Hub requests can derive the skill id from the Hub locator.
+/// 验证官方 Hub 请求可以从 Hub 定位值派生 skill id。
+#[test]
+fn official_hub_request_derives_skill_id_from_source() {
+    let skill_id = resolve_requested_skill_id(&SkillInstallRequest {
+        skill_id: None,
+        source: Some("skill-search".to_string()),
+        source_type: SkillInstallSourceType::OfficialHub,
+    })
+    .expect("official Hub skill id should derive from source");
+    assert_eq!(skill_id, "skill-search");
+}
+
+/// Verify official Hub install rejects mismatched explicit ids before remote resolution.
+/// 验证官方 Hub 安装会在远程解析前拒绝显式 id 不一致的请求。
+#[test]
+fn official_hub_install_rejects_mismatched_source_skill_id() {
+    let temp_root = std::env::temp_dir().join(format!(
+        "luaskills_official_hub_mismatch_test_{}",
+        std::process::id()
+    ));
+    if temp_root.exists() {
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+    let skill_root = temp_root.join("skills");
+    std::fs::create_dir_all(&skill_root).expect("skill root should be created");
+    let manager = SkillManager::new(SkillManagerConfig {
+        official_skill_hub_base_url: Some("https://hub.example.invalid".to_string()),
+        ..test_manager_config(
+            &temp_root,
+            RuntimeSkillRoot {
+                name: "USER".to_string(),
+                skills_dir: skill_root,
+            },
+        )
+    });
+    let error = manager
+        .prepare_install_skill(
+            SkillOperationPlane::Skills,
+            &[RuntimeSkillRoot {
+                name: "USER".to_string(),
+                skills_dir: temp_root.join("skills"),
+            }],
+            &SkillInstallRequest {
+                skill_id: Some("expected-skill".to_string()),
+                source: Some("other-skill".to_string()),
+                source_type: SkillInstallSourceType::OfficialHub,
+            },
+        )
+        .expect_err("mismatched official Hub locator should fail before network");
+    assert!(error.contains("does not match requested skill_id"));
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+/// Verify private manifest allowlists accept exact prefixes and reject sibling prefixes.
+/// 验证私有 manifest allowlist 接受精确前缀并拒绝相邻伪前缀。
+#[test]
+fn private_source_allowlist_uses_directory_prefix_matching() {
+    let allowlist = vec!["https://internal.example.com/luaskills/manifests".to_string()];
+    assert!(is_allowed_private_source_url(
+        "https://internal.example.com/luaskills/manifests/demo.json",
+        &allowlist,
+    ));
+    assert!(!is_allowed_private_source_url(
+        "https://internal.example.com/luaskills/manifests-extra/demo.json",
+        &allowlist,
+    ));
 }
 
 /// Verify that install/update entrypoints return strict structured states before networking succeeds.

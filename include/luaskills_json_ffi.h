@@ -84,6 +84,16 @@ int32_t luaskills_ffi_set_host_tool_json_callback(
 );
 
 /*
+Register or clear the skill-operation progress JSON callback used by install and update flows.
+注册或清理安装与更新流程使用的技能操作进度 JSON callback。
+*/
+int32_t luaskills_ffi_set_skill_operation_progress_json_callback(
+    FfiJsonProviderCallback callback,
+    void *user_data,
+    FfiOwnedBuffer *error_out
+);
+
+/*
 Register or clear the model embedding JSON callback used by Lua vulcan.models.embed(text).
 注册或清理 Lua vulcan.models.embed(text) 使用的模型 embedding JSON callback。
 */
@@ -320,6 +330,12 @@ Install one managed skill through one ordered root chain with host-injected syst
 FfiOwnedBuffer luaskills_ffi_system_install_skill_json(FfiBorrowedBuffer input_json);
 
 /*
+Install one private URL-manifest skill through a host-private system JSON entrypoint.
+通过宿主私有 system JSON 入口安装单个私有 URL manifest 技能。
+*/
+FfiOwnedBuffer luaskills_ffi_system_private_install_skill_from_url_manifest_json(FfiBorrowedBuffer input_json);
+
+/*
 Update one managed skill through one ordered root chain.
 通过一条有序根链更新单个受管技能。
 */
@@ -330,6 +346,12 @@ Update one managed skill through one ordered root chain with host-injected syste
 通过一条有序根链和宿主注入的 system 权限更新单个受管技能。
 */
 FfiOwnedBuffer luaskills_ffi_system_update_skill_json(FfiBorrowedBuffer input_json);
+
+/*
+Update one private URL-manifest skill through a host-private system JSON entrypoint.
+通过宿主私有 system JSON 入口更新单个私有 URL manifest 技能。
+*/
+FfiOwnedBuffer luaskills_ffi_system_private_update_skill_from_url_manifest_json(FfiBorrowedBuffer input_json);
 
 #ifdef __cplusplus
 }

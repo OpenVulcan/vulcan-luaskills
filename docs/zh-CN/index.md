@@ -20,6 +20,7 @@
 | 需要做 `runtime_lease`、`system_runtime_lease` 或 `host_result` 联调 | [FFI 对接文档](ffi/integration-guide.md) |
 | 需要接管 SQLite / LanceDB | [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md) |
 | 需要理解 ROOT / PROJECT / USER | [Skill Root 层级与管理边界](architecture/skill-root-layer-policy.md) |
+| 需要设计 skill 安装来源与 Hub | [Skill 来源策略、官方 Hub 与进度事件](architecture/skill-source-policy-and-hub.md) |
 | 需要理解 Skill 配置能力 | [Skill 配置系统设计稿](architecture/skill-config-system-design.md) |
 | 需要理解宿主结构化结果、`system_lua_lib` 与执行平面 | [宿主工具结果桥接、宿主 LuaRuntime（`system_lua_lib`）与执行平面设计稿](architecture/host-tooling-result-bridge-design.md) |
 

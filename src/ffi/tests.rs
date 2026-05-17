@@ -10,9 +10,11 @@ use super::{
     luaskills_ffi_runtime_lease_eval_json, luaskills_ffi_runtime_lease_list_json,
     luaskills_ffi_skill_config_delete_json, luaskills_ffi_skill_config_get_json,
     luaskills_ffi_skill_config_list_json, luaskills_ffi_skill_config_set_json,
-    luaskills_ffi_skill_name_for_tool_json, luaskills_ffi_system_runtime_lease_close_json,
-    luaskills_ffi_system_runtime_lease_create_json, luaskills_ffi_system_runtime_lease_eval_json,
-    luaskills_ffi_system_runtime_lease_list_json, with_engine,
+    luaskills_ffi_skill_name_for_tool_json,
+    luaskills_ffi_system_private_install_skill_from_url_manifest_json,
+    luaskills_ffi_system_runtime_lease_close_json, luaskills_ffi_system_runtime_lease_create_json,
+    luaskills_ffi_system_runtime_lease_eval_json, luaskills_ffi_system_runtime_lease_list_json,
+    with_engine,
 };
 use crate::ffi_standard::{FfiBorrowedBuffer, FfiOwnedBuffer, luaskills_ffi_buffer_free};
 use crate::{
@@ -337,6 +339,50 @@ fn ffi_describe_json_lists_system_runtime_session_exports() {
     assert!(exported_names.contains(&"luaskills_ffi_system_runtime_lease_status_json"));
     assert!(exported_names.contains(&"luaskills_ffi_system_runtime_lease_list_json"));
     assert!(exported_names.contains(&"luaskills_ffi_system_runtime_lease_close_json"));
+    assert!(
+        exported_names
+            .contains(&"luaskills_ffi_system_private_install_skill_from_url_manifest_json")
+    );
+    assert!(
+        exported_names
+            .contains(&"luaskills_ffi_system_private_update_skill_from_url_manifest_json")
+    );
+}
+
+/// Verify host-private URL-manifest JSON FFI requires full system authority.
+/// 验证宿主私有 URL manifest JSON FFI 要求完整 system 权限。
+#[test]
+fn ffi_private_url_manifest_json_requires_system_authority() {
+    let _guard = ffi_test_guard();
+    let engine = register_test_engine();
+    let request = CString::new(
+        serde_json::json!({
+            "engine_id": engine.engine_id,
+            "skill_roots": [{
+                "name": "ROOT",
+                "skills_dir": "D:/tmp/luaskills-root"
+            }],
+            "skill_id": "internal-skill",
+            "manifest_url": "https://internal.example.com/skills/internal-skill.json",
+            "authority": "delegated_tool"
+        })
+        .to_string(),
+    )
+    .expect("private manifest request");
+    let response = unsafe {
+        decode_response_json(
+            luaskills_ffi_system_private_install_skill_from_url_manifest_json(
+                borrowed_json_buffer(&request),
+            ),
+        )
+    };
+    assert_eq!(response["ok"], false);
+    assert!(
+        response["error"]
+            .as_str()
+            .expect("private manifest authority error")
+            .contains("requires system authority")
+    );
 }
 
 /// Verify system runtime-session JSON FFI rejects requests that omit authority.
@@ -782,6 +828,9 @@ fn ffi_engine_new_and_free_roundtrip() {
                 allow_network_download: false,
                 github_base_url: None,
                 github_api_base_url: None,
+                official_skill_hub_base_url: None,
+                enable_private_url_skill_install: false,
+                private_skill_source_allowlist: Vec::new(),
                 default_text_encoding: None,
                 sqlite_library_path: None,
                 sqlite_provider_mode: crate::LuaRuntimeDatabaseProviderMode::DynamicLibrary,
@@ -854,6 +903,9 @@ fn ffi_skill_config_json_roundtrip() {
                 allow_network_download: false,
                 github_base_url: None,
                 github_api_base_url: None,
+                official_skill_hub_base_url: None,
+                enable_private_url_skill_install: false,
+                private_skill_source_allowlist: Vec::new(),
                 default_text_encoding: None,
                 sqlite_library_path: None,
                 sqlite_provider_mode: crate::LuaRuntimeDatabaseProviderMode::DynamicLibrary,

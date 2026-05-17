@@ -17,10 +17,10 @@ use crate::host::callbacks::{
     RuntimeEntryRegistryDelta, RuntimeHostToolAction, RuntimeHostToolRequest, RuntimeModelCaller,
     RuntimeModelEmbedRequest, RuntimeModelEmbedResponse, RuntimeModelError, RuntimeModelErrorCode,
     RuntimeModelLlmRequest, RuntimeModelLlmResponse, RuntimeModelUsage, RuntimeSkillLifecycleEvent,
-    RuntimeSkillManagementAction, RuntimeSkillManagementRequest, dispatch_host_tool_request,
-    dispatch_model_embed_request, dispatch_model_llm_request, dispatch_skill_management_request,
-    try_has_host_tool_callback, try_has_model_embed_callback, try_has_model_llm_callback,
-    try_has_skill_management_callback,
+    RuntimeSkillManagementAction, RuntimeSkillManagementRequest,
+    RuntimeSkillOperationProgressEmitter, dispatch_host_tool_request, dispatch_model_embed_request,
+    dispatch_model_llm_request, dispatch_skill_management_request, try_has_host_tool_callback,
+    try_has_model_embed_callback, try_has_model_llm_callback, try_has_skill_management_callback,
 };
 use crate::host::database::RuntimeDatabaseProviderCallbacks;
 use crate::lancedb_host::{LanceDbSkillBinding, LanceDbSkillHost, disabled_skill_status_json};
@@ -1890,7 +1890,44 @@ impl LuaEngine {
             allow_network_download: dependency_config.allow_network_download,
             github_base_url: dependency_config.github_base_url,
             github_api_base_url: dependency_config.github_api_base_url,
+            official_skill_hub_base_url: self.host_options.official_skill_hub_base_url.clone(),
+            enable_private_url_skill_install: self.host_options.enable_private_url_skill_install,
+            private_skill_source_allowlist: self
+                .host_options
+                .private_skill_source_allowlist
+                .clone(),
         }))
+    }
+
+    /// Build the skill-manager configuration for one operation with progress reporting enabled.
+    /// 为启用进度回馈的单次操作构造技能管理器配置。
+    fn skill_manager_for_with_progress(
+        &self,
+        skill_root: &RuntimeSkillRoot,
+        progress: RuntimeSkillOperationProgressEmitter,
+    ) -> Result<SkillManager, String> {
+        let state_root = self.state_root_for(skill_root);
+        let dependency_config = self.dependency_manager_config_for(skill_root)?;
+        ensure_directory(&state_root)?;
+        Ok(SkillManager::new_with_progress(
+            SkillManagerConfig {
+                skill_root: skill_root.clone(),
+                lifecycle_root: state_root,
+                download_cache_root: dependency_config.download_cache_root,
+                allow_network_download: dependency_config.allow_network_download,
+                github_base_url: dependency_config.github_base_url,
+                github_api_base_url: dependency_config.github_api_base_url,
+                official_skill_hub_base_url: self.host_options.official_skill_hub_base_url.clone(),
+                enable_private_url_skill_install: self
+                    .host_options
+                    .enable_private_url_skill_install,
+                private_skill_source_allowlist: self
+                    .host_options
+                    .private_skill_source_allowlist
+                    .clone(),
+            },
+            Some(progress),
+        ))
     }
 
     /// Ensure dependencies declared by one skill directory are installed before the skill is loaded.
@@ -2782,21 +2819,53 @@ impl LuaEngine {
             } else {
                 None
             };
-        let manager = self
-            .skill_manager_for(&target_root)
-            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let progress = RuntimeSkillOperationProgressEmitter::new(
+            plane,
+            action,
+            Some(target_root.name.clone()),
+            Some(requested_skill_id.clone()),
+        );
+        progress.emit(
+            "validating_request",
+            "completed",
+            Some("skill lifecycle request accepted".to_string()),
+        );
+        let manager = match self.skill_manager_for_with_progress(&target_root, progress.clone()) {
+            Ok(manager) => manager,
+            Err(error) => {
+                progress.emit("failed", "failed", Some(error.clone()));
+                return Err(error.into());
+            }
+        };
         let prepared = match action {
-            crate::skill::manager::SkillLifecycleAction::Install => manager
-                .prepare_install_skill(plane, operation_roots, request)
-                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
-            crate::skill::manager::SkillLifecycleAction::Update => manager
-                .prepare_update_skill(plane, operation_roots, request)
-                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+            crate::skill::manager::SkillLifecycleAction::Install => {
+                match manager.prepare_install_skill(plane, operation_roots, request) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        progress.emit("failed", "failed", Some(error.clone()));
+                        return Err(error.into());
+                    }
+                }
+            }
+            crate::skill::manager::SkillLifecycleAction::Update => {
+                match manager.prepare_update_skill(plane, operation_roots, request) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        progress.emit("failed", "failed", Some(error.clone()));
+                        return Err(error.into());
+                    }
+                }
+            }
             _ => unreachable!("unsupported apply action should have returned early"),
         };
         let mut result = match &prepared {
             PreparedSkillApply::Immediate(result) => result.clone(),
             PreparedSkillApply::Install(_) | PreparedSkillApply::Update(_) => {
+                progress.emit(
+                    "reloading_runtime",
+                    "started",
+                    Some("reloading LuaSkills runtime after staged change".to_string()),
+                );
                 if let Err(reload_error) = self.reload_from_roots(skill_roots) {
                     let rollback_error = manager.rollback_prepared_skill_apply(&prepared);
                     let restore_error = self.reload_from_roots(skill_roots);
@@ -2808,13 +2877,19 @@ impl LuaEngine {
                         .err()
                         .map(|error| format!(" runtime restore failed: {}", error))
                         .unwrap_or_default();
-                    return Err(format!(
+                    let message = format!(
                         "Failed to reload LuaSkills after {:?}: {}.{}{}",
                         action, reload_error, rollback_message, restore_message
-                    )
-                    .into());
+                    );
+                    progress.emit("failed", "failed", Some(message.clone()));
+                    return Err(message.into());
                 }
 
+                progress.emit(
+                    "committing",
+                    "started",
+                    Some("committing staged skill lifecycle change".to_string()),
+                );
                 let committed = manager.commit_prepared_skill_apply(&prepared).map_err(
                     |error| -> Box<dyn std::error::Error> {
                         let rollback_error = manager.rollback_prepared_skill_apply(&prepared);
@@ -2827,13 +2902,19 @@ impl LuaEngine {
                             .err()
                             .map(|restore| format!(" runtime restore failed: {}", restore))
                             .unwrap_or_default();
-                        format!(
+                        let message = format!(
                             "Failed to finalize {:?}: {}.{}{}",
                             action, error, rollback_message, restore_message
-                        )
-                        .into()
+                        );
+                        progress.emit("failed", "failed", Some(message.clone()));
+                        message.into()
                     },
                 )?;
+                progress.emit(
+                    "committing",
+                    "completed",
+                    Some("skill lifecycle change committed".to_string()),
+                );
                 committed
             }
         };
@@ -2884,6 +2965,7 @@ impl LuaEngine {
             &result.status,
             Some(result.message.clone()),
         );
+        progress.emit("completed", "completed", Some(result.message.clone()));
         Ok(result)
     }
 
