@@ -121,6 +121,18 @@ cargo test --lib
 
 Rust 宿主直连示例位于 [examples/demo-rust](examples/demo-rust/README.md)，覆盖 `call_skill` 和 `vulcan.host.*` 宿主工具桥接。
 
+如果要在本地调试单个 skill 包，仓库现在也提供了一个独立 Rust bin：
+
+```bash
+cargo run --bin luaskills-debug -- call \
+  --runtime-root D:/runtime \
+  --skill-path D:/skills/demo-skill \
+  --tool ping \
+  --args-json "{\"note\":\"hello\"}"
+```
+
+`luaskills-debug` 只是一份仓库侧开发调试工具，不会新增任何 SDK API 或 FFI API。它会先把目标 skill 同步到 `runtime_root/skills/<skill_id>`，再复用正式的 `load_from_roots -> call_skill` 链路，这样依赖路径、state、database 和运行时上下文都会和真实宿主执行保持一致。
+
 第一次学习 skill 结构，建议按这个顺序看：
 
 1. [demo-skill](https://github.com/LuaSkills/demo-skill)

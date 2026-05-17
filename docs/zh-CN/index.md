@@ -74,4 +74,5 @@ Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和
 - [FFI Demo Runtime](../../examples/ffi/demo_runtime/README.md)
 - [Host Callback Demo](../../examples/ffi/host_provider_demo/README.md)
 - [LuaSkills Rust Demo](../../examples/demo-rust/README.md)：Rust crate 直连宿主示例，覆盖 `call_skill` 与 `vulcan.host.*`。
+- `cargo run --bin luaskills-debug -- inspect --runtime-root <目录> --skill-path <目录>`：仓库内单 skill 调试 bin，会先把 skill 同步进真实 `runtime_root` 再完成加载。
 - [LuaSkills FFI Demo](../../examples/demo-ffi/README.md)

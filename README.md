@@ -144,6 +144,18 @@ cargo test --lib
 
 The direct Rust host example lives in [examples/demo-rust](examples/demo-rust/README.md) and covers both `call_skill` and the `vulcan.host.*` host-tool bridge.
 
+For local skill-package debugging, the repository also ships a standalone Rust bin:
+
+```bash
+cargo run --bin luaskills-debug -- call \
+  --runtime-root D:/runtime \
+  --skill-path D:/skills/demo-skill \
+  --tool ping \
+  --args-json "{\"note\":\"hello\"}"
+```
+
+`luaskills-debug` is a repository-side developer tool only. It does not add any SDK API or FFI API. The bin first synchronizes the target skill into `runtime_root/skills/<skill_id>`, then reuses the normal `load_from_roots -> call_skill` path so dependency roots, state directories, databases, and runtime context remain aligned with real host execution.
+
 To learn the skill package shape before writing a host integration, start with:
 
 1. [demo-skill](https://github.com/LuaSkills/demo-skill)
