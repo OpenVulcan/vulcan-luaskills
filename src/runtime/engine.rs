@@ -1,9 +1,13 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use mlua::{Function, HookTriggers, Lua, MultiValue, Table, Value as LuaValue, VmState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -67,8 +71,9 @@ use self::host_result::{
 };
 use self::lease::RuntimeSessionManager;
 use self::runlua::{
-    exec_result_to_lua_table, execute_exec_request, optional_u64_arg, parse_exec_request,
-    require_path_arg, require_string_arg, require_table_arg, resolve_host_default_text_encoding,
+    default_exec_shell_name, exec_result_to_lua_table, execute_exec_request, optional_u64_arg,
+    parse_exec_request, require_path_arg, require_string_arg, require_table_arg,
+    resolve_host_default_text_encoding, supported_exec_shell_names,
 };
 
 // ============================================================
@@ -445,6 +450,378 @@ fn lua_value_type_name(value: &LuaValue) -> &'static str {
         LuaValue::Error(_) => "error",
         LuaValue::Other(_) => "other",
     }
+}
+
+/// Read one optional `recursive` flag from one `vulcan.fs.*` options value.
+/// 从单个 `vulcan.fs.*` 选项值中读取可选的 `recursive` 标志。
+fn parse_vulcan_fs_recursive_option(value: LuaValue, fn_name: &str) -> mlua::Result<bool> {
+    match value {
+        LuaValue::Nil => Ok(false),
+        other => {
+            let options = require_table_arg(other, fn_name, "options")?;
+            let recursive_value: LuaValue = options.get("recursive")?;
+            match recursive_value {
+                LuaValue::Nil => Ok(false),
+                LuaValue::Boolean(flag) => Ok(flag),
+                other => Err(mlua::Error::runtime(format!(
+                    "{fn_name}: options.recursive must be a boolean when provided: {}",
+                    lua_value_type_name(&other)
+                ))),
+            }
+        }
+    }
+}
+
+/// Read one optional `overwrite` flag from one `vulcan.fs.copy` options value.
+/// 从单个 `vulcan.fs.copy` 选项值中读取可选的 `overwrite` 标志。
+fn parse_vulcan_fs_overwrite_option(value: LuaValue, fn_name: &str) -> mlua::Result<bool> {
+    match value {
+        LuaValue::Nil => Ok(false),
+        other => {
+            let options = require_table_arg(other, fn_name, "options")?;
+            let overwrite_value: LuaValue = options.get("overwrite")?;
+            match overwrite_value {
+                LuaValue::Nil => Ok(false),
+                LuaValue::Boolean(flag) => Ok(flag),
+                other => Err(mlua::Error::runtime(format!(
+                    "{fn_name}: options.overwrite must be a boolean when provided: {}",
+                    lua_value_type_name(&other)
+                ))),
+            }
+        }
+    }
+}
+
+/// Resolve one `vulcan.fs.copy` path into a normalized absolute path for relationship checks.
+/// 将单个 `vulcan.fs.copy` 路径解析为归一化绝对路径，以便做关系校验。
+fn resolve_vulcan_fs_copy_absolute_path(path: &Path) -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir().map_err(|error| format!("fs.copy: {}", error))?;
+    Ok(if path.is_absolute() {
+        normalize_runtime_root_path(path)
+    } else {
+        normalize_runtime_root_path(&cwd.join(path))
+    })
+}
+
+/// Resolve one `vulcan.fs.copy` destination into the effective absolute location created after existing parent links are followed.
+/// 将单个 `vulcan.fs.copy` 目标解析为跟随现有父级链接后最终会创建到的实际绝对位置。
+fn resolve_vulcan_fs_copy_effective_destination_path(
+    target: &Path,
+    recreate_leaf: bool,
+) -> Result<PathBuf, String> {
+    let absolute_target = resolve_vulcan_fs_copy_absolute_path(target)?;
+    let mut suffix = Vec::<PathBuf>::new();
+    let mut cursor = if recreate_leaf {
+        let leaf_name = absolute_target.file_name().ok_or_else(|| {
+            format!(
+                "fs.copy: destination path must not be one filesystem root: {}",
+                render_log_friendly_path(&absolute_target)
+            )
+        })?;
+        suffix.push(PathBuf::from(leaf_name));
+        absolute_target.parent().ok_or_else(|| {
+            format!(
+                "fs.copy: destination path must have one parent directory: {}",
+                render_log_friendly_path(&absolute_target)
+            )
+        })?
+    } else {
+        absolute_target.as_path()
+    };
+    while !cursor.exists() {
+        let missing_name = cursor.file_name().ok_or_else(|| {
+            format!(
+                "fs.copy: destination path could not resolve one existing ancestor: {}",
+                render_log_friendly_path(&absolute_target)
+            )
+        })?;
+        suffix.push(PathBuf::from(missing_name));
+        cursor = cursor.parent().ok_or_else(|| {
+            format!(
+                "fs.copy: destination path must stay under one existing filesystem root: {}",
+                render_log_friendly_path(&absolute_target)
+            )
+        })?;
+    }
+    let mut resolved = fs::canonicalize(cursor).map_err(|error| format!("fs.copy: {}", error))?;
+    for component in suffix.into_iter().rev() {
+        resolved.push(component);
+    }
+    Ok(normalize_runtime_root_path(&resolved))
+}
+
+/// Validate that one directory-copy destination is neither equal to nor nested under the source directory.
+/// 校验单个目录复制目标既不等于源目录，也不位于源目录内部。
+fn validate_vulcan_fs_copy_directory_target(
+    source: &Path,
+    target: &Path,
+    recreate_target_leaf: bool,
+) -> Result<(), String> {
+    let resolved_source =
+        fs::canonicalize(source).map_err(|error| format!("fs.copy: {}", error))?;
+    let resolved_target =
+        resolve_vulcan_fs_copy_effective_destination_path(target, recreate_target_leaf)?;
+    if resolved_source == resolved_target {
+        return Err(format!(
+            "fs.copy: source and destination must differ: {}",
+            render_log_friendly_path(&resolved_source)
+        ));
+    }
+    if resolved_target.starts_with(&resolved_source) {
+        return Err(format!(
+            "fs.copy: destination directory must not be inside source directory: {}",
+            render_log_friendly_path(&resolved_target)
+        ));
+    }
+    Ok(())
+}
+
+/// Remove one existing `vulcan.fs.copy` destination so overwrite mode can replace it atomically.
+/// 删除单个已存在的 `vulcan.fs.copy` 目标，以便 overwrite 模式能够整体替换它。
+fn remove_vulcan_fs_copy_target(target: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(target).map_err(|error| format!("fs.copy: {}", error))?;
+    let file_type = metadata.file_type();
+    if file_type.is_dir() {
+        fs::remove_dir_all(target).map_err(|error| format!("fs.copy: {}", error))?;
+    } else {
+        fs::remove_file(target).map_err(|error| format!("fs.copy: {}", error))?;
+    }
+    Ok(())
+}
+
+/// Detect whether one filesystem entry exists at the path itself even when the target behind one symlink is missing.
+/// 判断单个路径位置本身是否存在文件系统条目，即使其背后的符号链接目标已经缺失。
+fn path_entry_exists(path: &Path, error_prefix: &str) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("{error_prefix}: {}", error)),
+    }
+}
+
+/// Recursively copy one directory tree for `vulcan.fs.copy` while rejecting symbolic links for predictable behavior.
+/// 为 `vulcan.fs.copy` 递归复制单个目录树，并拒绝符号链接以保证行为可预测。
+fn copy_vulcan_fs_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| format!("fs.copy: {}", error))?;
+    for entry in fs::read_dir(source).map_err(|error| format!("fs.copy: {}", error))? {
+        let entry = entry.map_err(|error| format!("fs.copy: {}", error))?;
+        let entry_path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("fs.copy: {}", error))?;
+        let destination = target.join(entry.file_name());
+        if file_type.is_symlink() {
+            return Err(format!(
+                "fs.copy: symbolic-link entries are not supported inside directory trees: {}",
+                render_log_friendly_path(&entry_path)
+            ));
+        }
+        if file_type.is_dir() {
+            copy_vulcan_fs_directory_recursive(&entry_path, &destination)?;
+        } else if file_type.is_file() {
+            fs::copy(&entry_path, &destination).map_err(|error| format!("fs.copy: {}", error))?;
+        } else {
+            return Err(format!(
+                "fs.copy: unsupported entry type inside directory tree: {}",
+                render_log_friendly_path(&entry_path)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Classify one filesystem type into the stable `vulcan.fs.stat` kind strings.
+/// 将单个文件系统类型归类为稳定的 `vulcan.fs.stat` kind 字符串。
+fn classify_vulcan_fs_kind(file_type: &fs::FileType) -> &'static str {
+    if file_type.is_file() {
+        "file"
+    } else if file_type.is_dir() {
+        "dir"
+    } else if file_type.is_symlink() {
+        "symlink"
+    } else {
+        "other"
+    }
+}
+
+/// Convert one metadata modified time into Unix milliseconds when the timestamp is available.
+/// 当时间戳可用时，将单个元数据修改时间转换为 Unix 毫秒值。
+fn metadata_modified_unix_ms(metadata: &fs::Metadata) -> Option<i64> {
+    let modified = metadata.modified().ok()?;
+    let duration = modified.duration_since(UNIX_EPOCH).ok()?;
+    let millis = duration.as_millis();
+    Some(if millis > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        millis as i64
+    })
+}
+
+/// Build one Lua table for the current `vulcan.fs.stat` metadata snapshot.
+/// 为当前 `vulcan.fs.stat` 元数据快照构造一个 Lua table。
+fn create_vulcan_fs_stat_table(lua: &Lua, metadata: &fs::Metadata) -> mlua::Result<Table> {
+    let file_type = metadata.file_type();
+    let stat = lua.create_table()?;
+    stat.set("kind", classify_vulcan_fs_kind(&file_type))?;
+    stat.set("is_file", file_type.is_file())?;
+    stat.set("is_dir", file_type.is_dir())?;
+    stat.set("is_symlink", file_type.is_symlink())?;
+    stat.set("readonly", metadata.permissions().readonly())?;
+    if file_type.is_file() {
+        stat.set("size", metadata.len())?;
+    }
+    if let Some(modified_unix_ms) = metadata_modified_unix_ms(metadata) {
+        stat.set("modified_unix_ms", modified_unix_ms)?;
+    }
+    Ok(stat)
+}
+
+/// Render one `vulcan.path.dirname` result with script-friendly fallback semantics.
+/// 以适合脚本使用的兜底语义渲染单个 `vulcan.path.dirname` 结果。
+fn render_vulcan_path_dirname(path: &Path) -> String {
+    match path.parent() {
+        Some(parent) if parent.as_os_str().is_empty() => ".".to_string(),
+        Some(parent) => render_host_visible_path(parent),
+        None if path.is_absolute() => render_host_visible_path(path),
+        None => ".".to_string(),
+    }
+}
+
+/// Render one normalized path string for `vulcan.path.normalize`.
+/// 为 `vulcan.path.normalize` 渲染单个规范化后的路径字符串。
+fn render_vulcan_normalized_path(path: &Path) -> String {
+    let normalized = normalize_runtime_root_path(path);
+    if normalized.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        render_host_visible_path(&normalized)
+    }
+}
+
+/// Detect whether one `vulcan.process.which` input should be treated as an explicit path.
+/// 判断单个 `vulcan.process.which` 输入是否应按显式路径处理。
+fn is_vulcan_process_explicit_path(program: &str) -> bool {
+    Path::new(program).is_absolute() || program.contains('/') || program.contains('\\')
+}
+
+/// Resolve one possibly relative process-search path against the current working directory.
+/// 将单个可能为相对路径的进程搜索路径相对于当前工作目录解析出来。
+fn resolve_vulcan_process_search_path(path: &Path, cwd: &Path) -> PathBuf {
+    if path.is_absolute() {
+        normalize_runtime_root_path(path)
+    } else {
+        normalize_runtime_root_path(&cwd.join(path))
+    }
+}
+
+/// Return the ordered PATHEXT list used by Windows process lookup.
+/// 返回 Windows 进程查找使用的有序 PATHEXT 列表。
+#[cfg(windows)]
+fn vulcan_process_windows_pathexts() -> Vec<String> {
+    let from_env = std::env::var("PATHEXT").ok().map(|value| {
+        value
+            .split(';')
+            .filter_map(|entry| {
+                let trimmed = entry.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.starts_with('.') {
+                    Some(trimmed.to_ascii_lowercase())
+                } else {
+                    Some(format!(".{}", trimmed).to_ascii_lowercase())
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    let pathexts = from_env.unwrap_or_default();
+    if pathexts.is_empty() {
+        vec![
+            ".com".to_string(),
+            ".exe".to_string(),
+            ".bat".to_string(),
+            ".cmd".to_string(),
+        ]
+    } else {
+        pathexts
+    }
+}
+
+/// Expand one process-search base path into platform-specific executable candidates.
+/// 将单个进程搜索基路径展开为平台相关的可执行候选路径列表。
+#[cfg(windows)]
+fn vulcan_process_candidate_paths(base: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![base.to_path_buf()];
+    if base.extension().is_some() {
+        return candidates;
+    }
+    let base_text = base.as_os_str().to_string_lossy().to_string();
+    for ext in vulcan_process_windows_pathexts() {
+        candidates.push(PathBuf::from(format!("{base_text}{ext}")));
+    }
+    candidates
+}
+
+/// Expand one process-search base path into platform-specific executable candidates.
+/// 将单个进程搜索基路径展开为平台相关的可执行候选路径列表。
+#[cfg(not(windows))]
+fn vulcan_process_candidate_paths(base: &Path) -> Vec<PathBuf> {
+    vec![base.to_path_buf()]
+}
+
+/// Check whether one candidate path is executable on the current platform.
+/// 检查单个候选路径在当前平台上是否可执行。
+#[cfg(unix)]
+fn is_vulcan_process_executable(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && (metadata.permissions().mode() & 0o111) != 0)
+        .unwrap_or(false)
+}
+
+/// Check whether one candidate path is executable on the current platform.
+/// 检查单个候选路径在当前平台上是否可执行。
+#[cfg(windows)]
+fn is_vulcan_process_executable(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+/// Check whether one candidate path is executable on the current platform.
+/// 检查单个候选路径在当前平台上是否可执行。
+#[cfg(not(any(unix, windows)))]
+fn is_vulcan_process_executable(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+/// Find the first executable candidate derived from one base process path.
+/// 从单个基础进程路径派生的候选项中找出第一个可执行目标。
+fn find_vulcan_process_candidate(base: &Path) -> Option<PathBuf> {
+    vulcan_process_candidate_paths(base)
+        .into_iter()
+        .find(|candidate| is_vulcan_process_executable(candidate))
+}
+
+/// Resolve one program name into a host-visible executable path using PATH-like lookup semantics.
+/// 使用类 PATH 的查找语义，将单个程序名解析为宿主可见的可执行路径。
+fn resolve_vulcan_process_which(program: &str) -> Result<Option<PathBuf>, String> {
+    let cwd = std::env::current_dir().map_err(|error| format!("process.which: {}", error))?;
+    if is_vulcan_process_explicit_path(program) {
+        let explicit_path = resolve_vulcan_process_search_path(Path::new(program), &cwd);
+        return Ok(find_vulcan_process_candidate(&explicit_path));
+    }
+    let Some(path_env) = std::env::var_os("PATH") else {
+        return Ok(None);
+    };
+    for search_dir in std::env::split_paths(&path_env) {
+        let resolved_dir = resolve_vulcan_process_search_path(&search_dir, &cwd);
+        let base = resolved_dir.join(program);
+        if let Some(found) = find_vulcan_process_candidate(&base) {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
 }
 
 /// Validate one relative metadata path against a fixed prefix and reject traversal.
@@ -5380,6 +5757,161 @@ impl LuaEngine {
         })?;
         fs.set("write", fs_write_fn)?;
 
+        let fs_write_bytes_fn =
+            lua.create_function(|_, (path, content): (LuaValue, LuaValue)| {
+                let path = require_path_arg(path, "fs.write_bytes", "path")?;
+                let content = require_string_arg(content, "fs.write_bytes", "content", false)?;
+                let bytes = BASE64_STANDARD
+                    .decode(content.as_bytes())
+                    .map_err(|error| {
+                        mlua::Error::runtime(format!(
+                            "fs.write_bytes: base64 decode failed: {error}"
+                        ))
+                    })?;
+                fs::write(&path, bytes)
+                    .map_err(|error| mlua::Error::runtime(format!("fs.write_bytes: {}", error)))?;
+                Ok(true)
+            })?;
+        fs.set("write_bytes", fs_write_bytes_fn)?;
+
+        let fs_rename_fn =
+            lua.create_function(|_, (old_path, new_path): (LuaValue, LuaValue)| {
+                let old_path = require_path_arg(old_path, "fs.rename", "old_path")?;
+                let new_path = require_path_arg(new_path, "fs.rename", "new_path")?;
+                fs::rename(&old_path, &new_path)
+                    .map_err(|error| mlua::Error::runtime(format!("fs.rename: {}", error)))?;
+                Ok(true)
+            })?;
+        fs.set("rename", fs_rename_fn)?;
+
+        let fs_remove_fn = lua.create_function(|_, args: MultiValue| {
+            let mut values = args.into_iter();
+            let path =
+                require_path_arg(values.next().unwrap_or(LuaValue::Nil), "fs.remove", "path")?;
+            let recursive = parse_vulcan_fs_recursive_option(
+                values.next().unwrap_or(LuaValue::Nil),
+                "fs.remove",
+            )?;
+            let target_path = Path::new(&path);
+            let metadata = match fs::symlink_metadata(target_path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+                Err(error) => {
+                    return Err(mlua::Error::runtime(format!("fs.remove: {}", error)));
+                }
+            };
+            let file_type = metadata.file_type();
+            if file_type.is_dir() {
+                if recursive {
+                    fs::remove_dir_all(target_path)
+                        .map_err(|error| mlua::Error::runtime(format!("fs.remove: {}", error)))?;
+                } else {
+                    fs::remove_dir(target_path)
+                        .map_err(|error| mlua::Error::runtime(format!("fs.remove: {}", error)))?;
+                }
+            } else {
+                fs::remove_file(target_path)
+                    .map_err(|error| mlua::Error::runtime(format!("fs.remove: {}", error)))?;
+            }
+            Ok(true)
+        })?;
+        fs.set("remove", fs_remove_fn)?;
+
+        let fs_mkdir_fn = lua.create_function(|_, args: MultiValue| {
+            let mut values = args.into_iter();
+            let path =
+                require_path_arg(values.next().unwrap_or(LuaValue::Nil), "fs.mkdir", "path")?;
+            let recursive = parse_vulcan_fs_recursive_option(
+                values.next().unwrap_or(LuaValue::Nil),
+                "fs.mkdir",
+            )?;
+            let target_path = Path::new(&path);
+            if target_path.exists() {
+                if target_path.is_dir() {
+                    return Ok(false);
+                }
+                return Err(mlua::Error::runtime(format!(
+                    "fs.mkdir: target already exists and is not a directory: {}",
+                    render_log_friendly_path(target_path)
+                )));
+            }
+            if recursive {
+                fs::create_dir_all(target_path)
+                    .map_err(|error| mlua::Error::runtime(format!("fs.mkdir: {}", error)))?;
+            } else {
+                fs::create_dir(target_path)
+                    .map_err(|error| mlua::Error::runtime(format!("fs.mkdir: {}", error)))?;
+            }
+            Ok(true)
+        })?;
+        fs.set("mkdir", fs_mkdir_fn)?;
+
+        let fs_copy_fn = lua.create_function(|_, args: MultiValue| {
+            let mut values = args.into_iter();
+            let source_path = require_path_arg(
+                values.next().unwrap_or(LuaValue::Nil),
+                "fs.copy",
+                "src_path",
+            )?;
+            let target_path = require_path_arg(
+                values.next().unwrap_or(LuaValue::Nil),
+                "fs.copy",
+                "dst_path",
+            )?;
+            let overwrite = parse_vulcan_fs_overwrite_option(
+                values.next().unwrap_or(LuaValue::Nil),
+                "fs.copy",
+            )?;
+            let source = Path::new(&source_path);
+            let target = Path::new(&target_path);
+            let source_metadata = fs::metadata(source)
+                .map_err(|error| mlua::Error::runtime(format!("fs.copy: {}", error)))?;
+            let target_exists =
+                path_entry_exists(target, "fs.copy").map_err(mlua::Error::runtime)?;
+            if target_exists && !overwrite {
+                return Ok(false);
+            }
+            if source_metadata.is_dir() {
+                validate_vulcan_fs_copy_directory_target(
+                    source,
+                    target,
+                    overwrite && target_exists,
+                )
+                .map_err(mlua::Error::runtime)?;
+            }
+            if target_exists {
+                remove_vulcan_fs_copy_target(target).map_err(mlua::Error::runtime)?;
+            }
+            if source_metadata.is_dir() {
+                copy_vulcan_fs_directory_recursive(source, target).map_err(mlua::Error::runtime)?;
+            } else {
+                fs::copy(source, target)
+                    .map_err(|error| mlua::Error::runtime(format!("fs.copy: {}", error)))?;
+            }
+            Ok(true)
+        })?;
+        fs.set("copy", fs_copy_fn)?;
+
+        let fs_stat_fn = lua.create_function(|lua, path: LuaValue| {
+            let path = require_path_arg(path, "fs.stat", "path")?;
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) => Ok(LuaValue::Table(create_vulcan_fs_stat_table(
+                    lua, &metadata,
+                )?)),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(LuaValue::Nil),
+                Err(error) => Err(mlua::Error::runtime(format!("fs.stat: {}", error))),
+            }
+        })?;
+        fs.set("stat", fs_stat_fn)?;
+
+        let fs_read_bytes_fn = lua.create_function(|lua, path: LuaValue| {
+            let path = require_path_arg(path, "fs.read_bytes", "path")?;
+            let bytes = fs::read(&path)
+                .map_err(|error| mlua::Error::runtime(format!("fs.read_bytes: {}", error)))?;
+            lua.create_string(BASE64_STANDARD.encode(bytes))
+        })?;
+        fs.set("read_bytes", fs_read_bytes_fn)?;
+
         let fs_exists_fn = lua.create_function(|_, path: LuaValue| {
             let path = require_path_arg(path, "fs.exists", "path")?;
             Ok(Path::new(&path).exists())
@@ -5409,6 +5941,56 @@ impl LuaEngine {
         })?;
         path.set("join", path_join_fn)?;
 
+        let path_dirname_fn = lua.create_function(|lua, path: LuaValue| {
+            let path = require_path_arg(path, "path.dirname", "path")?;
+            let rendered = render_vulcan_path_dirname(Path::new(&path));
+            lua.create_string(&rendered)
+        })?;
+        path.set("dirname", path_dirname_fn)?;
+
+        let path_basename_fn = lua.create_function(|lua, path: LuaValue| {
+            let path = require_path_arg(path, "path.basename", "path")?;
+            let rendered = Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            lua.create_string(&rendered)
+        })?;
+        path.set("basename", path_basename_fn)?;
+
+        let path_stem_fn = lua.create_function(|lua, path: LuaValue| {
+            let path = require_path_arg(path, "path.stem", "path")?;
+            let rendered = Path::new(&path)
+                .file_stem()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            lua.create_string(&rendered)
+        })?;
+        path.set("stem", path_stem_fn)?;
+
+        let path_extname_fn = lua.create_function(|lua, path: LuaValue| {
+            let path = require_path_arg(path, "path.extname", "path")?;
+            let rendered = Path::new(&path)
+                .extension()
+                .map(|ext| format!(".{}", ext.to_string_lossy()))
+                .unwrap_or_default();
+            lua.create_string(&rendered)
+        })?;
+        path.set("extname", path_extname_fn)?;
+
+        let path_normalize_fn = lua.create_function(|lua, path: LuaValue| {
+            let path = require_path_arg(path, "path.normalize", "path")?;
+            let rendered = render_vulcan_normalized_path(Path::new(&path));
+            lua.create_string(&rendered)
+        })?;
+        path.set("normalize", path_normalize_fn)?;
+
+        let path_is_abs_fn = lua.create_function(|_, path: LuaValue| {
+            let path = require_path_arg(path, "path.is_abs", "path")?;
+            Ok(Path::new(&path).is_absolute())
+        })?;
+        path.set("is_abs", path_is_abs_fn)?;
+
         let cwd_fn = lua.create_function(|lua, ()| {
             let current_dir = std::env::current_dir()
                 .map_err(|error| mlua::Error::runtime(format!("runtime.cwd: {}", error)))?;
@@ -5428,12 +6010,35 @@ impl LuaEngine {
         }
 
         let exec_default_encoding = default_text_encoding;
+        let launchers_fn = lua.create_function(|lua, ()| {
+            let info = lua.create_table()?;
+            let shells = lua.create_table()?;
+            for (index, shell_name) in supported_exec_shell_names().into_iter().enumerate() {
+                shells.set(index + 1, shell_name)?;
+            }
+            info.set("default", default_exec_shell_name())?;
+            info.set("shells", shells)?;
+            Ok(info)
+        })?;
+        process.set("launchers", launchers_fn)?;
         let exec_fn = lua.create_function(move |lua, spec: LuaValue| {
             let request = parse_exec_request(spec, "process.exec", exec_default_encoding)?;
             let result = execute_exec_request(request);
             exec_result_to_lua_table(lua, result)
         })?;
         process.set("exec", exec_fn)?;
+        let which_fn = lua.create_function(|lua, program: LuaValue| {
+            let program = require_string_arg(program, "process.which", "program", false)?;
+            match resolve_vulcan_process_which(&program) {
+                Ok(Some(found)) => {
+                    let rendered = render_host_visible_path(&found);
+                    Ok(LuaValue::String(lua.create_string(&rendered)?))
+                }
+                Ok(None) => Ok(LuaValue::Nil),
+                Err(error) => Err(mlua::Error::runtime(error)),
+            }
+        })?;
+        process.set("which", which_fn)?;
         process.set(
             "session",
             create_process_session_table(lua, default_text_encoding)?,

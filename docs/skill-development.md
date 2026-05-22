@@ -180,49 +180,124 @@ These rules apply to every projection layer, including MCP, gRPC, FFI/SDK hosts,
 
 ## 3.1 Managed IO And Process Encoding
 
-`vulcan.io` is the Rust-managed IO surface for AI-generated code and `luaexec` scenarios. It supports:
+`vulcan.io` is the Rust-managed IO surface for AI-generated code, cross-platform file operations, and `luaexec` isolated execution. For Windows Unicode paths, explicit text decoding, and `io.popen` output handling, prefer `vulcan.io` over native `io` or `os`.
 
-- `vulcan.io.open(path, mode, options)`
-- `vulcan.io.read_text(path, options)`
-- `vulcan.io.write_text(path, content, options)`
-- `vulcan.io.append_text(path, content, options)`
-- `vulcan.io.lines(path, options)`
-- `vulcan.io.popen(command, mode, options)`
-- `vulcan.io.tmpfile()`
+### 3.1.1 `vulcan.io.*` API Reference
 
-`options.encoding` accepts `utf-8`, `system`, `oem`, `gbk`, `gb18030`, `latin1`, and `base64`. On Windows, `system` uses the ANSI code page and `oem` uses the console OEM code page.
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.io.open(path, mode?, options?)` | `path: string`; `mode?: string`, default `r`; `options?: string \| { encoding?: string }` | Managed file handle | Supports `r`, `w`, `a`, `rb`, `wb`, `ab`, `r+`, `w+`, `a+`, and binary/update combinations |
+| `vulcan.io.read_text(path, options?)` | `path: string`; `options?: string \| { encoding?: string }` | `string` | Reads one whole text file |
+| `vulcan.io.write_text(path, content, options?)` | `path: string`; `content: string`; `options?: string \| { encoding?: string }` | `true` | Overwrites one whole text file; does not create parent directories |
+| `vulcan.io.append_text(path, content, options?)` | same as above | `true` | Appends text |
+| `vulcan.io.lines(path, options?)` | `path: string`; `options?: string \| { encoding?: string }` | iterator function | Yields one line at a time and returns `nil` at EOF |
+| `vulcan.io.popen(command, mode?, options?)` | `command: string`; `mode?: string`, default `r`; `options?: string \| { encoding?: string, timeout_ms?: integer }` | Managed file handle | Read mode only for now; write mode is not implemented |
+| `vulcan.io.tmpfile()` | none | Managed file handle | Creates one temporary file that is removed on close |
 
-`vulcan.io.open` and the managed `io.open` compatibility layer support `r`, `w`, `a`, binary suffixes, and update modes such as `r+`, `w+`, and `a+`. `io.tmpfile()` returns an update-capable managed handle that deletes its backing file on close.
+### 3.1.2 Managed File Handle Methods
 
-When a call omits encoding options, the runtime uses `LuaRuntimeHostOptions.default_text_encoding` if the host set it. Otherwise it falls back to `system` on Windows and `utf-8` elsewhere.
+The handles returned by `vulcan.io.open(...)`, `vulcan.io.popen(...)`, and `vulcan.io.tmpfile()` support the same methods:
 
-Inside the isolated `vulcan.runtime.lua.exec(...)` environment, common `io.*` calls such as `io.open`, `io.input`, `io.output`, `io.read`, `io.write`, `io.tmpfile`, and `io.popen` are redirected to the managed compatibility layer so LuaJIT native `io.popen` does not own process handles or produce uncontrolled decoding. Hosts can disable this compatibility replacement with `LuaRuntimeHostOptions.capabilities.enable_managed_io_compat = false`; `vulcan.io` remains available either way.
+| Method | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `file:read(...)` | no args, `"*a"` / `"a"`, `"*l"` / `"l"`, or positive integer length | `string`, `nil`, or multiple values | Text mode returns decoded UTF-8 text; binary mode returns raw Lua byte strings |
+| `file:write(...)` | one or more Lua scalar values | `true` | Text mode encodes text; binary mode writes raw bytes |
+| `file:flush()` | none | `true` | Flushes pending writes |
+| `file:close()` | none | `boolean` | Regular files usually return `true`; `popen` handles return child success |
+| `file:seek(whence?, offset?)` | `whence?: "set" \| "cur" \| "end"`; `offset?: integer` | `integer` | Returns the new cursor offset |
+| `file:lines()` | none | iterator function | Iterates from the current cursor until EOF |
+| `file:setvbuf(...)` | any args | `true` | Compatibility no-op |
 
-`vulcan.process.exec(spec)` also accepts encoding fields:
+Extra rules:
+
+- `file:read()` with no arguments reads one line without the trailing newline.
+- `file:read(0)` returns an empty string, not `nil`.
+- `file:read(n)` returns `nil` after EOF.
+- `file:seek(...)` clamps beyond EOF to the buffer end and errors when moving before the start.
+- In text mode, strings passed to `file:write(...)` must be valid UTF-8. Use binary mode or `vulcan.fs.read_bytes/write_bytes` when you need raw bytes.
+
+### 3.1.3 Encoding Options
+
+`options.encoding` or `encoding` currently supports:
+
+| Value | Meaning |
+| --- | --- |
+| `utf-8` | Standard UTF-8 text |
+| `system` | Host default text encoding; Windows ANSI code page on Windows |
+| `oem` | Windows console OEM code page |
+| `gbk` | GBK |
+| `gb18030` | GB18030 |
+| `latin1` | Latin-1 / ISO-8859-1 |
+| `base64` | Byte-preserving Base64 text transport |
+
+Default encoding selection:
+
+- Use `LuaRuntimeHostOptions.default_text_encoding` when the host configured it.
+- Otherwise use:
+  - `system` on Windows
+  - `utf-8` on other platforms
+
+### 3.1.4 Managed `io.*` Compatibility Layer
+
+Inside `vulcan.runtime.lua.exec(...)`, common `io.*` calls are redirected to the managed compatibility layer:
+
+- `io.open`
+- `io.input`
+- `io.output`
+- `io.read`
+- `io.write`
+- `io.flush`
+- `io.close`
+- `io.lines`
+- `io.popen`
+- `io.tmpfile`
+- `io.type`
+
+Important behavior:
+
+- `io.input(path_or_file)` and `io.output(path_or_file)` can set default handles.
+- When no explicit `io.output(...)` is configured, `io.write(...)` writes to runtime logging instead of silently disappearing.
+- `io.close()` with no argument closes the current default output handle.
+- `io.type(value)` returns `"file"`, `"closed file"`, or `"nil"`.
+- Hosts can disable this replacement with `LuaRuntimeHostOptions.capabilities.enable_managed_io_compat = false`. `vulcan.io` itself still stays available.
+
+### 3.1.5 Examples
+
+Text read:
 
 ```lua
-local result = vulcan.process.exec({
-    program = "cmd",
-    args = { "/C", "dir" },
+local text = vulcan.io.read_text("D:/data/example.txt", {
+    encoding = "utf-8",
+})
+
+return text
+```
+
+Binary handle read:
+
+```lua
+local file = vulcan.io.open("D:/data/archive.bin", "rb")
+local bytes = file:read("*a")
+file:close()
+
+return #bytes
+```
+
+Managed `popen`:
+
+```lua
+local file = vulcan.io.popen("cmd /C dir", "r", {
     encoding = "oem",
     timeout_ms = 3000,
 })
 
-return result.stdout, result.stdout_encoding, result.stdout_lossy
-```
+local output = file:read("*a")
+local ok = file:close()
 
-`vulcan.process.session.open(spec)` supports interactive child processes:
-
-```lua
-local session = vulcan.process.session.open({
-    program = "python",
-    args = { "-i" },
-    encoding = "utf-8",
+return vulcan.json.encode({
+    ok = ok,
+    output = output,
 })
-
-session:write("print(1 + 1)\n")
-local output = session:read({ timeout_ms = 1000 })
-session:close()
 ```
 
 ## 3.2 Host-Forced Skill Ignore List
@@ -289,12 +364,14 @@ return result
 `vulcan.models.*` is the fixed standard model capability surface for Lua skills.
 It is not a generic host-tool call and does not let Lua choose provider configuration.
 
-Supported methods:
+### 4.5.1 API Reference
 
-- `vulcan.models.status()`: returns `{ ok = true, capabilities = { embed = boolean, llm = boolean } }`.
-- `vulcan.models.has(capability)`: returns whether `embed` or `llm` is registered by the host.
-- `vulcan.models.embed(text)`: embeds one non-empty string and returns a table envelope.
-- `vulcan.models.llm(system, user)`: runs one non-streaming LLM turn and returns a table envelope.
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.models.status()` | none | `{ ok = true, capabilities = { embed = boolean, llm = boolean } }` | Always present; only reports whether the host registered each capability |
+| `vulcan.models.has(capability)` | `capability: string` | `boolean` | Only recognizes `embed` and `llm` |
+| `vulcan.models.embed(text)` | `text: string`, non-empty | success or failure envelope | Runs single-text embedding |
+| `vulcan.models.llm(system, user)` | `system: string`, `user: string`, both non-empty | success or failure envelope | Runs one non-streaming LLM turn |
 
 Minimal example:
 
@@ -314,7 +391,9 @@ end
 return result.vector
 ```
 
-Embedding success envelope:
+### 4.5.2 Result Shapes
+
+`embed(...)` success envelope:
 
 ```lua
 {
@@ -327,7 +406,18 @@ Embedding success envelope:
 }
 ```
 
-LLM success envelope:
+Field notes:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `ok` | `boolean` | `true` on success |
+| `vector` | `number[]` | embedding vector |
+| `dimensions` | `integer` | vector dimension count |
+| `usage` | `table?` | optional token-usage table from the host |
+| `usage.input_tokens` | `integer?` | optional input token count |
+| `usage.output_tokens` | `integer?` | optional output token count |
+
+`llm(...)` success envelope:
 
 ```lua
 {
@@ -340,7 +430,15 @@ LLM success envelope:
 }
 ```
 
-Error envelope:
+Field notes:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `ok` | `boolean` | `true` on success |
+| `assistant` | `string` | model response text |
+| `usage` | `table?` | optional token-usage table |
+
+Failure envelope:
 
 ```lua
 {
@@ -355,12 +453,32 @@ Error envelope:
 }
 ```
 
-Behavior rules:
+Error fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `error.code` | `string` | stable error code |
+| `error.message` | `string` | skill-facing error summary |
+| `error.provider_message` | `string?` | provider message that the host chose to expose |
+| `error.provider_code` | `string?` | provider-native error code |
+| `error.provider_status` | `integer?` | provider status such as an HTTP status |
+
+Current stable error codes:
+
+- `model_unavailable`
+- `invalid_argument`
+- `provider_error`
+- `timeout`
+- `budget_exceeded`
+- `internal_error`
+
+### 4.5.3 Behavior Rules
 
 - `status()` always exists and derives capability state from registered callbacks.
-- `has()` only recognizes `embed` and `llm`; unknown capabilities return `false`.
+- `has()` only recognizes `embed` and `llm`. Unknown capabilities, wrong argument counts, or wrong types all return `false` instead of raising.
 - `embed()` accepts exactly one non-empty string and does not support batch input.
 - `llm()` accepts exactly two non-empty strings and does not support messages, tools, streaming, or thinking controls.
+- `embed()` and `llm()` return failure envelopes for invalid arguments, missing capability registration, and provider failures instead of throwing Lua runtime errors.
 - Lua cannot pass `model`, `temperature`, `max_tokens`, `base_url`, `api_key`, `dimensions`, or provider-specific parameters.
 - LuaSkills passes caller context to host callbacks for audit and cost attribution, but does not expose that context through the model API.
 - Model configuration, API keys, provider routing, timeouts, budgets, and redaction remain host responsibilities.
@@ -376,12 +494,14 @@ Host integration references:
 `vulcan.host.*` is a fixed bridge for host-registered tools.
 It is intentionally narrower than arbitrary `vulcan.xxx` injection: Lua can list, probe, and call host tools, but it cannot create new top-level namespaces or register host tools itself.
 
-Supported methods:
+### 4.6.1 API Reference
 
-- `vulcan.host.list()`: returns the current host-visible tool metadata table.
-- `vulcan.host.has(tool_name)`: returns whether one host tool exists.
-- `vulcan.host.has_tool(tool_name)`: alias of `has`.
-- `vulcan.host.call(tool_name, args)`: calls one host tool with a Lua table argument and returns a Lua table result.
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.host.list()` | none | `table` | host-visible tool metadata; exact shape is host-defined |
+| `vulcan.host.has(tool_name)` | `tool_name: string` | `boolean` | probes one host tool |
+| `vulcan.host.has_tool(tool_name)` | `tool_name: string` | `boolean` | alias of `has` |
+| `vulcan.host.call(tool_name, args)` | `tool_name: string`; `args: table` | `table` | calls one host tool and returns the result |
 
 Minimal example:
 
@@ -404,7 +524,9 @@ end
 return result.value
 ```
 
-Recommended host-tool result envelope:
+### 4.6.2 Recommended Result Envelopes
+
+Recommended success envelope:
 
 ```lua
 {
@@ -430,11 +552,50 @@ Recommended error envelope:
 }
 ```
 
-Behavior rules:
+### 4.6.3 Runtime Normalization Rules
 
-- `list()` returns an empty table when the host has not registered a host-tool callback.
-- `has()` and `has_tool()` return `false` when the host has not registered a host-tool callback.
-- `call()` returns an error envelope when the host callback is missing or the callback returns an error.
+- `list()` returns an empty table `{}` when the host has not registered a host-tool callback.
+- `has()` / `has_tool()` return `false` when the host has not registered a callback.
+- The host callback behind `has()` may return:
+  - one `boolean`
+  - one object with boolean `exists`, `has`, or `available`
+- `call()` requires `args` to be a Lua table. An empty table stays an empty JSON object `{}`, not an empty array `[]`.
+- If the host `call` callback returns an object, the runtime forwards it as-is.
+- If the host `call` callback returns one scalar or array, the runtime wraps it as:
+
+```lua
+{
+    ok = true,
+    value = <host raw value>,
+}
+```
+
+- When no host callback is registered, `call()` returns:
+
+```lua
+{
+    ok = false,
+    error = {
+        code = "host_tool_callback_missing",
+        message = "...",
+    },
+}
+```
+
+- When callback dispatch itself fails, `call()` returns:
+
+```lua
+{
+    ok = false,
+    error = {
+        code = "host_tool_callback_error",
+        message = "...",
+    },
+}
+```
+
+### 4.6.4 Behavior Rules
+
 - `args` must be a Lua table. Use explicit keys for object-shaped inputs.
 - Streaming is not part of this bridge. Host tools should return one complete table result.
 - Permissions, timeouts, audit, and secret handling remain host responsibilities.
@@ -452,11 +613,21 @@ vulcan.runtime.log("warn", "budget is low")
 vulcan.runtime.log("error", "query failed")
 ```
 
+API contract:
+
+| Item | Type | Meaning |
+| --- | --- | --- |
+| `level` | `string` | usually `info`, `warn`, or `error`; runtime matches by text |
+| `message` | `string` | text written to host logging |
+| Return value | `nil` | no business value is returned |
+
 Notes:
 
-- `level` is roughly classified by text into `error/fatal`, `warn`, or other.
+- If `level` contains `error` or `fatal`, the runtime logs it as an error.
+- If `level` contains `warn`, the runtime logs it as a warning.
+- All other values are logged as normal information.
 - This capability is available in normal skill VMs.
-- It is disabled in the isolated execution environment used by `vulcan.runtime.lua.exec(...)`.
+- It is disabled in `vulcan.runtime.lua.exec(...)`.
 
 ### 5.2 `vulcan.runtime.cwd()`
 
@@ -466,6 +637,10 @@ Returns the current process working directory.
 local cwd = vulcan.runtime.cwd()
 ```
 
+| Return Value | Type | Meaning |
+| --- | --- | --- |
+| `cwd` | `string` | current host process working directory |
+
 ### 5.3 `vulcan.runtime.temp_dir`
 
 Host-injected temporary directory path. It may be `nil`.
@@ -474,6 +649,10 @@ Host-injected temporary directory path. It may be `nil`.
 local temp_dir = vulcan.runtime.temp_dir
 ```
 
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `vulcan.runtime.temp_dir` | `string \| nil` | host-configured temp directory, or `nil` when absent |
+
 ### 5.4 `vulcan.runtime.resources_dir`
 
 Host-injected resources directory path. It may be `nil`.
@@ -481,6 +660,10 @@ Host-injected resources directory path. It may be `nil`.
 ```lua
 local resources_dir = vulcan.runtime.resources_dir
 ```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `vulcan.runtime.resources_dir` | `string \| nil` | host-configured resources directory, or `nil` when absent |
 
 ### 5.5 `vulcan.runtime.overflow_type`
 
@@ -497,10 +680,23 @@ Currently exposes these fields:
 
 - `tool_name`
 - `skill_name`
+- `entry_name`
+- `root_name`
 - `luaexec_active`
 - `luaexec_caller_tool_name`
 
-These fields are **internal execution context**. Use them for debugging and issue diagnosis only; do not treat them as long-term public protocol.
+Field notes:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `tool_name` | `string \| nil` | current externally visible canonical tool name |
+| `skill_name` | `string \| nil` | current skill identifier |
+| `entry_name` | `string \| nil` | current local entry name inside the skill |
+| `root_name` | `string \| nil` | current runtime root layer such as `ROOT`, `PROJECT`, or `USER` |
+| `luaexec_active` | `boolean` | whether the current call is inside the `vulcan.runtime.lua.exec(...)` path |
+| `luaexec_caller_tool_name` | `string \| nil` | outer tool name that triggered the current `luaexec` call |
+
+These are **internal execution-context fields**. Use them for debugging, logging, and diagnostics only, not as long-term public protocol.
 
 ### 5.7 `vulcan.runtime.lua.exec(input)`
 
@@ -508,11 +704,13 @@ Runs one isolated inline Lua runtime call and returns a **Markdown string**, not
 
 Supported input fields:
 
-- `task`: optional human-readable task summary.
-- `code`: optional inline Lua code.
-- `file`: optional Lua file path to execute.
-- `args`: optional structured argument object passed to the code; defaults to an empty object.
-- `timeout_ms`: optional timeout in milliseconds; defaults to `60000`.
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `task` | `string` | no | human-readable task summary shown in the rendered result |
+| `code` | `string` | one of `code` / `file` | inline Lua source to execute |
+| `file` | `string` | one of `code` / `file` | Lua file path to execute |
+| `args` | `table` | no | structured argument object injected into the execution context; defaults to an empty object |
+| `timeout_ms` | `integer` | no | timeout in milliseconds; defaults to `60000` |
 
 Minimal example:
 
@@ -530,6 +728,14 @@ local rendered = vulcan.runtime.lua.exec({
 
 return rendered
 ```
+
+Return and behavior:
+
+| Item | Type | Meaning |
+| --- | --- | --- |
+| Return value | `string` | rendered Markdown text |
+| `print(...)` output | text | collected and appended into the rendered result |
+| code return value | any JSON-serializable value | rendered into the result text instead of being returned as a Lua table |
 
 Important limits:
 
@@ -550,6 +756,7 @@ Important limits:
   - Hosts can override it through `LuaRuntimeHostOptions.runlua_pool_config`.
   - This only affects `vulcan.runtime.lua.exec(...)` and does not change the normal skill VM pool.
   - The runtime no longer supports configuring a separate external executor path for `vulcan.runtime.lua.exec(...)`.
+- This call resets request-scoped state and does not inherit arbitrary ad hoc globals you may have written into the outer VM.
 
 ### 5.8 `vulcan.runtime.skills.*`
 
@@ -576,12 +783,15 @@ The formal bridge should include:
 - `vulcan.runtime.skills.enable(input)`
 - `vulcan.runtime.skills.disable(input)`
 
-`status()` currently returns:
+Stable fields:
 
-- `enabled`
-- `callback_registered`
-- `mode`
-- `message`
+| API / Field | Type | Meaning |
+| --- | --- | --- |
+| `vulcan.runtime.skills.enabled` | `boolean` | whether host policy enabled the management bridge |
+| `status().enabled` | `boolean` | same policy state |
+| `status().callback_registered` | `boolean` | whether the host actually registered a callback |
+| `status().mode` | `string` | currently fixed to `host_callback` |
+| `status().message` | `string` | current bridge-state description |
 
 `layers()` returns the layer labels that the host allows the normal bridge to operate on. Recommended fields include:
 
@@ -598,7 +808,8 @@ Notes:
 
 - These capabilities only execute when the host explicitly enables `enable_skill_management_bridge`.
 - Even when host policy enables the bridge, missing callbacks return explicit errors.
-- `input` and return structures are part of the host bridge contract and should be constrained by host-side docs or test fixtures.
+- `install/update/uninstall/enable/disable` request and response payloads are part of the host bridge contract. The runtime dispatches them but does not define your business schema.
+- If one payload explicitly targets the `ROOT` layer, the runtime rejects it before dispatch.
 
 ### 5.9 `vulcan.config.*`
 
@@ -606,11 +817,13 @@ These capabilities read and maintain **string config for the current skill itsel
 
 Currently available:
 
-- `vulcan.config.get(key)`
-- `vulcan.config.set(key, value)`
-- `vulcan.config.delete(key)`
-- `vulcan.config.has(key)`
-- `vulcan.config.list()`
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.config.get(key)` | `key: string` | `string \| nil` | reads one current-skill config value |
+| `vulcan.config.has(key)` | `key: string` | `boolean` | checks whether one key exists |
+| `vulcan.config.set(key, value)` | `key: string`; `value: string` | `true` | writes one current-skill config value |
+| `vulcan.config.delete(key)` | `key: string` | `boolean` | deletes one key; exact return semantics come from the backing store |
+| `vulcan.config.list()` | none | `table<string, string>` | lists all string config values in the current skill namespace |
 
 Minimal example:
 
@@ -644,40 +857,102 @@ Notes:
 - Config values are strings in the first version.
 - If you need complex structure, store JSON text as a string and decode it with `vulcan.json.decode(...)` inside the skill.
 - Config defaults to the current skill. Skills cannot directly read or write other skill namespaces.
+- These APIs **require one active skill context**. They raise an error in system runtimes that do not currently represent one skill identity.
 - The runtime does not automatically refuse to load a skill just because config is missing. Prefer returning clear guidance when required config is absent.
 - The unified main config file defaults to `<runtime_root>/config/skill_config.json`; hosts can explicitly override the path.
 
 ## 6. `vulcan.fs.*`
 
-### 6.1 Supported Methods
+### 6.1 API Reference
 
-- `vulcan.fs.list(dir)`
-- `vulcan.fs.read(path)`
-- `vulcan.fs.write(path, content)`
-- `vulcan.fs.exists(path)`
-- `vulcan.fs.is_dir(path)`
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.fs.list(dir)` | `dir: string` | `string[]` | returns directory entry names only, not full paths |
+| `vulcan.fs.read(path)` | `path: string` | `string` | reads one whole file as UTF-8 text; non-UTF-8 content errors |
+| `vulcan.fs.write(path, content)` | `path: string`; `content: string` | `true` | overwrites text; does not create parent directories |
+| `vulcan.fs.read_bytes(path)` | `path: string` | `string` | returns raw bytes as Base64 text |
+| `vulcan.fs.write_bytes(path, base64_text)` | `path: string`; `base64_text: string` | `true` | decodes Base64 and writes raw bytes |
+| `vulcan.fs.rename(old_path, new_path)` | `old_path: string`; `new_path: string` | `true` | renames or moves one file or directory |
+| `vulcan.fs.copy(src_path, dst_path, options?)` | `src_path: string`; `dst_path: string`; `options?: { overwrite?: boolean }` | `boolean` | copies one regular file or one whole directory tree; returns `false` when the destination already exists and overwrite is not allowed |
+| `vulcan.fs.remove(path, options?)` | `path: string`; `options?: { recursive?: boolean }` | `boolean` | removes one file or directory; returns `false` when the target is already missing |
+| `vulcan.fs.mkdir(path, options?)` | `path: string`; `options?: { recursive?: boolean }` | `boolean` | creates one directory; returns `false` when the target directory already exists |
+| `vulcan.fs.stat(path)` | `path: string` | `table \| nil` | returns `nil` when missing, otherwise a metadata table |
+| `vulcan.fs.exists(path)` | `path: string` | `boolean` | checks whether the path exists |
+| `vulcan.fs.is_dir(path)` | `path: string` | `boolean` | checks whether the path is a directory |
 
-### 6.2 Example
+### 6.2 `fs.stat(path)` Result Shape
+
+When the target exists, `vulcan.fs.stat(path)` returns:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `kind` | `"file" \| "dir" \| "symlink" \| "other"` | normalized target kind |
+| `is_file` | `boolean` | whether the target is a regular file |
+| `is_dir` | `boolean` | whether the target is a directory |
+| `is_symlink` | `boolean` | whether the target is a symbolic link |
+| `readonly` | `boolean` | whether the metadata is read-only |
+| `size` | `integer?` | file size in bytes for regular files |
+| `modified_unix_ms` | `integer?` | Unix modification timestamp in milliseconds when available |
+
+### 6.3 Example
 
 ```lua
 local entries = vulcan.fs.list(vulcan.context.entry_dir)
 local exists = vulcan.fs.exists(vulcan.context.entry_file)
 local content = vulcan.fs.read(vulcan.context.entry_file)
+local payload_base64 = vulcan.fs.read_bytes(vulcan.context.entry_file)
+local info = vulcan.fs.stat(vulcan.context.entry_file)
+local created = vulcan.fs.mkdir(vulcan.path.join(vulcan.context.entry_dir, "output"), {
+    recursive = true,
+})
 ```
 
-### 6.3 Notes
+Byte-preserving example:
+
+```lua
+local payload = vulcan.fs.read_bytes("D:/data/image.bin")
+
+vulcan.fs.write_bytes("D:/data/image.copy.bin", payload)
+```
+
+### 6.4 Notes
 
 - There is currently no sandbox restriction; a skill can theoretically access any path that the host process can access.
-- `fs.read` and `fs.write` operate on text content.
+- `fs.list(dir)` returns child names only. Use `vulcan.path.join(...)` to build full paths.
+- `fs.read` and `fs.write` operate on text. `fs.read` expects valid UTF-8. Use `fs.read_bytes` for non-UTF-8 content.
+- `fs.read_bytes(path)` returns Base64 text, and `fs.write_bytes(path, base64_text)` accepts Base64 text and writes the original bytes. This is the preferred byte-preserving path when non-UTF-8 content must cross the Lua/host boundary.
+- Prefer `fs.rename`, `fs.remove`, and `fs.mkdir` for file lifecycle changes that need stable Windows Unicode-path behavior instead of relying on native `os.rename` or `os.remove`.
+- `fs.copy(src_path, dst_path)` does not overwrite an existing destination unless `{ overwrite = true }` is explicitly provided.
+- Destination-existence checks are based on the path entry itself, so dangling symbolic links still count as existing destinations.
+- When the source path is a directory, `fs.copy` recursively copies the whole directory tree.
+- When `overwrite = true` and the destination already exists, the runtime deletes the destination path first and then copies the new content. This means the destination tree is **replaced**, not merged.
+- When the source path is a directory, destination validation resolves existing parent links before deciding whether the destination falls back inside the source tree.
+- Directory-tree copy currently rejects symbolic-link entries so behavior stays predictable across platforms.
+- When the source path is a directory, the destination path must not equal the source directory and must not live inside the source directory; otherwise the runtime raises an explicit error instead of recursing into itself.
+- `fs.remove(path, { recursive = true })` recursively deletes directories and returns `false` when the target is already missing.
+- `fs.remove(path)` without `recursive = true` attempts a normal directory removal and errors for non-empty directories.
+- When the path itself is a symbolic link, `fs.remove` removes the link entry itself instead of deleting the linked target.
+- `fs.mkdir(path, { recursive = true })` recursively creates directories and returns `false` when the target directory already exists.
+- `fs.mkdir(path)` errors when the target path already exists but is not a directory.
+- `fs.rename(old_path, new_path)` returns `true` on success and raises a runtime error for other failures.
+- `fs.stat(path)` returns `nil` when the target is missing; otherwise it returns a table with fields such as `kind`, `is_file`, `is_dir`, `is_symlink`, `readonly`, optional `size` for regular files, and optional `modified_unix_ms`.
 - Path arguments must be strings and pass basic path syntax validation.
 
 ## 7. `vulcan.path.*`
 
-Currently exposes only:
+### 7.1 API Reference
 
-- `vulcan.path.join(...)`
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.path.join(...)` | one or more `string` segments | `string` | joins path segments using host rules; at least one segment is required |
+| `vulcan.path.dirname(path)` | `path: string` | `string` | returns the parent directory |
+| `vulcan.path.basename(path)` | `path: string` | `string` | returns the terminal file name portion |
+| `vulcan.path.stem(path)` | `path: string` | `string` | returns the terminal file name without extension |
+| `vulcan.path.extname(path)` | `path: string` | `string` | returns the extension including the leading dot |
+| `vulcan.path.normalize(path)` | `path: string` | `string` | performs lexical normalization without touching the filesystem |
+| `vulcan.path.is_abs(path)` | `path: string` | `boolean` | checks whether one path is absolute |
 
-Example:
+### 7.2 Example
 
 ```lua
 local config_path = vulcan.path.join(
@@ -685,34 +960,123 @@ local config_path = vulcan.path.join(
     "runtime",
     "config.json"
 )
+local ext = vulcan.path.extname(config_path)
 ```
 
-Path return rules:
+### 7.3 Return Rules
 
 - Returns normal path text for the host system.
 - On Windows, it does not leak `\\?\` or `\\?\UNC\` verbatim prefixes directly to Lua.
+- `path.dirname(path)` returns `.` when a relative path has no parent segment.
+- `path.basename(path)`, `path.stem(path)`, and `path.extname(path)` return an empty string when the terminal component is absent.
+- `path.extname(path)` includes the leading dot when an extension exists, for example `.lua`.
+- `path.normalize(path)` is lexical only. It folds `.` and `..` without touching the filesystem and returns `.` when the normalized result is empty.
 
 ## 8. `vulcan.process.*`
 
-Currently exposes:
+### 8.1 API Reference
 
-- `vulcan.process.exec(spec)`
-- `vulcan.process.session.open(spec)`
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.process.exec(spec)` | `spec: string \| table` | result table | runs one one-shot child process and waits for completion |
+| `vulcan.process.launchers()` | none | `table` | returns the supported `shell` parameter values and the current default |
+| `vulcan.process.which(program)` | `program: string` | `string \| nil` | searches for one executable |
+| `vulcan.process.session.open(spec)` | `spec: table` | process-session handle | opens one interactive child-process session |
 
-### 8.1 Request Shape
+`vulcan.process.which(program)` searches for one executable using host lookup rules. It returns one host-visible absolute path when found and `nil` otherwise. On Windows it also consults `PATHEXT` for extensionless names.
 
-Two modes are supported.
+`vulcan.process.launchers()` always returns:
 
-1. Shell mode:
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `default` | `string` | current host default shell parameter value; typically `cmd` on Windows and `sh` on Unix-like hosts |
+| `shells` | `array<string>` | supported `shell` parameter values in stable order; the default value is always the first item |
+
+Minimal example:
+
+```lua
+local launchers = vulcan.process.launchers()
+local shell = launchers.default
+
+for _, name in ipairs(launchers.shells or {}) do
+    if name == "bash" then
+        shell = "bash"
+        break
+    end
+    if name == "pwsh" then
+        shell = "pwsh"
+        break
+    end
+end
+
+local command = shell == "cmd" and "dir" or "ls"
+local result = vulcan.process.exec({
+    command = command,
+    shell = shell,
+})
+```
+
+### 8.2 `exec(spec)` Request Shape
+
+`vulcan.process.exec(spec)` supports two input forms:
+
+1. a string, which means shell/command mode
+2. a table with explicit launch fields
+
+Minimal string mode:
+
+```lua
+local result = vulcan.process.exec("echo hello")
+```
+
+Table fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `command` | `string` | one of `command` / `program` | shell command text |
+| `program` | `string` | one of `command` / `program` | executable path or program name |
+| `args` | `array` | no | only valid in `program` mode; string arrays are recommended, but numbers and booleans are stringified |
+| `cwd` | `string` | no | child working directory |
+| `env` | `table<string, scalar>` | no | environment variable map; values are stringified |
+| `stdin` | `string` | no | one-shot stdin text written after spawn |
+| `timeout_ms` | `integer` | no | positive timeout in milliseconds; omitted means no timeout |
+| `shell` | `boolean \| string` | no | optional in `command` mode; booleans keep legacy compatibility, and strings must come from `vulcan.process.launchers().shells` |
+| `encoding` | `string` | no | default encoding for stdout, stderr, and stdin |
+| `stdout_encoding` | `string` | no | overrides stdout decoding |
+| `stderr_encoding` | `string` | no | overrides stderr decoding |
+| `stdin_encoding` | `string` | no | overrides stdin encoding |
+
+`shell` rules:
+
+- omit `shell`: `command` mode automatically uses `vulcan.process.launchers().default`
+- `shell = true`: legacy-compatible shorthand for the default shell
+- `shell = false`: only valid with `program` mode; `command` mode rejects it
+- `shell = "cmd" | "pwsh" | "powershell" | "bash" | "zsh" | "sh"`: explicitly selects one command carrier and must appear in `vulcan.process.launchers().shells`
+- `program` mode rejects shell-name strings because it does not use a shell carrier
+
+`command` mode example:
 
 ```lua
 local result = vulcan.process.exec({
-    shell = "echo hello",
+    command = "echo hello",
     timeout_ms = 3000,
 })
 ```
 
-2. Program mode:
+Example using `launchers()` to choose one shell:
+
+```lua
+local launchers = vulcan.process.launchers()
+local command = launchers.default == "cmd" and "echo hello" or "printf hello"
+
+local result = vulcan.process.exec({
+    command = command,
+    shell = launchers.default,
+    encoding = "utf-8",
+})
+```
+
+`program` mode example:
 
 ```lua
 local result = vulcan.process.exec({
@@ -723,30 +1087,109 @@ local result = vulcan.process.exec({
         DEMO_MODE = "1",
     },
     timeout_ms = 5000,
+    encoding = "utf-8",
 })
 ```
 
-Common fields:
+### 8.3 `exec(spec)` Result Shape
 
-- `shell`
-- `program`
-- `args`
-- `cwd`
-- `env`
-- `stdin`
-- `timeout_ms`
+The result table always contains:
 
-### 8.2 Result Shape
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `ok` | `boolean` | whether the execution chain completed successfully |
+| `success` | `boolean` | whether the process exited successfully without timing out |
+| `code` | `integer \| nil` | exit code when available |
+| `stdout` | `string` | decoded stdout text, or Base64 text when `base64` encoding is used |
+| `stderr` | `string` | decoded stderr text |
+| `stdout_encoding` | `string` | actual stdout decoding label |
+| `stderr_encoding` | `string` | actual stderr decoding label |
+| `stdout_lossy` | `boolean` | whether stdout decoding used replacement or fallback behavior |
+| `stderr_lossy` | `boolean` | whether stderr decoding used replacement or fallback behavior |
+| `stdout_base64` | `string \| nil` | raw stdout bytes encoded as Base64 when available |
+| `stderr_base64` | `string \| nil` | raw stderr bytes encoded as Base64 when available |
+| `timed_out` | `boolean` | whether the process timed out |
+| `error` | `string \| nil` | human-readable execution failure summary |
 
-The returned table always contains:
+### 8.4 `session.open(spec)` And Session Handle
 
-- `ok`
-- `success`
-- `code`
-- `stdout`
-- `stderr`
-- `timed_out`
-- `error`
+`vulcan.process.session.open(spec)` accepts only a table:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `program` | `string` | yes | executable path or program name |
+| `args` | `string[]` | no | argument array; defaults to an empty array |
+| `cwd` | `string` | no | child working directory |
+| `encoding` | `string` | no | default encoding for stdout, stderr, and stdin |
+| `stdout_encoding` | `string` | no | overrides stdout decoding |
+| `stderr_encoding` | `string` | no | overrides stderr decoding |
+| `stdin_encoding` | `string` | no | overrides stdin encoding |
+| `buffer_limit_bytes` | `integer` | no | internal stdout/stderr buffer limit |
+
+Session-handle methods:
+
+| Method | Parameters And Types | Return Value | Meaning |
+| --- | --- | --- | --- |
+| `session:write(...)` | one or more Lua scalar values | `true` | encodes values with `stdin_encoding`, writes them to stdin, and flushes immediately |
+| `session:read(options?)` | `options?: { timeout_ms?: integer, max_bytes?: integer, until_text?: string }` | result table | reads and **drains** currently captured output |
+| `session:status()` | none | status table | inspects status without terminating the process |
+| `session:close(options?)` | `options?: { timeout_ms?: integer }` | status table | closes stdin, waits for exit, and kills the process tree on timeout |
+| `session:kill()` | none | `true` | terminates the process tree immediately |
+
+`session:read(...)` returns:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `stdout` | `string` | stdout drained by this read call |
+| `stderr` | `string` | stderr drained by this read call |
+| `stdout_encoding` | `string` | actual stdout decoding label |
+| `stderr_encoding` | `string` | actual stderr decoding label |
+| `stdout_lossy` | `boolean` | whether stdout decoding was lossy |
+| `stderr_lossy` | `boolean` | whether stderr decoding was lossy |
+| `stdout_base64` | `string \| nil` | raw stdout bytes when available |
+| `stderr_base64` | `string \| nil` | raw stderr bytes when available |
+| `timed_out` | `boolean` | whether this read wait timed out |
+
+`session:status()` and `session:close(...)` return:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `running` | `boolean` | whether the process is still running |
+| `exited` | `boolean` | whether the process has exited |
+| `success` | `boolean \| nil` | exit success when exited; usually `nil` while still running |
+| `code` | `integer \| nil` | exit code when available |
+
+Interactive example:
+
+```lua
+local session = vulcan.process.session.open({
+    program = "python",
+    args = { "-i" },
+    encoding = "utf-8",
+})
+
+session:write("print(1 + 1)\n")
+local output = session:read({
+    timeout_ms = 1000,
+    until_text = "2",
+})
+local status = session:close({
+    timeout_ms = 3000,
+})
+
+return vulcan.json.encode({
+    stdout = output.stdout,
+    exited = status.exited,
+    success = status.success,
+})
+```
+
+### 8.5 Notes
+
+- `exec(spec)` and `session.open(spec)` do not perform shell escaping for you. If you build command text manually, you own that safety boundary.
+- `session:read(...)` drains buffered output. The next read only sees newly produced bytes.
+- `session:close(...)` kills the whole process tree on timeout, not just the direct child.
+- `which(program)` supports both explicit paths and `PATH` lookup. On Windows it also expands common executable extensions via `PATHEXT`.
 
 ## 9. `vulcan.os.*`
 
@@ -761,6 +1204,15 @@ local info = vulcan.os.info()
 -- info.os
 -- info.arch
 ```
+
+Result shape:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `os` | `string` | normalized platform name such as `windows`, `linux`, or `macos` |
+| `arch` | `string` | normalized architecture such as `x86_64`, `i686`, `aarch64`, or `armv7l` |
+
+`vulcan.os.*` intentionally stays minimal. It provides platform information only and does not try to wrap historically problematic native `os.rename` or `os.remove` behavior.
 
 ## 10. `vulcan.json.*`
 
@@ -782,16 +1234,43 @@ local obj = vulcan.json.decode(text)
 
 Notes:
 
-- Lua tables are converted into JSON objects or arrays.
-- Decoded JSON objects and arrays are converted back into Lua tables.
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.json.encode(value)` | any JSON-serializable Lua value | `string` | encodes JSON text |
+| `vulcan.json.decode(text)` | `text: string` | Lua value | decodes JSON text |
+
+Encoding rules:
+
+- `nil` -> `null`
+- `boolean` -> JSON boolean
+- `integer` / `number` -> JSON number
+- `string` -> JSON string
+- `table` -> JSON array or object
+
+Array/object detection is important:
+
+- when one Lua table has `raw_len() > 0`, the runtime serializes it as an **array**
+- when `raw_len() == 0` and the table has string keys, the runtime serializes it as an **object**
+- an empty table becomes `[]`, not `{}`
+
+Unsupported input values:
+
+- `function`
+- `thread`
+- `userdata`
+- `lightuserdata`
+
+Passing those values to `vulcan.json.encode(...)` raises a runtime error.
 
 ## 11. `vulcan.cache.*`
 
 Currently provides:
 
-- `vulcan.cache.put(value, ttl_sec?)`
-- `vulcan.cache.get(cache_id)`
-- `vulcan.cache.delete(cache_id)`
+| API | Parameters And Types | Return Value | Notes |
+| --- | --- | --- | --- |
+| `vulcan.cache.put(value, ttl_sec?)` | `value: JSON-serializable Lua value`; `ttl_sec?: integer` | `string` | stores one cache value and returns the `cache_id` |
+| `vulcan.cache.get(cache_id)` | `cache_id: string` | Lua value or `nil` | reads one cached value inside the current scope |
+| `vulcan.cache.delete(cache_id)` | `cache_id: string` | `boolean` | deletes one cache item |
 
 Example:
 
@@ -806,27 +1285,31 @@ local deleted = vulcan.cache.delete(cache_id)
 
 Notes:
 
+- The serialization rules for `value` are the same as `vulcan.json.encode(...)`.
 - Cache scope first falls back to the current `tool_name`, then the current `skill_name`.
 - If neither is available, it falls back to the internal `__runtime` scope.
 - Inside `vulcan.runtime.lua.exec(...)`, cache APIs are actively removed and unavailable.
+- `cache_id` is a scope-local identifier. Do not assume it is stable across skills or host instances.
 
 ## 12. `vulcan.context.*`
 
 `vulcan.context` reads the current request and current-entry runtime context.
 
-Current fields:
+### 12.1 Top-Level Field Overview
 
-- `request`
-- `client_info`
-- `client_capabilities`
-- `host_result`
-- `client_budget`
-- `tool_config`
-- `skill_dir`
-- `entry_dir`
-- `entry_file`
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `request` | `table` | empty table | raw request context |
+| `client_info` | `table \| nil` | `nil` | current client metadata |
+| `client_capabilities` | `table` | empty table | host-injected client capability snapshot |
+| `client_budget` | `table` | empty table | host-injected budget snapshot |
+| `tool_config` | `table` | empty table | host-injected tool configuration |
+| `host_result` | `table` | empty table | host structured-result capability view |
+| `skill_dir` | `string \| nil` | `nil` | current skill root directory |
+| `entry_dir` | `string \| nil` | `nil` | current entry directory |
+| `entry_file` | `string \| nil` | `nil` | current entry absolute file path |
 
-### 12.1 `vulcan.context.request`
+### 12.2 `vulcan.context.request`
 
 The original host-provided request context object. Defaults to an empty object.
 
@@ -839,7 +1322,9 @@ Common fields come from:
 - `client_info`
 - `client_capabilities`
 
-### 12.2 `vulcan.context.client_info`
+This structure is host-defined. Skills should not assume one exact field is always present.
+
+### 12.3 `vulcan.context.client_info`
 
 Current request client metadata. Common fields:
 
@@ -852,11 +1337,11 @@ Notes:
 - If the host does not inject `client_info`, this may be `nil`.
 - If you see `name = "luaexec_call"` inside `luaexec`, that is the synthetic context for internal isolated execution, not the real external client.
 
-### 12.3 `vulcan.context.client_capabilities`
+### 12.4 `vulcan.context.client_capabilities`
 
 Host-provided client capability object. Defaults to an empty object.
 
-### 12.4 `vulcan.context.client_budget`
+### 12.5 `vulcan.context.client_budget`
 
 Host-parsed budget snapshot object. Defaults to an empty object.
 
@@ -868,11 +1353,11 @@ The host decides the shape, but common fields include:
 - `tool_result`
 - `file_read`
 
-### 12.5 `vulcan.context.tool_config`
+### 12.6 `vulcan.context.tool_config`
 
 Host-parsed tool config object. Defaults to an empty object.
 
-### 12.6 `vulcan.context.skill_dir / entry_dir / entry_file`
+### 12.7 `vulcan.context.skill_dir / entry_dir / entry_file`
 
 File context for the currently executing skill:
 
@@ -887,7 +1372,7 @@ Notes:
 - In `system_runtime_lease` / `system_lua_lib` host-runtime scenarios, all three should also be treated as `nil` because there is no current skill-file identity.
 - The current implementation automatically strips Windows verbatim path prefixes so Lua receives normal system paths.
 
-### 12.7 `vulcan.context.host_result`
+### 12.8 `vulcan.context.host_result`
 
 The standardized host structured-result bridge view.
 
@@ -899,11 +1384,11 @@ Current recommended fields:
 
 Notes:
 
-- When the host does not explicitly enable `host_result`, this object may be missing or `enabled ~= true`.
+- In the current runtime baseline, the top-level `host_result` table always exists, but it typically does not contain `enabled = true` unless the host explicitly turned it on.
 - Skills that support structured host results should prefer this normalized view over reading raw `client_capabilities.host_result` fields directly.
 - The current recommended canonical result kind is `change_set`, used to return IDE-grade operation results back to the host.
 
-### 12.8 Structured fourth return value
+### 12.9 Structured fourth return value
 
 When the host explicitly enables `host_result`, one skill may return:
 
@@ -959,16 +1444,62 @@ Notes:
 - When `change = "modify"`, one file record must provide one non-empty `hunks` array; every hunk must include `before`, `after`, `delete`, and `insert`.
 - `before` and `after` should be contiguous context strings immediately adjacent to the changed block, not whole-file snapshots.
 - `delete[].line` uses old-file line numbers, while `insert[].line` uses new-file line numbers after insertion, and both lists should stay sorted in ascending order.
-- When `change = "create"` or `change = "delete"`, the file record should directly provide full-file `content`.
+- When `change = "create"`, the file record should directly provide full-file `content`.
+- When `change = "delete"`, two content modes are supported:
+  - `content_mode = "full"`, or omit `content_mode` entirely. In this mode the record should provide full-file `content`; `total_line_count` is optional on input, and the runtime will fill both `content_mode = "full"` and `total_line_count` automatically.
+  - `content_mode = "truncated"`. In this mode the record must provide `total_line_count`, `content_head`, and `content_tail`; `content_head` is the leading snippet, `content_tail` is the trailing snippet, and the middle section is always considered omitted.
+- Strong guidance for skill authors: handle oversized delete results proactively inside the skill whenever possible, and decide before returning whether one truncated snippet form is more appropriate; runtime auto-truncation is only a fallback safety net and should not be treated as the primary path.
+- The runtime normalization rules for `change = "delete"` are stable:
+  - If the skill returns full `content`, the runtime first computes `total_line_count`.
+  - When the deleted content stays within `500` lines, the runtime keeps the full body and normalizes the record to `content_mode = "full"`.
+  - When the deleted content exceeds `500` lines, the runtime forcibly rewrites the record to `content_mode = "truncated"`, even if the skill returned the full `content`.
+  - The forced truncation shape is fixed: the first `50` lines go to `content_head`, the last `50` lines go to `content_tail`, and the middle section is not returned.
 - When `change = "rename"`, the file record should provide both `old_path` and `new_path`, and both must be absolute paths.
+
+Delete record example:
+
+```lua
+{
+    change = "delete",
+    path = "D:/projects/demo/src/legacy.lua",
+    content = "line 1\nline 2\nline 3\n"
+}
+```
+
+The legacy form above remains compatible, but the runtime normalizes the host-facing payload into:
+
+```json
+{
+  "change": "delete",
+  "path": "D:/projects/demo/src/legacy.lua",
+  "content_mode": "full",
+  "total_line_count": 3,
+  "content": "line 1\nline 2\nline 3\n"
+}
+```
+
+When the deleted file exceeds `500` lines, the runtime automatically rewrites it into:
+
+```json
+{
+  "change": "delete",
+  "path": "D:/projects/demo/src/legacy.lua",
+  "content_mode": "truncated",
+  "total_line_count": 1200,
+  "content_head": "Joined text of the first 50 lines",
+  "content_tail": "Joined text of the last 50 lines"
+}
+```
 
 ## 13. `vulcan.deps.*`
 
 Current fields:
 
-- `vulcan.deps.tools_path`
-- `vulcan.deps.lua_path`
-- `vulcan.deps.ffi_path`
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `vulcan.deps.tools_path` | `string \| nil` | current skill tools dependency directory |
+| `vulcan.deps.lua_path` | `string \| nil` | current skill Lua dependency directory |
+| `vulcan.deps.ffi_path` | `string \| nil` | current skill FFI dependency directory |
 
 These are dependency root paths for the current skill:
 
@@ -1016,6 +1547,36 @@ Notes:
 - `vulcan.sqlite.delete_fts_document(input)`
 - `vulcan.sqlite.search_fts(input)`
 
+Aside from `enabled`, these methods fall into two groups:
+
+| Category | API | Input | Return Value | Meaning |
+| --- | --- | --- | --- | --- |
+| Stable probe | `enabled` | none | `boolean` | whether the current skill has a SQLite binding |
+| Stable probe | `info()` | none | `table` | binding information suitable for availability probing |
+| Stable probe | `status()` | none | `table` | current status suitable for availability probing |
+| Provider forward | every other method | one `input: table` or none | `table`, array, or scalar depending on the provider | LuaSkills only forwards the action plus current binding context |
+
+Action mapping:
+
+| Lua API | provider action |
+| --- | --- |
+| `execute_script(input)` | `execute_script` |
+| `execute_batch(input)` | `execute_batch` |
+| `query_json(input)` | `query_json` |
+| `query_stream(input)` | `query_stream` |
+| `query_stream_wait_metrics(input)` | `query_stream_wait_metrics` |
+| `query_stream_chunk(input)` | `query_stream_chunk` |
+| `query_stream_close(input)` | `query_stream_close` |
+| `tokenize_text(input)` | `tokenize_text` |
+| `upsert_custom_word(input)` | `upsert_custom_word` |
+| `remove_custom_word(input)` | `remove_custom_word` |
+| `list_custom_words()` | `list_custom_words` |
+| `ensure_fts_index(input)` | `ensure_fts_index` |
+| `rebuild_fts_index(input)` | `rebuild_fts_index` |
+| `upsert_fts_document(input)` | `upsert_fts_document` |
+| `delete_fts_document(input)` | `delete_fts_document` |
+| `search_fts(input)` | `search_fts` |
+
 ### 14.2 Behavior Rules
 
 - `enabled = true` means the current skill has a SQLite binding.
@@ -1025,12 +1586,19 @@ Notes:
   - `info()` and `status()` return disabled-state descriptions
   - other methods error directly with `current skill has not enabled sqlite`
 
+Stable development constraints:
+
+- Pass one Lua table for `input`. Do not pass bare strings or bare arrays.
+- Exact result shapes are defined by the active SQLite provider. LuaSkills does not normalize business fields on top.
+- The host/provider also receives stable binding context such as `space_label`, `skill_id`, `binding_tag`, `database_kind`, and `default_database_path`.
+
 ### 14.3 Development Guidance
 
 - Treat `info()` and `status()` as probing entry points.
 - Check `enabled` before business calls so "capability not bound" is not mistaken for a query failure.
 - For exact input and output fields, combine the host SQLite provider contract with:
   - [Host database provider guide](zh-CN/providers/host-database-provider-guide.md)
+- If you are a skill author rather than a host implementer, prefer existing memory-skill examples over guessing provider-specific result fields.
 
 ## 15. `vulcan.lancedb.*`
 
@@ -1047,6 +1615,17 @@ Notes:
 - `vulcan.lancedb.delete(input)`
 - `vulcan.lancedb.drop_table(input)`
 
+| Category | API | Input | Return Value | Meaning |
+| --- | --- | --- | --- | --- |
+| Stable probe | `enabled` | none | `boolean` | whether the current skill has a LanceDB binding |
+| Stable probe | `info()` | none | `table` | binding information suitable for availability probing |
+| Stable probe | `status()` | none | `table` | current status suitable for availability probing |
+| Provider forward | `create_table(input)` | `input: table` | provider-defined | creates one table |
+| Provider forward | `vector_upsert(input)` | `input: table` | provider-defined | upserts vector data |
+| Provider forward | `vector_search(input)` | `input: table` | provider-defined | performs vector search |
+| Provider forward | `delete(input)` | `input: table` | provider-defined | deletes records |
+| Provider forward | `drop_table(input)` | `input: table` | provider-defined | drops one table |
+
 ### 15.2 Behavior Rules
 
 - `enabled = true` means the current skill has a LanceDB binding.
@@ -1055,6 +1634,12 @@ Notes:
   - `enabled = false`
   - `info()` and `status()` return disabled-state descriptions
   - other methods error directly with `current skill has not enabled lancedb`
+
+Stable development constraints:
+
+- Pass one Lua table as `input`.
+- Exact business fields and result shapes are defined by the LanceDB provider. LuaSkills only forwards the call and guards capability availability.
+- The host/provider also receives stable binding context such as `space_label`, `binding_tag`, and `database_kind`.
 
 ### 15.3 Special Note
 

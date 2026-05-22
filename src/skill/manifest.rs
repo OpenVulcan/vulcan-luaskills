@@ -355,9 +355,9 @@ fn validate_tool_schema_type_field(
                 return Err(format!("{field_label}.type must not be an empty array"));
             }
             for (index, item) in items.iter().enumerate() {
-                let type_name = item.as_str().ok_or_else(|| {
-                    format!("{field_label}.type[{index}] must be one string")
-                })?;
+                let type_name = item
+                    .as_str()
+                    .ok_or_else(|| format!("{field_label}.type[{index}] must be one string"))?;
                 if type_name.trim().is_empty() {
                     return Err(format!("{field_label}.type[{index}] must not be empty"));
                 }
@@ -412,7 +412,9 @@ fn validate_tool_schema_object_map(value: &JsonValue, field_label: &str) -> Resu
         .ok_or_else(|| format!("{field_label} must be an object"))?;
     for (name, item) in object {
         if name.trim().is_empty() {
-            return Err(format!("{field_label} must not contain empty property names"));
+            return Err(format!(
+                "{field_label} must not contain empty property names"
+            ));
         }
         validate_tool_schema_node(item, &format!("{field_label}.{}", name))?;
     }
@@ -517,7 +519,9 @@ fn validate_entry_input_schema_root(schema: &JsonValue, field_label: &str) -> Re
     match object.get("type") {
         Some(JsonValue::String(type_name)) if type_name == "object" => Ok(()),
         Some(_) => Err(format!("{field_label}.type must be \"object\"")),
-        None => Err(format!("{field_label}.type must be present and equal to \"object\"")),
+        None => Err(format!(
+            "{field_label}.type must be present and equal to \"object\""
+        )),
     }
 }
 
@@ -626,7 +630,9 @@ fn derive_legacy_parameters_from_input_schema(schema: &JsonValue) -> Vec<SkillPa
                 .and_then(JsonValue::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            required: required_names.iter().any(|required_name| required_name == name),
+            required: required_names
+                .iter()
+                .any(|required_name| required_name == name),
         })
         .collect()
 }
@@ -798,9 +804,9 @@ impl SkillToolMeta {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_entry_input_schema_from_parameters, derive_legacy_parameters_from_input_schema,
-        is_valid_luaskills_identifier, validate_luaskills_identifier, validate_luaskills_version,
-        SkillMeta, SkillParam,
+        SkillMeta, SkillParam, build_entry_input_schema_from_parameters,
+        derive_legacy_parameters_from_input_schema, is_valid_luaskills_identifier,
+        validate_luaskills_identifier, validate_luaskills_version,
     };
     use serde_json::json;
     use std::fs;
@@ -952,7 +958,9 @@ entries:
         meta.resolve_entry_input_schemas(&skill_dir)
             .expect("resolve entry input schemas");
 
-        let tool = meta.find_tool_by_local_name("search").expect("search entry");
+        let tool = meta
+            .find_tool_by_local_name("search")
+            .expect("search entry");
         assert_eq!(tool.resolved_input_schema()["type"], "object");
         assert_eq!(tool.resolved_input_schema()["required"], json!(["nodes"]));
         assert_eq!(tool.parameters.len(), 1);

@@ -9,6 +9,55 @@ use crate::runtime_result::{
 
 use super::{lua_value_to_json, lua_value_type_name};
 
+/// Stable delete mode used by canonical `change_set` delete file records.
+/// canonical `change_set` delete 文件记录使用的稳定内容模式。
+const CHANGE_SET_DELETE_CONTENT_MODE_FULL: &str = "full";
+
+/// Stable truncated delete mode used when one deleted file body is intentionally summarized.
+/// 当删除文件正文需要摘要化时使用的稳定截断模式。
+const CHANGE_SET_DELETE_CONTENT_MODE_TRUNCATED: &str = "truncated";
+
+/// Maximum delete line count that may stay in full-content mode before runtime truncation kicks in.
+/// 删除内容在运行时强制截断前允许保留全文模式的最大行数。
+const CHANGE_SET_DELETE_TRUNCATE_LINE_LIMIT: usize = 500;
+
+/// Number of leading and trailing lines preserved in truncated delete mode.
+/// 截断删除模式中保留的前后片段行数。
+const CHANGE_SET_DELETE_TRUNCATED_EDGE_LINE_COUNT: usize = 50;
+
+/// Canonical delete content mode used by `change_set` file lifecycle records.
+/// `change_set` 文件生命周期记录使用的 canonical delete 内容模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChangeSetDeleteContentMode {
+    /// Full deleted-file content stays inline.
+    /// 删除文件的完整内容以内联方式保留。
+    Full,
+    /// Deleted-file content is summarized into leading and trailing snippets.
+    /// 删除文件内容被摘要为前后片段。
+    Truncated,
+}
+
+impl ChangeSetDeleteContentMode {
+    /// Parse one optional delete content-mode value, defaulting to full mode when absent.
+    /// 解析可选的 delete 内容模式；缺失时默认视为全文模式。
+    fn parse(value: Option<&Value>) -> Option<Self> {
+        match value.and_then(Value::as_str).map(str::trim) {
+            None | Some("") | Some(CHANGE_SET_DELETE_CONTENT_MODE_FULL) => Some(Self::Full),
+            Some(CHANGE_SET_DELETE_CONTENT_MODE_TRUNCATED) => Some(Self::Truncated),
+            _ => None,
+        }
+    }
+
+    /// Return the stable serialized string form used in host-facing payloads.
+    /// 返回宿主侧 payload 使用的稳定序列化字符串形式。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => CHANGE_SET_DELETE_CONTENT_MODE_FULL,
+            Self::Truncated => CHANGE_SET_DELETE_CONTENT_MODE_TRUNCATED,
+        }
+    }
+}
+
 /// Structured host-result capability snapshot derived from request context.
 /// 从请求上下文导出的结构化宿主结果能力快照。
 #[derive(Debug, Clone)]
@@ -158,8 +207,105 @@ fn parse_host_result_value(
             display_name
         )
     })?;
-    validate_host_result_payload(display_name, &kind, &payload, capability.max_payload_bytes)?;
-    Ok(Some(RuntimeHostResult { kind, payload }))
+    let normalized_payload = normalize_host_result_payload(&kind, payload);
+    validate_host_result_payload(
+        display_name,
+        &kind,
+        &normalized_payload,
+        capability.max_payload_bytes,
+    )?;
+    Ok(Some(RuntimeHostResult {
+        kind,
+        payload: normalized_payload,
+    }))
+}
+
+/// Normalize one host-result payload into the canonical host-facing shape before validation.
+/// 在校验前把宿主结果 payload 归一化为 canonical 宿主输出形态。
+fn normalize_host_result_payload(kind: &str, payload: Value) -> Value {
+    if kind == "change_set" {
+        return normalize_change_set_payload(payload);
+    }
+    payload
+}
+
+/// Normalize one `change_set` payload so delete records expose one stable content contract.
+/// 归一化 `change_set` payload，确保 delete 记录暴露统一稳定的内容协议。
+pub(super) fn normalize_change_set_payload(mut payload: Value) -> Value {
+    let Value::Object(object) = &mut payload else {
+        return payload;
+    };
+    let Some(Value::Array(files)) = object.get_mut("files") else {
+        return payload;
+    };
+    for file in files.iter_mut() {
+        normalize_change_set_delete_file_record(file);
+    }
+    payload
+}
+
+/// Normalize one delete file record in-place while preserving every non-delete record unchanged.
+/// 原地归一化单个 delete 文件记录，并保持所有非 delete 记录不变。
+fn normalize_change_set_delete_file_record(file: &mut Value) {
+    let Value::Object(file) = file else {
+        return;
+    };
+    let Some("delete") = file.get("change").and_then(Value::as_str).map(str::trim) else {
+        return;
+    };
+    let requested_mode = ChangeSetDeleteContentMode::parse(file.get("content_mode"))
+        .unwrap_or(ChangeSetDeleteContentMode::Full);
+    let Some(content) = file
+        .get("content")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    else {
+        return;
+    };
+    let normalized_content = normalize_change_set_text(&content);
+    let lines = split_change_set_lines(&normalized_content);
+    let total_line_count = lines.len();
+    file.insert(
+        "total_line_count".to_string(),
+        Value::Number(serde_json::Number::from(total_line_count as u64)),
+    );
+    let should_truncate = requested_mode == ChangeSetDeleteContentMode::Truncated
+        || total_line_count > CHANGE_SET_DELETE_TRUNCATE_LINE_LIMIT;
+    if should_truncate {
+        let head_count = total_line_count.min(CHANGE_SET_DELETE_TRUNCATED_EDGE_LINE_COUNT);
+        let tail_count = CHANGE_SET_DELETE_TRUNCATED_EDGE_LINE_COUNT
+            .min(total_line_count.saturating_sub(head_count));
+        let head_lines = lines
+            .iter()
+            .take(head_count)
+            .copied()
+            .collect::<Vec<&str>>();
+        let tail_lines = if tail_count == 0 {
+            Vec::new()
+        } else {
+            lines[total_line_count - tail_count..].to_vec()
+        };
+        file.insert(
+            "content_mode".to_string(),
+            Value::String(CHANGE_SET_DELETE_CONTENT_MODE_TRUNCATED.to_string()),
+        );
+        file.insert(
+            "content_head".to_string(),
+            Value::String(head_lines.join("\n")),
+        );
+        file.insert(
+            "content_tail".to_string(),
+            Value::String(tail_lines.join("\n")),
+        );
+        file.remove("content");
+        return;
+    }
+    file.insert(
+        "content_mode".to_string(),
+        Value::String(CHANGE_SET_DELETE_CONTENT_MODE_FULL.to_string()),
+    );
+    file.remove("content_head");
+    file.remove("content_tail");
 }
 
 /// Validate one structured host-result payload against common and kind-specific rules.
@@ -341,11 +487,52 @@ fn validate_change_set_file_payload(
         "delete" => {
             let _path =
                 validate_change_set_absolute_path_field(display_name, file_index, file, "path")?;
-            validate_change_set_required_string_field(
-                display_name,
-                &format!("change_set.files[{}].content", file_index),
-                file.get("content"),
-            )?;
+            let content_mode =
+                validate_change_set_delete_content_mode(display_name, file_index, file)?;
+            match content_mode {
+                ChangeSetDeleteContentMode::Full => {
+                    validate_change_set_required_string_field(
+                        display_name,
+                        &format!("change_set.files[{}].content", file_index),
+                        file.get("content"),
+                    )?;
+                    validate_change_set_optional_non_negative_integer_field(
+                        display_name,
+                        &format!("change_set.files[{}].total_line_count", file_index),
+                        file.get("total_line_count"),
+                    )?;
+                }
+                ChangeSetDeleteContentMode::Truncated => {
+                    if file.get("content").is_some() {
+                        validate_change_set_required_string_field(
+                            display_name,
+                            &format!("change_set.files[{}].content", file_index),
+                            file.get("content"),
+                        )?;
+                        validate_change_set_optional_non_negative_integer_field(
+                            display_name,
+                            &format!("change_set.files[{}].total_line_count", file_index),
+                            file.get("total_line_count"),
+                        )?;
+                    } else {
+                        validate_change_set_required_non_negative_integer_field(
+                            display_name,
+                            &format!("change_set.files[{}].total_line_count", file_index),
+                            file.get("total_line_count"),
+                        )?;
+                        validate_change_set_required_string_field(
+                            display_name,
+                            &format!("change_set.files[{}].content_head", file_index),
+                            file.get("content_head"),
+                        )?;
+                        validate_change_set_required_string_field(
+                            display_name,
+                            &format!("change_set.files[{}].content_tail", file_index),
+                            file.get("content_tail"),
+                        )?;
+                    }
+                }
+            }
         }
         "rename" => {
             let _old_path = validate_change_set_absolute_path_field(
@@ -369,6 +556,24 @@ fn validate_change_set_file_payload(
         }
     }
     Ok(())
+}
+
+/// Validate one delete content-mode field and default it to full mode when the field is absent.
+/// 校验 delete 内容模式字段，并在字段缺失时默认回落为全文模式。
+fn validate_change_set_delete_content_mode(
+    display_name: &str,
+    file_index: usize,
+    file: &serde_json::Map<String, Value>,
+) -> Result<ChangeSetDeleteContentMode, String> {
+    ChangeSetDeleteContentMode::parse(file.get("content_mode")).ok_or_else(|| {
+        format!(
+            "Lua skill '{}' change_set.files[{}].content_mode must be '{}' or '{}'",
+            display_name,
+            file_index,
+            ChangeSetDeleteContentMode::Full.as_str(),
+            ChangeSetDeleteContentMode::Truncated.as_str()
+        )
+    })
 }
 
 /// Validate one absolute path field inside one canonical `change_set` file record.
@@ -412,6 +617,58 @@ fn validate_change_set_required_string_field(
             "Lua skill '{}' {} must be a string",
             display_name, field_path
         )),
+    }
+}
+
+/// Validate one required non-negative integer field inside one canonical `change_set` object path.
+/// 校验 canonical `change_set` 对象路径中的单个必填非负整数字段。
+fn validate_change_set_required_non_negative_integer_field(
+    display_name: &str,
+    field_path: &str,
+    value: Option<&Value>,
+) -> Result<usize, String> {
+    value
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            format!(
+                "Lua skill '{}' {} must be one non-negative integer",
+                display_name, field_path
+            )
+        })
+}
+
+/// Validate one optional non-negative integer field inside one canonical `change_set` object path.
+/// 校验 canonical `change_set` 对象路径中的单个可选非负整数字段。
+fn validate_change_set_optional_non_negative_integer_field(
+    display_name: &str,
+    field_path: &str,
+    value: Option<&Value>,
+) -> Result<Option<usize>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => validate_change_set_required_non_negative_integer_field(
+            display_name,
+            field_path,
+            Some(value),
+        )
+        .map(Some),
+    }
+}
+
+/// Normalize line endings so delete content truncation uses one stable newline convention.
+/// 规范化换行，确保删除内容截断使用稳定统一的换行约定。
+fn normalize_change_set_text(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// Split normalized delete content into logical lines without treating one trailing newline as an extra line.
+/// 把规范化后的删除内容拆成逻辑行，且不会把结尾换行误算成额外一行。
+fn split_change_set_lines<'a>(text: &'a str) -> Vec<&'a str> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        text.lines().collect()
     }
 }
 

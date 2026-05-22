@@ -1,6 +1,6 @@
-use super::host_result::validate_change_set_payload;
+use super::host_result::{normalize_change_set_payload, validate_change_set_payload};
 use super::lease::RuntimeSessionManager;
-use super::runlua::runlua_cwd_guard;
+use super::runlua::{ExecShellLauncher, runlua_cwd_guard};
 use super::{
     LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState, LuaVmRequestScopeGuard,
     SkillConfigStore, VulcanInternalExecutionContext, default_runlua_vm_pool_config,
@@ -22,10 +22,19 @@ use crate::{
     SkillUninstallOptions, set_host_tool_callback, set_model_embed_callback,
     set_model_llm_callback,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use mlua::{Table, Value as LuaValue};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::{PermissionsExt, symlink as create_unix_symlink};
+#[cfg(windows)]
+use std::os::windows::fs::{
+    symlink_dir as create_windows_dir_symlink, symlink_file as create_windows_file_symlink,
+};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -56,6 +65,132 @@ fn host_tool_callback_test_guard() -> HostToolCallbackTestGuard {
         .expect("lock host tool callback test guard");
     set_host_tool_callback(None);
     HostToolCallbackTestGuard { _guard: guard }
+}
+
+/// Acquire the process-wide environment mutation guard used by PATH-sensitive tests.
+/// 获取供依赖 PATH 的测试使用的进程级环境变量修改保护锁。
+fn process_env_test_guard() -> MutexGuard<'static, ()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("lock process env test guard")
+}
+
+/// Mark one test program file as executable on Unix-like platforms.
+/// 在类 Unix 平台上将单个测试程序文件标记为可执行。
+#[cfg(unix)]
+fn mark_test_program_executable(path: &Path) {
+    let mut permissions = fs::metadata(path)
+        .expect("read test program metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("set executable bit on test program");
+}
+
+/// Mark one test program file as executable on Unix-like platforms.
+/// 在类 Unix 平台上将单个测试程序文件标记为可执行。
+#[cfg(not(unix))]
+fn mark_test_program_executable(_path: &Path) {}
+
+/// Create one test file symlink that points at the requested target path.
+/// 创建一个指向指定目标路径的测试文件符号链接。
+#[cfg(unix)]
+fn create_test_file_symlink(link_path: &Path, target_path: &Path) -> bool {
+    create_unix_symlink(target_path, link_path).expect("create test file symlink");
+    true
+}
+
+/// Return whether one Windows symlink-dependent test should be skipped because the host lacks symlink privileges.
+/// 返回当前 Windows 符号链接相关测试是否应因宿主缺少符号链接权限而跳过。
+#[cfg(windows)]
+fn should_skip_windows_symlink_test(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+/// Create one test file symlink that points at the requested target path.
+/// 创建一个指向指定目标路径的测试文件符号链接。
+#[cfg(windows)]
+fn create_test_file_symlink(link_path: &Path, target_path: &Path) -> bool {
+    match create_windows_file_symlink(target_path, link_path) {
+        Ok(()) => true,
+        Err(error) if should_skip_windows_symlink_test(&error) => {
+            eprintln!(
+                "skip symlink-dependent test because Windows symlink privileges are unavailable: {error}"
+            );
+            false
+        }
+        Err(error) => panic!("create test file symlink: {error}"),
+    }
+}
+
+/// Create one test directory symlink that points at the requested target path.
+/// 创建一个指向指定目标路径的测试目录符号链接。
+#[cfg(unix)]
+fn create_test_dir_symlink(link_path: &Path, target_path: &Path) -> bool {
+    create_unix_symlink(target_path, link_path).expect("create test directory symlink");
+    true
+}
+
+/// Create one test directory symlink that points at the requested target path.
+/// 创建一个指向指定目标路径的测试目录符号链接。
+#[cfg(windows)]
+fn create_test_dir_symlink(link_path: &Path, target_path: &Path) -> bool {
+    match create_windows_dir_symlink(target_path, link_path) {
+        Ok(()) => true,
+        Err(error) if should_skip_windows_symlink_test(&error) => {
+            eprintln!(
+                "skip symlink-dependent test because Windows symlink privileges are unavailable: {error}"
+            );
+            false
+        }
+        Err(error) => panic!("create test directory symlink: {error}"),
+    }
+}
+
+/// Restore one process environment variable after a test mutates it.
+/// 在测试修改环境变量后恢复单个进程环境变量。
+fn restore_test_env_var(name: &str, previous: Option<OsString>) {
+    match previous {
+        Some(value) => unsafe { std::env::set_var(name, value) },
+        None => unsafe { std::env::remove_var(name) },
+    }
+}
+
+/// Restore one batch of mutated environment variables when a PATH-sensitive test finishes.
+/// 当依赖 PATH 的测试结束时，恢复一批被修改过的环境变量。
+struct TestEnvRestoreGuard {
+    /// Recorded previous values keyed by variable name.
+    /// 按变量名记录的旧值集合。
+    entries: Vec<(String, Option<OsString>)>,
+}
+
+impl TestEnvRestoreGuard {
+    /// Capture one named environment variable before the current test mutates it.
+    /// 在当前测试修改环境变量前，捕获单个具名环境变量。
+    fn capture(name: &str) -> Self {
+        Self {
+            entries: vec![(name.to_string(), std::env::var_os(name))],
+        }
+    }
+
+    /// Capture one additional named environment variable before the current test mutates it.
+    /// 在当前测试修改环境变量前，再额外捕获一个具名环境变量。
+    fn and_capture(mut self, name: &str) -> Self {
+        self.entries
+            .push((name.to_string(), std::env::var_os(name)));
+        self
+    }
+}
+
+impl Drop for TestEnvRestoreGuard {
+    /// Restore every captured environment variable in reverse order on drop.
+    /// 在释放时按逆序恢复所有已捕获的环境变量。
+    fn drop(&mut self) {
+        while let Some((name, previous)) = self.entries.pop() {
+            restore_test_env_var(&name, previous);
+        }
+    }
 }
 
 /// Build one minimal loaded skill for collision-index tests.
@@ -167,6 +302,15 @@ fn make_temp_runtime_root(label: &str) -> PathBuf {
 /// 为载荷校验测试构造一条稳定绝对文件路径字符串。
 fn make_change_set_test_path(file_name: &str) -> String {
     render_host_visible_path(&std::env::temp_dir().join(file_name))
+}
+
+/// Build deterministic multi-line delete content for `change_set` lifecycle tests.
+/// 为 `change_set` 生命周期测试构造确定性的多行删除内容。
+fn make_change_set_delete_content(line_count: usize) -> String {
+    (1..=line_count)
+        .map(|line_number| format!("deleted line {line_number}"))
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 /// Create one minimal runtime directory layout used by skill-config tests.
@@ -476,6 +620,125 @@ fn validate_change_set_payload_accepts_hunks_and_file_lifecycle_changes() {
 
     validate_change_set_payload("demo.skill", &payload)
         .expect("change_set payload should be accepted");
+}
+
+/// Verify legacy delete records are normalized into explicit full mode with one computed total line count.
+/// 验证旧版 delete 记录会被归一化为显式全文模式并补齐总行数。
+#[test]
+fn normalize_change_set_payload_expands_delete_full_mode_and_total_line_count() {
+    let delete_path = make_change_set_test_path("luaskills_change_set_delete_full.lua");
+    let payload = json!({
+        "mode": "applied",
+        "files": [
+            {
+                "change": "delete",
+                "path": delete_path,
+                "content": "alpha\nbeta\ngamma\n"
+            }
+        ]
+    });
+
+    let normalized = normalize_change_set_payload(payload);
+    assert_eq!(
+        normalized["files"][0]["content_mode"],
+        Value::String("full".to_string())
+    );
+    assert_eq!(
+        normalized["files"][0]["total_line_count"],
+        Value::Number(serde_json::Number::from(3_u64))
+    );
+    assert_eq!(normalized["files"][0]["content"], "alpha\nbeta\ngamma\n");
+}
+
+/// Verify oversized delete records are forcibly converted into truncated mode with head and tail snippets.
+/// 验证超大 delete 记录会被强制转换为截断模式，并输出前后片段。
+#[test]
+fn normalize_change_set_payload_truncates_large_delete_content() {
+    let delete_path = make_change_set_test_path("luaskills_change_set_delete_large.lua");
+    let payload = json!({
+        "mode": "applied",
+        "files": [
+            {
+                "change": "delete",
+                "path": delete_path,
+                "content": make_change_set_delete_content(520)
+            }
+        ]
+    });
+
+    let normalized = normalize_change_set_payload(payload);
+    assert_eq!(
+        normalized["files"][0]["content_mode"],
+        Value::String("truncated".to_string())
+    );
+    assert_eq!(
+        normalized["files"][0]["total_line_count"],
+        Value::Number(serde_json::Number::from(520_u64))
+    );
+    assert!(normalized["files"][0].get("content").is_none());
+    assert_eq!(
+        normalized["files"][0]["content_head"],
+        Value::String(make_change_set_delete_content(50))
+    );
+    assert_eq!(
+        normalized["files"][0]["content_tail"],
+        Value::String(
+            (471..=520)
+                .map(|line_number| format!("deleted line {line_number}"))
+                .collect::<Vec<String>>()
+                .join("\n")
+        )
+    );
+}
+
+/// Verify canonical validation accepts explicit truncated delete records when they carry line-count metadata and both snippets.
+/// 验证 canonical 校验会接受带总行数与前后片段的显式截断 delete 记录。
+#[test]
+fn validate_change_set_payload_accepts_truncated_delete_records() {
+    let delete_path = make_change_set_test_path("luaskills_change_set_delete_truncated.lua");
+    let payload = json!({
+        "mode": "applied",
+        "files": [
+            {
+                "change": "delete",
+                "path": delete_path,
+                "content_mode": "truncated",
+                "total_line_count": 520,
+                "content_head": make_change_set_delete_content(50),
+                "content_tail": (471..=520)
+                    .map(|line_number| format!("deleted line {line_number}"))
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            }
+        ]
+    });
+
+    validate_change_set_payload("demo.skill", &payload)
+        .expect("truncated delete payload should be accepted");
+}
+
+/// Verify explicit truncated delete records must expose the total deleted line count when full content is omitted.
+/// 验证显式截断 delete 记录在省略全文时必须暴露删除总行数。
+#[test]
+fn validate_change_set_payload_rejects_truncated_delete_without_total_line_count() {
+    let delete_path =
+        make_change_set_test_path("luaskills_change_set_delete_truncated_missing_total.lua");
+    let payload = json!({
+        "mode": "applied",
+        "files": [
+            {
+                "change": "delete",
+                "path": delete_path,
+                "content_mode": "truncated",
+                "content_head": "line 1\nline 2",
+                "content_tail": "line 519\nline 520"
+            }
+        ]
+    });
+
+    let error = validate_change_set_payload("demo.skill", &payload)
+        .expect_err("truncated delete payload should require total_line_count");
+    assert!(error.contains("change_set.files[0].total_line_count"));
 }
 
 /// Verify modify file records must carry at least one non-empty hunk list.
@@ -3021,6 +3284,794 @@ fn execute_runlua_request_inline_uses_managed_io_default_output() {
     assert!(result.contains("SUCCESS"));
     assert!(result.contains("managed-default-output"));
     let _ = fs::remove_file(path);
+}
+
+/// Verify `vulcan.fs.rename` supports Unicode paths without depending on native `os.rename`.
+/// 验证 `vulcan.fs.rename` 支持 Unicode 路径，并且不依赖原生 `os.rename`。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_rename_with_unicode_paths() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-rename-unicode");
+    let source_dir = temp_root.join("中文目录");
+    let source_path = source_dir.join("旧名字.lua");
+    let target_path = source_dir.join("新名字.lua");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&source_dir).expect("create unicode rename test dir");
+    fs::write(&source_path, "rename-unicode-ok").expect("write unicode rename source file");
+    let request = json!({
+        "code": "local renamed = vulcan.fs.rename(args.old_path, args.new_path); return tostring(renamed) .. '|' .. tostring(vulcan.fs.exists(args.old_path)) .. '|' .. tostring(vulcan.fs.exists(args.new_path))",
+        "args": {
+            "old_path": render_host_visible_path(&source_path),
+            "new_path": render_host_visible_path(&target_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should rename unicode path through vulcan.fs");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("true|false|true"));
+    assert!(!source_path.exists());
+    assert_eq!(
+        fs::read_to_string(&target_path).expect("read renamed unicode target file"),
+        "rename-unicode-ok"
+    );
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.mkdir` can create nested Unicode directories recursively.
+/// 验证 `vulcan.fs.mkdir` 能够递归创建嵌套 Unicode 目录。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_mkdir_recursive_with_unicode_paths() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-mkdir-unicode");
+    let target_path = temp_root.join("一级中文目录").join("二级中文目录");
+    let _ = fs::remove_dir_all(&temp_root);
+    let request = json!({
+        "code": "local created = vulcan.fs.mkdir(args.path, { recursive = true }); return tostring(created) .. '|' .. tostring(vulcan.fs.is_dir(args.path))",
+        "args": {
+            "path": render_host_visible_path(&target_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should create unicode directories through vulcan.fs");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("true|true"));
+    assert!(target_path.is_dir());
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.remove` can delete Unicode directory trees recursively.
+/// 验证 `vulcan.fs.remove` 能够递归删除 Unicode 目录树。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_remove_recursive_with_unicode_paths() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-remove-unicode");
+    let target_path = temp_root.join("待删除中文目录");
+    let nested_path = target_path.join("子目录");
+    let nested_file = nested_path.join("内容.lua");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&nested_path).expect("create unicode remove nested dir");
+    fs::write(&nested_file, "remove-unicode-ok").expect("write unicode remove nested file");
+    let request = json!({
+        "code": "local removed = vulcan.fs.remove(args.path, { recursive = true }); return tostring(removed) .. '|' .. tostring(vulcan.fs.exists(args.path))",
+        "args": {
+            "path": render_host_visible_path(&target_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should remove unicode directory through vulcan.fs");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("true|false"));
+    assert!(!target_path.exists());
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.remove` deletes one symlink entry itself instead of treating it as missing after the target disappears.
+/// 验证 `vulcan.fs.remove` 会删除符号链接条目本身，而不是在目标消失后把它误判为缺失。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_remove_for_dangling_symlink_entries() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-remove-dangling-symlink");
+    let target_dir = temp_root.join("符号链接目录");
+    let target_path = target_dir.join("目标文件.txt");
+    let link_path = target_dir.join("悬空链接.txt");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&target_dir).expect("create dangling symlink test dir");
+    fs::write(&target_path, "dangling-symlink-ok").expect("write dangling symlink target file");
+    if !create_test_file_symlink(&link_path, &target_path) {
+        let _ = fs::remove_dir_all(&temp_root);
+        return;
+    }
+    fs::remove_file(&target_path).expect("remove symlink target file");
+    let request = json!({
+        "code": "local removed = vulcan.fs.remove(args.path); return tostring(removed) .. '|' .. tostring(vulcan.fs.exists(args.path))",
+        "args": {
+            "path": render_host_visible_path(&link_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should remove dangling symlink entries through vulcan.fs");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("true|false"));
+    assert!(!link_path.exists());
+    let link_metadata =
+        fs::symlink_metadata(&link_path).expect_err("dangling symlink path should be gone");
+    assert_eq!(link_metadata.kind(), std::io::ErrorKind::NotFound);
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.stat` returns structured metadata for Unicode file paths.
+/// 验证 `vulcan.fs.stat` 会为 Unicode 文件路径返回结构化元数据。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_stat_with_unicode_paths() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-stat-unicode");
+    let target_dir = temp_root.join("中文信息目录");
+    let target_path = target_dir.join("信息.lua");
+    let file_content = "stat-file-size";
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&target_dir).expect("create unicode stat dir");
+    fs::write(&target_path, file_content).expect("write unicode stat file");
+    let request = json!({
+        "code": "return vulcan.json.encode(vulcan.fs.stat(args.path))",
+        "args": {
+            "path": render_host_visible_path(&target_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should stat unicode file through vulcan.fs");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("\"kind\":\"file\""));
+    assert!(result.contains("\"is_file\":true"));
+    assert!(result.contains("\"is_dir\":false"));
+    assert!(result.contains("\"is_symlink\":false"));
+    assert!(result.contains("\"readonly\":false"));
+    assert!(result.contains(&format!("\"size\":{}", file_content.len())));
+    assert!(result.contains("\"modified_unix_ms\":"));
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.copy` honors the explicit overwrite option on Unicode file paths.
+/// 验证 `vulcan.fs.copy` 会在 Unicode 文件路径上遵循显式 overwrite 选项。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_copy_with_overwrite_control() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-copy-unicode");
+    let source_dir = temp_root.join("复制目录");
+    let source_path = source_dir.join("源文件.lua");
+    let target_path = source_dir.join("目标文件.lua");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&source_dir).expect("create unicode copy dir");
+    fs::write(&source_path, "copy-source-content").expect("write unicode copy source");
+    let request = json!({
+        "code": "local first = vulcan.fs.copy(args.src_path, args.dst_path); local second = vulcan.fs.copy(args.src_path, args.dst_path); local third = vulcan.fs.copy(args.src_path, args.dst_path, { overwrite = true }); return tostring(first) .. '|' .. tostring(second) .. '|' .. tostring(third)",
+        "args": {
+            "src_path": render_host_visible_path(&source_path),
+            "dst_path": render_host_visible_path(&target_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should copy unicode file through vulcan.fs");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("true|false|true"));
+    assert_eq!(
+        fs::read_to_string(&target_path).expect("read copied unicode target file"),
+        "copy-source-content"
+    );
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.copy` treats one dangling destination symlink as an existing path entry for overwrite checks.
+/// 验证 `vulcan.fs.copy` 在 overwrite 校验中会把悬空目标符号链接当作已存在的路径条目处理。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_copy_with_dangling_symlink_destination() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-copy-dangling-symlink-target");
+    let source_dir = temp_root.join("复制目录");
+    let source_path = source_dir.join("源文件.lua");
+    let missing_target_path = source_dir.join("缺失目标.lua");
+    let dangling_link_path = source_dir.join("悬空目标链接.lua");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&source_dir).expect("create dangling symlink copy dir");
+    fs::write(&source_path, "copy-dangling-link-content")
+        .expect("write dangling symlink copy source");
+    fs::write(&missing_target_path, "stale-target").expect("write dangling symlink real target");
+    if !create_test_file_symlink(&dangling_link_path, &missing_target_path) {
+        let _ = fs::remove_dir_all(&temp_root);
+        return;
+    }
+    fs::remove_file(&missing_target_path).expect("remove dangling symlink real target");
+    let request = json!({
+        "code": "local first = vulcan.fs.copy(args.src_path, args.dst_path); local second = vulcan.fs.copy(args.src_path, args.dst_path, { overwrite = true }); return tostring(first) .. '|' .. tostring(second)",
+        "args": {
+            "src_path": render_host_visible_path(&source_path),
+            "dst_path": render_host_visible_path(&dangling_link_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should honor overwrite checks for dangling symlink destinations");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("false|true"));
+    assert!(!missing_target_path.exists());
+    let target_metadata =
+        fs::symlink_metadata(&dangling_link_path).expect("read copied dangling target metadata");
+    assert!(!target_metadata.file_type().is_symlink());
+    assert_eq!(
+        fs::read_to_string(&dangling_link_path).expect("read replaced dangling target file"),
+        "copy-dangling-link-content"
+    );
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.copy` can recursively copy Unicode directory trees and replace the destination tree on overwrite.
+/// 验证 `vulcan.fs.copy` 能递归复制 Unicode 目录树，并在 overwrite 时整体替换目标目录树。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_copy_directory_tree_with_overwrite_control() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-copy-tree-unicode");
+    let source_dir = temp_root.join("源目录");
+    let source_nested_dir = source_dir.join("一级子目录").join("二级子目录");
+    let target_dir = temp_root.join("目标目录");
+    let target_extra_file = target_dir.join("待替换.txt");
+    let source_root_file = source_dir.join("根文件.txt");
+    let source_nested_file = source_nested_dir.join("深层文件.lua");
+    let target_nested_file = target_dir
+        .join("一级子目录")
+        .join("二级子目录")
+        .join("深层文件.lua");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&source_nested_dir).expect("create unicode source tree");
+    fs::write(&source_root_file, "root-v1").expect("write unicode source root file");
+    fs::write(&source_nested_file, "nested-v1").expect("write unicode source nested file");
+    let request = json!({
+        "code": "local first = vulcan.fs.copy(args.src_path, args.dst_path); vulcan.fs.write(vulcan.path.join(args.dst_path, '待替换.txt'), 'stale-target'); vulcan.fs.write(vulcan.path.join(args.src_path, '根文件.txt'), 'root-v2'); vulcan.fs.write(vulcan.path.join(args.src_path, '一级子目录', '二级子目录', '深层文件.lua'), 'nested-v2'); vulcan.fs.write(vulcan.path.join(args.src_path, '新增文件.txt'), 'new-file'); local second = vulcan.fs.copy(args.src_path, args.dst_path); local third = vulcan.fs.copy(args.src_path, args.dst_path, { overwrite = true }); return tostring(first) .. '|' .. tostring(second) .. '|' .. tostring(third)",
+        "args": {
+            "src_path": render_host_visible_path(&source_dir),
+            "dst_path": render_host_visible_path(&target_dir)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should recursively copy unicode directory tree through vulcan.fs");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("true|false|true"));
+    assert_eq!(
+        fs::read_to_string(&target_dir.join("根文件.txt")).expect("read copied target root file"),
+        "root-v2"
+    );
+    assert_eq!(
+        fs::read_to_string(&target_nested_file).expect("read copied target nested file"),
+        "nested-v2"
+    );
+    assert_eq!(
+        fs::read_to_string(&target_dir.join("新增文件.txt")).expect("read copied target new file"),
+        "new-file"
+    );
+    assert!(!target_extra_file.exists());
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.copy` rejects directory targets nested under the source tree.
+/// 验证 `vulcan.fs.copy` 会拒绝把目录目标放到源目录树内部。
+#[test]
+fn execute_runlua_request_inline_rejects_vulcan_fs_copy_directory_into_own_child() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-copy-tree-nested-target");
+    let source_dir = temp_root.join("源目录");
+    let source_nested_dir = source_dir.join("子目录");
+    let target_dir = source_dir.join("复制目标");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&source_nested_dir).expect("create unicode nested source tree");
+    fs::write(source_nested_dir.join("内容.lua"), "nested-target-guard")
+        .expect("write unicode nested source file");
+    let request = json!({
+        "code": "return tostring(vulcan.fs.copy(args.src_path, args.dst_path, { overwrite = true }))",
+        "args": {
+            "src_path": render_host_visible_path(&source_dir),
+            "dst_path": render_host_visible_path(&target_dir)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect(
+            "inline runlua should render one failed result for nested vulcan.fs.copy destination",
+        );
+
+    assert!(result.contains("FAILED"));
+    assert!(result.contains("destination directory must not be inside source directory"));
+    assert!(!target_dir.exists());
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.copy` rejects one real directory source when the destination resolves back into that tree through one symlinked parent.
+/// 验证当目标通过父级符号链接回落到真实源目录树内部时，`vulcan.fs.copy` 会拒绝复制。
+#[test]
+fn execute_runlua_request_inline_rejects_vulcan_fs_copy_directory_via_symlinked_target_parent() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-copy-tree-symlink-parent");
+    let source_dir = temp_root.join("真实源目录");
+    let source_nested_dir = source_dir.join("子目录");
+    let alias_dir = temp_root.join("源目录别名");
+    let effective_target_dir = source_dir.join("复制目标");
+    let requested_target_dir = alias_dir.join("复制目标");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&source_nested_dir).expect("create symlinked parent source tree");
+    fs::write(source_nested_dir.join("内容.lua"), "symlink-parent-guard")
+        .expect("write symlinked parent source file");
+    if !create_test_dir_symlink(&alias_dir, &source_dir) {
+        let _ = fs::remove_dir_all(&temp_root);
+        return;
+    }
+    let request = json!({
+        "code": "return tostring(vulcan.fs.copy(args.src_path, args.dst_path, { overwrite = true }))",
+        "args": {
+            "src_path": render_host_visible_path(&source_dir),
+            "dst_path": render_host_visible_path(&requested_target_dir)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should reject symlinked-parent vulcan.fs.copy destination");
+
+    assert!(result.contains("FAILED"));
+    assert!(result.contains("destination directory must not be inside source directory"));
+    assert!(!effective_target_dir.exists());
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.fs.copy` rejects one symlinked source directory when the effective destination is nested under the real tree.
+/// 验证当符号链接源目录解析后真实目标落在同一目录树内部时，`vulcan.fs.copy` 会拒绝复制。
+#[test]
+fn execute_runlua_request_inline_rejects_vulcan_fs_copy_directory_via_symlinked_source_alias() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-copy-tree-symlink-source");
+    let source_dir = temp_root.join("真实源目录");
+    let source_nested_dir = source_dir.join("子目录");
+    let source_alias_dir = temp_root.join("源目录别名");
+    let target_dir = source_dir.join("复制目标");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&source_nested_dir).expect("create symlinked source tree");
+    fs::write(source_nested_dir.join("内容.lua"), "symlink-source-guard")
+        .expect("write symlinked source file");
+    if !create_test_dir_symlink(&source_alias_dir, &source_dir) {
+        let _ = fs::remove_dir_all(&temp_root);
+        return;
+    }
+    let request = json!({
+        "code": "return tostring(vulcan.fs.copy(args.src_path, args.dst_path, { overwrite = true }))",
+        "args": {
+            "src_path": render_host_visible_path(&source_alias_dir),
+            "dst_path": render_host_visible_path(&target_dir)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should reject symlinked-source vulcan.fs.copy destination");
+
+    assert!(result.contains("FAILED"));
+    assert!(result.contains("destination directory must not be inside source directory"));
+    assert!(!target_dir.exists());
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify missing `vulcan.fs.stat` targets return `nil` instead of a runtime error.
+/// 验证缺失的 `vulcan.fs.stat` 目标会返回 `nil`，而不是运行时错误。
+#[test]
+fn execute_runlua_request_inline_returns_nil_for_missing_vulcan_fs_stat() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-stat-missing");
+    let missing_path = temp_root.join("不存在目录").join("不存在.lua");
+    let request = json!({
+        "code": "return tostring(vulcan.fs.stat(args.path) == nil)",
+        "args": {
+            "path": render_host_visible_path(&missing_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should return nil for missing vulcan.fs.stat target");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("true"));
+}
+
+/// Verify `vulcan.fs.write_bytes` and `vulcan.fs.read_bytes` round-trip Base64 payloads on Unicode paths.
+/// 验证 `vulcan.fs.write_bytes` 与 `vulcan.fs.read_bytes` 能在 Unicode 路径上往返 Base64 载荷。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_fs_byte_roundtrip() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-fs-bytes-unicode");
+    let target_dir = temp_root.join("二进制目录");
+    let target_path = target_dir.join("原始数据.bin");
+    let payload = vec![0_u8, 1_u8, 2_u8, 0xff_u8, 0x80_u8, b'A'];
+    let payload_base64 = BASE64_STANDARD.encode(&payload);
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&target_dir).expect("create unicode bytes dir");
+    let request = json!({
+        "code": "local wrote = vulcan.fs.write_bytes(args.path, args.base64); local echoed = vulcan.fs.read_bytes(args.path); return tostring(wrote) .. '|' .. echoed",
+        "args": {
+            "path": render_host_visible_path(&target_path),
+            "base64": payload_base64
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should roundtrip base64 bytes through vulcan.fs");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains(&format!("true|{}", payload_base64)));
+    assert_eq!(
+        fs::read(&target_path).expect("read written unicode bytes file"),
+        payload
+    );
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.path.*` helpers expose stable basename, stem, extension, dirname, normalize, and absolute-path behavior.
+/// 验证 `vulcan.path.*` 辅助函数会暴露稳定的 basename、stem、extension、dirname、normalize 与绝对路径判断行为。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_path_helpers() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-path-helpers");
+    let target_dir = temp_root.join("中文目录");
+    let file_path = target_dir.join("example.test.lua");
+    let messy_path = target_dir
+        .join("子目录")
+        .join("..")
+        .join("example.test.lua");
+    let request = json!({
+        "code": "return vulcan.json.encode({ dirname = vulcan.path.dirname(args.file_path), basename = vulcan.path.basename(args.file_path), stem = vulcan.path.stem(args.file_path), extname = vulcan.path.extname(args.file_path), normalized = vulcan.path.normalize(args.messy_path), is_abs = vulcan.path.is_abs(args.file_path) })",
+        "args": {
+            "file_path": render_host_visible_path(&file_path),
+            "messy_path": render_host_visible_path(&messy_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should expose vulcan.path helpers");
+
+    let expected_dirname =
+        serde_json::to_string(&render_host_visible_path(&target_dir)).expect("json dirname");
+    let expected_normalized =
+        serde_json::to_string(&render_host_visible_path(&file_path)).expect("json normalized");
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains(&format!("\"dirname\":{}", expected_dirname)));
+    assert!(result.contains("\"basename\":\"example.test.lua\""));
+    assert!(result.contains("\"stem\":\"example.test\""));
+    assert!(result.contains("\"extname\":\".lua\""));
+    assert!(result.contains(&format!("\"normalized\":{}", expected_normalized)));
+    assert!(result.contains("\"is_abs\":true"));
+}
+
+/// Verify `vulcan.process.launchers` reports one default shell and one shell-name list that includes it.
+/// 验证 `vulcan.process.launchers` 会返回一个默认 shell，以及包含该默认值的 shell 名称列表。
+#[test]
+fn execute_runlua_request_inline_reports_vulcan_process_launchers_with_default_shell() {
+    let engine = make_runtime_test_engine();
+    let result = engine
+        .execute_runlua_request_json_inline(
+            r#"{"code":"return vulcan.json.encode(vulcan.process.launchers())"}"#,
+        )
+        .expect("inline runlua should expose vulcan.process.launchers");
+
+    assert!(result.contains("SUCCESS"));
+    #[cfg(windows)]
+    {
+        assert!(result.contains("\"default\":\"cmd\""));
+        assert!(result.contains("\"shells\":[\"cmd\""));
+    }
+    #[cfg(not(windows))]
+    {
+        assert!(result.contains("\"default\":\"sh\""));
+        assert!(result.contains("\"shells\":[\"sh\""));
+    }
+}
+
+/// Verify `vulcan.process.launchers` discovers PATH-provided Unix-like shell launchers such as `bash` and `zsh`.
+/// 验证 `vulcan.process.launchers` 会发现通过 PATH 提供的类 Unix shell 启动器，例如 `bash` 与 `zsh`。
+#[test]
+fn execute_runlua_request_inline_detects_vulcan_process_launchers_from_path() {
+    let _env_guard = process_env_test_guard();
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-process-launchers-path");
+    let target_dir = temp_root.join("path-bin");
+    #[cfg(windows)]
+    let bash_launcher_path = target_dir.join("bash.cmd");
+    #[cfg(not(windows))]
+    let bash_launcher_path = target_dir.join("bash");
+    #[cfg(windows)]
+    let zsh_launcher_path = target_dir.join("zsh.cmd");
+    #[cfg(not(windows))]
+    let zsh_launcher_path = target_dir.join("zsh");
+    let _restore_guard = {
+        #[cfg(windows)]
+        {
+            TestEnvRestoreGuard::capture("PATH").and_capture("PATHEXT")
+        }
+        #[cfg(not(windows))]
+        {
+            TestEnvRestoreGuard::capture("PATH")
+        }
+    };
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&target_dir).expect("create launcher discovery path dir");
+    #[cfg(windows)]
+    fs::write(&bash_launcher_path, "@echo off\r\necho fake-bash\r\n")
+        .expect("write fake bash launcher");
+    #[cfg(not(windows))]
+    fs::write(&bash_launcher_path, "#!/bin/sh\nprintf fake-bash\n")
+        .expect("write fake bash launcher");
+    #[cfg(windows)]
+    fs::write(&zsh_launcher_path, "@echo off\r\necho fake-zsh\r\n")
+        .expect("write fake zsh launcher");
+    #[cfg(not(windows))]
+    fs::write(&zsh_launcher_path, "#!/bin/sh\nprintf fake-zsh\n").expect("write fake zsh launcher");
+    mark_test_program_executable(&bash_launcher_path);
+    mark_test_program_executable(&zsh_launcher_path);
+    unsafe { std::env::set_var("PATH", target_dir.as_os_str()) };
+    #[cfg(windows)]
+    unsafe {
+        std::env::set_var("PATHEXT", ".CMD;.EXE;.BAT;.COM");
+    }
+    let result = engine
+        .execute_runlua_request_json_inline(
+            r#"{"code":"return vulcan.json.encode(vulcan.process.launchers())"}"#,
+        )
+        .expect("inline runlua should discover PATH-provided process launchers");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("\"bash\""));
+    assert!(result.contains("\"zsh\""));
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify shell launchers build stable command-carrier argument sequences for command mode.
+/// 验证各类 shell 启动器会为命令模式构造稳定的命令承载参数序列。
+#[test]
+fn process_exec_shell_launchers_build_expected_command_args() {
+    let command_text = "printf launcher-check";
+    assert_eq!(
+        ExecShellLauncher::Cmd.command_args(command_text),
+        vec![String::from("/C"), command_text.to_string()]
+    );
+    assert_eq!(
+        ExecShellLauncher::Pwsh.command_args(command_text),
+        vec![
+            String::from("-NoProfile"),
+            String::from("-Command"),
+            command_text.to_string(),
+        ]
+    );
+    assert_eq!(
+        ExecShellLauncher::Powershell.command_args(command_text),
+        vec![
+            String::from("-NoProfile"),
+            String::from("-Command"),
+            command_text.to_string(),
+        ]
+    );
+    assert_eq!(
+        ExecShellLauncher::Bash.command_args(command_text),
+        vec![String::from("-lc"), command_text.to_string()]
+    );
+    assert_eq!(
+        ExecShellLauncher::Zsh.command_args(command_text),
+        vec![String::from("-lc"), command_text.to_string()]
+    );
+    assert_eq!(
+        ExecShellLauncher::Sh.command_args(command_text),
+        vec![String::from("-c"), command_text.to_string()]
+    );
+}
+
+/// Verify `vulcan.process.exec` accepts one shell name taken directly from `vulcan.process.launchers().default`.
+/// 验证 `vulcan.process.exec` 接受直接来自 `vulcan.process.launchers().default` 的 shell 名称。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_process_exec_with_explicit_shell_name() {
+    let engine = make_runtime_test_engine();
+    let result = engine
+        .execute_runlua_request_json_inline(
+            r#"{"code":"local launchers = vulcan.process.launchers(); local command; if launchers.default == 'cmd' then command = 'echo explicit-shell-ok' else command = 'printf explicit-shell-ok' end; local executed = vulcan.process.exec({ command = command, shell = launchers.default, encoding = 'utf-8' }); return vulcan.json.encode({ shell = launchers.default, success = executed.success, stdout = executed.stdout })"}"#,
+        )
+        .expect("inline runlua should execute process.exec with one explicit shell name");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("\"success\":true"));
+    assert!(result.contains("explicit-shell-ok"));
+}
+
+/// Verify `vulcan.process.exec` can spawn one PATH-discovered Windows shell launcher using its resolved executable path.
+/// 验证 `vulcan.process.exec` 能通过解析后的实际可执行路径启动一个由 PATH 发现的 Windows shell 启动器。
+#[cfg(windows)]
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_process_exec_with_path_resolved_shell_launcher() {
+    let _env_guard = process_env_test_guard();
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-process-exec-shell-path");
+    let target_dir = temp_root.join("path-bin");
+    let bash_launcher_path = target_dir.join("bash.cmd");
+    let _restore_guard = TestEnvRestoreGuard::capture("PATH").and_capture("PATHEXT");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&target_dir).expect("create shell launcher path dir");
+    fs::write(
+        &bash_launcher_path,
+        "@echo off\r\necho resolved-shell-ok\r\n",
+    )
+    .expect("write path-resolved bash launcher");
+    unsafe { std::env::set_var("PATH", target_dir.as_os_str()) };
+    unsafe {
+        std::env::set_var("PATHEXT", ".CMD;.EXE;.BAT;.COM");
+    }
+    let result = engine
+        .execute_runlua_request_json_inline(
+            r#"{"code":"local executed = vulcan.process.exec({ command = 'echo ignored-command-text', shell = 'bash', encoding = 'utf-8' }); return vulcan.json.encode({ success = executed.success, stdout = executed.stdout })"}"#,
+        )
+        .expect("inline runlua should execute process.exec through one PATH-resolved shell launcher");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("\"success\":true"));
+    assert!(result.contains("resolved-shell-ok"));
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify default Windows shell execution keeps the native `cmd.exe` launch semantics instead of preferring one PATH-shadowed copy.
+/// 验证 Windows 默认 shell 执行会保留原生 `cmd.exe` 启动语义，而不是优先使用 PATH 中的同名影子副本。
+#[cfg(windows)]
+#[test]
+fn execute_runlua_request_inline_keeps_default_shell_outside_path_shadowing() {
+    let _env_guard = process_env_test_guard();
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-process-exec-default-shell-shadow");
+    let target_dir = temp_root.join("path-bin");
+    let shadow_cmd_path = target_dir.join("cmd.exe");
+    let _restore_guard = TestEnvRestoreGuard::capture("PATH");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&target_dir).expect("create default shell shadow path dir");
+    fs::write(&shadow_cmd_path, "@echo off\r\necho fake-shadow-cmd\r\n")
+        .expect("write shadow cmd launcher");
+    unsafe { std::env::set_var("PATH", target_dir.as_os_str()) };
+    let result = engine
+        .execute_runlua_request_json_inline(
+            r#"{"code":"local executed = vulcan.process.exec({ command = 'echo default-shell-ok', encoding = 'utf-8' }); return vulcan.json.encode({ success = executed.success, stdout = executed.stdout })"}"#,
+        )
+        .expect("inline runlua should keep native default shell execution semantics");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("\"success\":true"));
+    assert!(result.contains("default-shell-ok"));
+    assert!(!result.contains("fake-shadow-cmd"));
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.process.exec` rejects shell-name selection when Lua tries to use `program` mode.
+/// 验证当 Lua 试图使用 `program` 模式时，`vulcan.process.exec` 会拒绝 shell 名称选择。
+#[test]
+fn execute_runlua_request_inline_rejects_vulcan_process_exec_shell_name_in_program_mode() {
+    let engine = make_runtime_test_engine();
+    let result = engine
+        .execute_runlua_request_json_inline(
+            r#"{"code":"local launchers = vulcan.process.launchers(); local ok, err = pcall(function() return vulcan.process.exec({ program = 'demo-shell-mode-program', shell = launchers.default }) end); return tostring(ok), tostring(err)"}"#,
+        )
+        .expect("inline runlua should surface one program-mode shell-name validation error");
+
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains("false"));
+    assert!(result.contains("requires command mode"));
+}
+
+/// Verify `vulcan.process.which` resolves one explicit Unicode path without shelling out.
+/// 验证 `vulcan.process.which` 能在不借助 shell 的情况下解析单个显式 Unicode 路径。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_process_which_for_explicit_path() {
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-process-which-explicit");
+    let target_dir = temp_root.join("查找目录");
+    #[cfg(windows)]
+    let program_path = target_dir.join("测试工具.cmd");
+    #[cfg(not(windows))]
+    let program_path = target_dir.join("测试工具");
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&target_dir).expect("create process which explicit dir");
+    fs::write(&program_path, "echo explicit-process-which")
+        .expect("write process which explicit program");
+    mark_test_program_executable(&program_path);
+    let request = json!({
+        "code": "return vulcan.json.encode({ found = vulcan.process.which(args.program) })",
+        "args": {
+            "program": render_host_visible_path(&program_path)
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should resolve explicit process.which path");
+
+    let expected_found = serde_json::to_string(&render_host_visible_path(&program_path))
+        .expect("json explicit found");
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains(&format!("\"found\":{}", expected_found)));
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify `vulcan.process.which` searches PATH and honors PATHEXT-style resolution on the host.
+/// 验证 `vulcan.process.which` 会搜索 PATH，并在宿主上遵循 PATHEXT 风格的解析规则。
+#[test]
+fn execute_runlua_request_inline_supports_vulcan_process_which_via_path_search() {
+    let _env_guard = process_env_test_guard();
+    let engine = make_runtime_test_engine();
+    let temp_root = make_temp_runtime_root("vulcan-process-which-path");
+    let target_dir = temp_root.join("path-bin");
+    #[cfg(windows)]
+    let program_name = "demo-which-tool";
+    #[cfg(not(windows))]
+    let program_name = "demo-which-tool";
+    #[cfg(windows)]
+    let program_path = target_dir.join("demo-which-tool.cmd");
+    #[cfg(not(windows))]
+    let program_path = target_dir.join("demo-which-tool");
+    let _restore_guard = {
+        #[cfg(windows)]
+        {
+            TestEnvRestoreGuard::capture("PATH").and_capture("PATHEXT")
+        }
+        #[cfg(not(windows))]
+        {
+            TestEnvRestoreGuard::capture("PATH")
+        }
+    };
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(&target_dir).expect("create process which path dir");
+    fs::write(&program_path, "echo path-process-which").expect("write process which path program");
+    mark_test_program_executable(&program_path);
+    unsafe { std::env::set_var("PATH", target_dir.as_os_str()) };
+    #[cfg(windows)]
+    unsafe {
+        std::env::set_var("PATHEXT", ".CMD;.EXE;.BAT;.COM");
+    }
+    let request = json!({
+        "code": "return vulcan.json.encode({ found = vulcan.process.which(args.program) })",
+        "args": {
+            "program": program_name
+        }
+    });
+
+    let result = engine
+        .execute_runlua_request_json_inline(&request.to_string())
+        .expect("inline runlua should resolve process.which through PATH search");
+
+    let expected_found =
+        serde_json::to_string(&render_host_visible_path(&program_path)).expect("json path found");
+    assert!(result.contains("SUCCESS"));
+    assert!(result.contains(&format!("\"found\":{}", expected_found)));
+    let _ = fs::remove_dir_all(&temp_root);
 }
 
 /// Verify isolated runlua redirects Lua `io.popen` to the Rust-backed read implementation.

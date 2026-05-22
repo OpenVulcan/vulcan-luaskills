@@ -215,8 +215,77 @@ pub(super) fn require_table_arg(
 /// Execution mode supported by `vulcan.exec`.
 /// `vulcan.exec` 支持的执行模式。
 pub(super) enum ExecMode {
-    Shell { command: String },
-    Program { program: String, args: Vec<String> },
+    Shell {
+        command: String,
+        launcher: ExecShellLauncher,
+    },
+    Program {
+        program: String,
+        args: Vec<String>,
+    },
+}
+
+/// Stable shell launcher identifiers supported by `vulcan.process.exec`.
+/// `vulcan.process.exec` 支持的稳定 shell 启动器标识。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ExecShellLauncher {
+    Cmd,
+    Pwsh,
+    Powershell,
+    Bash,
+    Zsh,
+    Sh,
+}
+
+impl ExecShellLauncher {
+    /// Return the stable Lua-visible shell parameter value for one launcher.
+    /// 返回单个启动器对 Lua 可见的稳定 shell 参数值。
+    fn id(self) -> &'static str {
+        match self {
+            Self::Cmd => "cmd",
+            Self::Pwsh => "pwsh",
+            Self::Powershell => "powershell",
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Sh => "sh",
+        }
+    }
+
+    /// Return the executable program name used to spawn one launcher.
+    /// 返回启动单个启动器时使用的可执行程序名。
+    fn program(self) -> &'static str {
+        match self {
+            Self::Cmd => "cmd.exe",
+            Self::Pwsh => "pwsh",
+            Self::Powershell => "powershell",
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Sh => "sh",
+        }
+    }
+
+    /// Return the command arguments consumed by one launcher for inline command text.
+    /// 返回单个启动器承载内联命令文本时使用的命令参数序列。
+    pub(super) fn command_args(self, command_text: &str) -> Vec<String> {
+        match self {
+            Self::Cmd => vec![String::from("/C"), command_text.to_string()],
+            Self::Pwsh | Self::Powershell => vec![
+                String::from("-NoProfile"),
+                String::from("-Command"),
+                command_text.to_string(),
+            ],
+            Self::Bash | Self::Zsh => vec![String::from("-lc"), command_text.to_string()],
+            Self::Sh => vec![String::from("-c"), command_text.to_string()],
+        }
+    }
+}
+
+/// Parsed `shell` field selection used by one process-exec request.
+/// 单个 process-exec 请求中解析得到的 `shell` 字段选择结果。
+enum ExecShellSetting {
+    UseDefault,
+    Disabled,
+    Selected(ExecShellLauncher),
 }
 
 /// Parsed process execution request from Lua.
@@ -339,19 +408,165 @@ fn table_get_optional_string_field(
     }
 }
 
-/// Read an optional boolean field from a Lua table.
-/// 从 Lua table 中读取可选布尔字段。
-fn table_get_optional_bool_field(
+/// Return the platform-default shell launcher used when Lua does not choose one explicitly.
+/// 返回当 Lua 未显式选择时使用的平台默认 shell 启动器。
+#[cfg(windows)]
+fn default_exec_shell_launcher() -> ExecShellLauncher {
+    ExecShellLauncher::Cmd
+}
+
+/// Return the platform-default shell launcher used when Lua does not choose one explicitly.
+/// 返回当 Lua 未显式选择时使用的平台默认 shell 启动器。
+#[cfg(not(windows))]
+fn default_exec_shell_launcher() -> ExecShellLauncher {
+    ExecShellLauncher::Sh
+}
+
+/// Return the stable default shell parameter name visible to Lua skills.
+/// 返回对 Lua skill 可见的稳定默认 shell 参数名。
+pub(super) fn default_exec_shell_name() -> &'static str {
+    default_exec_shell_launcher().id()
+}
+
+/// Return the candidate shell launchers that the runtime may advertise on the current platform.
+/// 返回运行时在当前平台上可能向外暴露的 shell 启动器候选集合。
+#[cfg(windows)]
+fn candidate_exec_shell_launchers() -> &'static [ExecShellLauncher] {
+    &[
+        ExecShellLauncher::Cmd,
+        ExecShellLauncher::Pwsh,
+        ExecShellLauncher::Powershell,
+        ExecShellLauncher::Bash,
+        ExecShellLauncher::Sh,
+        ExecShellLauncher::Zsh,
+    ]
+}
+
+/// Return the candidate shell launchers that the runtime may advertise on the current platform.
+/// 返回运行时在当前平台上可能向外暴露的 shell 启动器候选集合。
+#[cfg(not(windows))]
+fn candidate_exec_shell_launchers() -> &'static [ExecShellLauncher] {
+    &[
+        ExecShellLauncher::Sh,
+        ExecShellLauncher::Bash,
+        ExecShellLauncher::Zsh,
+        ExecShellLauncher::Pwsh,
+        ExecShellLauncher::Powershell,
+    ]
+}
+
+/// Check whether one shell launcher should be advertised as available on the current host.
+/// 检查单个 shell 启动器是否应被标记为当前宿主可用。
+fn is_exec_shell_launcher_available(launcher: ExecShellLauncher) -> bool {
+    if launcher == default_exec_shell_launcher() {
+        return true;
+    }
+    resolve_vulcan_process_which(launcher.program())
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+/// Resolve the concrete executable path used to spawn one shell launcher.
+/// 解析启动单个 shell 启动器时应使用的实际可执行路径。
+fn resolve_exec_shell_launcher_program(
+    launcher: ExecShellLauncher,
+) -> Result<std::ffi::OsString, String> {
+    if launcher == default_exec_shell_launcher() {
+        return Ok(std::ffi::OsString::from(launcher.program()));
+    }
+    match resolve_vulcan_process_which(launcher.program()) {
+        Ok(Some(found)) => Ok(found.into_os_string()),
+        Ok(None) => Err(format!(
+            "process.exec: shell `{}` is not available in the current host",
+            launcher.id()
+        )),
+        Err(error) => Err(format!(
+            "process.exec: failed to resolve shell `{}`: {error}",
+            launcher.id()
+        )),
+    }
+}
+
+/// Return the ordered shell parameter names supported by the current runtime host.
+/// 返回当前运行时宿主支持的有序 shell 参数名列表。
+pub(super) fn supported_exec_shell_names() -> Vec<&'static str> {
+    let mut supported = Vec::new();
+    for launcher in candidate_exec_shell_launchers().iter().copied() {
+        if is_exec_shell_launcher_available(launcher) && !supported.contains(&launcher.id()) {
+            supported.push(launcher.id());
+        }
+    }
+    supported
+}
+
+/// Render the currently supported shell parameter names into one stable comma-separated string.
+/// 将当前支持的 shell 参数名渲染为稳定的逗号分隔字符串。
+fn render_supported_exec_shell_names() -> String {
+    supported_exec_shell_names().join(", ")
+}
+
+/// Parse one normalized shell parameter value into its launcher descriptor.
+/// 将单个规范化后的 shell 参数值解析为对应的启动器描述。
+fn parse_exec_shell_launcher_id(value: &str) -> Option<ExecShellLauncher> {
+    match value {
+        "cmd" => Some(ExecShellLauncher::Cmd),
+        "pwsh" => Some(ExecShellLauncher::Pwsh),
+        "powershell" => Some(ExecShellLauncher::Powershell),
+        "bash" => Some(ExecShellLauncher::Bash),
+        "zsh" => Some(ExecShellLauncher::Zsh),
+        "sh" => Some(ExecShellLauncher::Sh),
+        _ => None,
+    }
+}
+
+/// Resolve one Lua-provided `shell` string into one supported launcher or emit one actionable validation error.
+/// 将 Lua 提供的 `shell` 字符串解析为受支持的启动器，或抛出可操作的校验错误。
+fn resolve_exec_shell_launcher_from_label(
+    label: &str,
+    fn_name: &str,
+) -> mlua::Result<ExecShellLauncher> {
+    let normalized = label.trim().to_ascii_lowercase();
+    let Some(launcher) = parse_exec_shell_launcher_id(&normalized) else {
+        return Err(mlua::Error::runtime(format!(
+            "{fn_name}: shell must be one of: {}",
+            render_supported_exec_shell_names()
+        )));
+    };
+    if !supported_exec_shell_names().contains(&launcher.id()) {
+        return Err(mlua::Error::runtime(format!(
+            "{fn_name}: shell `{}` is not available in the current host; available shell values: {}",
+            launcher.id(),
+            render_supported_exec_shell_names()
+        )));
+    }
+    Ok(launcher)
+}
+
+/// Read one optional `shell` field that accepts either boolean compatibility flags or stable launcher names.
+/// 读取可选的 `shell` 字段，该字段既接受兼容布尔值，也接受稳定的启动器名称。
+fn table_get_optional_shell_field(
     table: &Table,
     fn_name: &str,
     field_name: &str,
-) -> mlua::Result<Option<bool>> {
+) -> mlua::Result<Option<ExecShellSetting>> {
     let value: LuaValue = table.get(field_name)?;
     match value {
         LuaValue::Nil => Ok(None),
-        LuaValue::Boolean(flag) => Ok(Some(flag)),
+        LuaValue::Boolean(true) => Ok(Some(ExecShellSetting::UseDefault)),
+        LuaValue::Boolean(false) => Ok(Some(ExecShellSetting::Disabled)),
+        LuaValue::String(text) => {
+            let shell_label = text.to_str().map_err(|_| {
+                mlua::Error::runtime(format!(
+                    "{fn_name}: {field_name} must be a valid UTF-8 string when provided"
+                ))
+            })?;
+            Ok(Some(ExecShellSetting::Selected(
+                resolve_exec_shell_launcher_from_label(shell_label.as_ref(), fn_name)?,
+            )))
+        }
         other => Err(mlua::Error::runtime(format!(
-            "{fn_name}: {field_name} must be a boolean when provided: {}",
+            "{fn_name}: {field_name} must be a boolean or string when provided: {}",
             lua_value_type_name(&other)
         ))),
     }
@@ -486,6 +701,7 @@ pub(super) fn parse_exec_request(
                     "command",
                     false,
                 )?,
+                launcher: default_exec_shell_launcher(),
             },
             cwd: None,
             env: HashMap::new(),
@@ -503,7 +719,7 @@ pub(super) fn parse_exec_request(
             let env = table_get_string_map_field(&spec, fn_name, "env")?;
             let stdin = table_get_optional_string_field(&spec, fn_name, "stdin", true)?;
             let timeout_ms = table_get_optional_timeout_field(&spec, fn_name, "timeout_ms")?;
-            let shell_override = table_get_optional_bool_field(&spec, fn_name, "shell")?;
+            let shell_setting = table_get_optional_shell_field(&spec, fn_name, "shell")?;
             let encoding = table_get_optional_encoding_field(&spec, fn_name, "encoding")?
                 .unwrap_or(default_encoding);
             let stdout_encoding =
@@ -522,7 +738,7 @@ pub(super) fn parse_exec_request(
 
             let mode = match (command, program) {
                 (Some(command_text), None) => {
-                    if matches!(shell_override, Some(false)) {
+                    if matches!(shell_setting, Some(ExecShellSetting::Disabled)) {
                         return Err(mlua::Error::runtime(format!(
                             "{fn_name}: shell=false cannot be used with command mode"
                         )));
@@ -532,15 +748,29 @@ pub(super) fn parse_exec_request(
                             "{fn_name}: args is only supported with program mode"
                         )));
                     }
+                    let launcher = match shell_setting {
+                        Some(ExecShellSetting::Selected(launcher)) => launcher,
+                        _ => default_exec_shell_launcher(),
+                    };
                     ExecMode::Shell {
                         command: command_text,
+                        launcher,
                     }
                 }
                 (None, Some(program_path)) => {
-                    if matches!(shell_override, Some(true)) {
-                        return Err(mlua::Error::runtime(format!(
-                            "{fn_name}: shell=true requires command mode"
-                        )));
+                    match shell_setting {
+                        Some(ExecShellSetting::UseDefault) => {
+                            return Err(mlua::Error::runtime(format!(
+                                "{fn_name}: shell=true requires command mode"
+                            )));
+                        }
+                        Some(ExecShellSetting::Selected(launcher)) => {
+                            return Err(mlua::Error::runtime(format!(
+                                "{fn_name}: shell=\"{}\" requires command mode",
+                                launcher.id()
+                            )));
+                        }
+                        _ => {}
                     }
                     ExecMode::Program {
                         program: program_path,
@@ -575,20 +805,6 @@ pub(super) fn parse_exec_request(
             lua_value_type_name(&other)
         ))),
     }
-}
-
-/// Return the default shell program and command flag for the current platform.
-/// 返回当前平台默认的 shell 程序及命令参数开关。
-#[cfg(windows)]
-fn default_shell_launcher() -> (&'static str, &'static str) {
-    ("cmd.exe", "/C")
-}
-
-/// Return the default shell program and command flag for the current platform.
-/// 返回当前平台默认的 shell 程序及命令参数开关。
-#[cfg(not(windows))]
-fn default_shell_launcher() -> (&'static str, &'static str) {
-    ("sh", "-c")
 }
 
 /// Spawn a background reader for a child process output pipe as raw bytes.
@@ -651,10 +867,13 @@ pub(super) fn execute_exec_request(request: ExecRequest) -> ExecResult {
     };
 
     let mut command = match &request.mode {
-        ExecMode::Shell { command } => {
-            let (shell_program, shell_flag) = default_shell_launcher();
+        ExecMode::Shell { command, launcher } => {
+            let shell_program = match resolve_exec_shell_launcher_program(*launcher) {
+                Ok(program) => program,
+                Err(error_text) => return exec_error_result(error_text, &request, false),
+            };
             let mut process = Command::new(shell_program);
-            process.arg(shell_flag).arg(command);
+            process.args(launcher.command_args(command));
             process
         }
         ExecMode::Program { program, args } => {

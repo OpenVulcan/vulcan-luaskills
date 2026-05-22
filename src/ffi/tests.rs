@@ -906,13 +906,18 @@ fn ffi_list_entries_json_exposes_resolved_input_schema() {
         )))
     };
     assert_eq!(listed["ok"], true);
-    let result = listed["result"].as_array().expect("schema list result array");
+    let result = listed["result"]
+        .as_array()
+        .expect("schema list result array");
     let entry = result
         .iter()
         .find(|item| item["local_name"] == "inspect")
         .expect("inspect schema entry");
     assert_eq!(entry["input_schema"]["type"], "object");
-    assert_eq!(entry["input_schema"]["required"], serde_json::json!(["nodes"]));
+    assert_eq!(
+        entry["input_schema"]["required"],
+        serde_json::json!(["nodes"])
+    );
     assert_eq!(
         entry["input_schema"]["properties"]["nodes"]["items"]["properties"]["file"]["type"],
         "string"

@@ -178,49 +178,125 @@ Skill 作者规则：
 
 ## 3.1 托管 IO 与进程编码
 
-`vulcan.io` 是 Rust 宿主管理的 IO 接口，优先用于 AI 生成代码与 `luaexec` 场景。它支持：
+`vulcan.io` 是 Rust 宿主管理的 IO 接口，优先用于 AI 生成代码、跨平台文件读写，以及 `luaexec` 隔离执行环境。对于 Windows 中文路径、编码控制、`io.popen` 输出解码这类场景，**应优先使用 `vulcan.io`，不要回退到原生 `io` / `os`。**
 
-- `vulcan.io.open(path, mode, options)`
-- `vulcan.io.read_text(path, options)`
-- `vulcan.io.write_text(path, content, options)`
-- `vulcan.io.append_text(path, content, options)`
-- `vulcan.io.lines(path, options)`
-- `vulcan.io.popen(command, mode, options)`
-- `vulcan.io.tmpfile()`
+### 3.1.1 `vulcan.io.*` API 参考
 
-`options.encoding` 可使用 `utf-8`、`system`、`oem`、`gbk`、`gb18030`、`latin1`、`base64`。Windows 下 `system` 使用 ANSI 代码页，`oem` 使用控制台 OEM 代码页。
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.io.open(path, mode?, options?)` | `path: string`；`mode?: string`，默认 `r`；`options?: string \| { encoding?: string }` | 托管文件句柄 | 支持 `r`、`w`、`a`、`rb`、`wb`、`ab`、`r+`、`w+`、`a+` 及其二进制组合 |
+| `vulcan.io.read_text(path, options?)` | `path: string`；`options?: string \| { encoding?: string }` | `string` | 一次性读取整个文本文件 |
+| `vulcan.io.write_text(path, content, options?)` | `path: string`；`content: string`；`options?: string \| { encoding?: string }` | `true` | 覆盖写入整个文本文件；不会自动创建父目录 |
+| `vulcan.io.append_text(path, content, options?)` | 同上 | `true` | 以追加模式写入文本 |
+| `vulcan.io.lines(path, options?)` | `path: string`；`options?: string \| { encoding?: string }` | 迭代器函数 | 逐行返回文本内容，EOF 时返回 `nil` |
+| `vulcan.io.popen(command, mode?, options?)` | `command: string`；`mode?: string`，默认 `r`；`options?: string \| { encoding?: string, timeout_ms?: integer }` | 托管文件句柄 | 当前仅支持读取模式；写入模式尚未实现 |
+| `vulcan.io.tmpfile()` | 无 | 托管文件句柄 | 返回临时文件句柄；关闭时自动删除底层临时文件 |
 
-`vulcan.io.open` 与托管 `io.open` 兼容层支持 `r`、`w`、`a`、二进制后缀，以及 `r+`、`w+`、`a+` 这类更新模式。`io.tmpfile()` 会返回一个支持更新读写的托管句柄，并在关闭时删除底层临时文件。
+### 3.1.2 托管文件句柄方法
 
-当调用方省略编码选项时，运行时会优先使用宿主配置的 `LuaRuntimeHostOptions.default_text_encoding`。如果宿主未配置，则 Windows 默认使用 `system`，其他平台默认使用 `utf-8`。
+`vulcan.io.open(...)`、`vulcan.io.popen(...)`、`vulcan.io.tmpfile()` 返回的都是同一类托管句柄，支持以下方法：
 
-在 `vulcan.runtime.lua.exec(...)` 隔离环境中，`io.open`、`io.input`、`io.output`、`io.read`、`io.write`、`io.tmpfile`、`io.popen` 等常用 `io.*` 调用会被托管兼容层接管，避免 LuaJIT 原生 `io.popen` 造成乱码或不可控进程句柄。宿主可以通过 `LuaRuntimeHostOptions.capabilities.enable_managed_io_compat = false` 关闭这层全局 `io` 替换；关闭后 `vulcan.io` 仍然可用。
+| 方法 | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `file:read(...)` | 无参数时等价于按行读取；支持 `"*a"` / `"a"`、`"*l"` / `"l"`、正整数长度 | `string`、`nil`，或多返回值 | 文本模式下返回解码后的 UTF-8 字符串；二进制模式下返回原始 Lua 字节串 |
+| `file:write(...)` | 一个或多个 Lua 标量值 | `true` | 文本模式会按编码写入；二进制模式按原始字节写入 |
+| `file:flush()` | 无 | `true` | 刷新当前缓冲写入 |
+| `file:close()` | 无 | `boolean` | 普通文件一般返回 `true`；`popen` 句柄会返回子进程是否成功退出 |
+| `file:seek(whence?, offset?)` | `whence?: "set" \| "cur" \| "end"`；`offset?: integer` | `integer` | 返回新的游标位置；默认 `whence = "cur"`、`offset = 0` |
+| `file:lines()` | 无 | 迭代器函数 | 从当前游标开始逐行迭代，直到 EOF 返回 `nil` |
+| `file:setvbuf(...)` | 任意参数 | `true` | 仅做兼容占位；当前是 no-op |
 
-`vulcan.process.exec(spec)` 也支持编码字段：
+补充规则：
+
+- `file:read()` 在无参数时读取一行，不带末尾换行。
+- `file:read(0)` 会返回空字符串，不会返回 `nil`。
+- `file:read(n)` 在到达 EOF 后返回 `nil`。
+- `file:seek(...)` 超过文件末尾会被夹到当前缓冲末尾；向前越界会直接报错。
+- 文本模式下，传给 `file:write(...)` 的字符串必须是合法 UTF-8；如果你需要保留原始字节，应使用二进制模式，或改走 `vulcan.fs.read_bytes/write_bytes`。
+
+### 3.1.3 编码选项
+
+`options.encoding` 或 `encoding` 字段当前支持：
+
+| 值 | 说明 |
+| --- | --- |
+| `utf-8` | 标准 UTF-8 文本 |
+| `system` | 宿主系统默认文本编码；Windows 下对应 ANSI 代码页 |
+| `oem` | Windows 控制台 OEM 代码页 |
+| `gbk` | GBK 编码 |
+| `gb18030` | GB18030 编码 |
+| `latin1` | Latin-1 / ISO-8859-1 |
+| `base64` | 以 Base64 文本保真传输原始字节 |
+
+默认编码选择规则：
+
+- 优先使用宿主配置的 `LuaRuntimeHostOptions.default_text_encoding`
+- 若宿主未配置：
+  - Windows 默认 `system`
+  - 其他平台默认 `utf-8`
+
+### 3.1.4 托管 `io.*` 兼容层
+
+在 `vulcan.runtime.lua.exec(...)` 隔离环境中，常见 `io.*` 调用会被托管兼容层接管，包括：
+
+- `io.open`
+- `io.input`
+- `io.output`
+- `io.read`
+- `io.write`
+- `io.flush`
+- `io.close`
+- `io.lines`
+- `io.popen`
+- `io.tmpfile`
+- `io.type`
+
+兼容层的重要行为：
+
+- `io.input(path_or_file)` / `io.output(path_or_file)` 可以设置默认输入输出句柄。
+- 如果没有显式 `io.output(...)`，`io.write(...)` 会把内容写到运行时日志，而不是直接丢失。
+- `io.close()` 在无参数时会关闭当前默认输出句柄。
+- `io.type(value)` 返回 `"file"`、`"closed file"` 或 `"nil"`。
+- 宿主可通过 `LuaRuntimeHostOptions.capabilities.enable_managed_io_compat = false` 关闭这层全局替换；即使关闭，`vulcan.io` 本身仍然可用。
+
+### 3.1.5 示例
+
+文本读取：
 
 ```lua
-local result = vulcan.process.exec({
-    program = "cmd",
-    args = { "/C", "dir" },
+local text = vulcan.io.read_text("D:/data/example.txt", {
+    encoding = "utf-8",
+})
+
+return text
+```
+
+二进制句柄读取：
+
+```lua
+local file = vulcan.io.open("D:/data/archive.bin", "rb")
+local bytes = file:read("*a")
+file:close()
+
+-- `bytes` 是 Lua 字节串，不保证是 UTF-8。
+return #bytes
+```
+
+托管 `popen`：
+
+```lua
+local file = vulcan.io.popen("cmd /C dir", "r", {
     encoding = "oem",
     timeout_ms = 3000,
 })
 
-return result.stdout, result.stdout_encoding, result.stdout_lossy
-```
+local output = file:read("*a")
+local ok = file:close()
 
-`vulcan.process.session.open(spec)` 用于交互式进程：
-
-```lua
-local session = vulcan.process.session.open({
-    program = "python",
-    args = { "-i" },
-    encoding = "utf-8",
+return vulcan.json.encode({
+    ok = ok,
+    output = output,
 })
-
-session:write("print(1 + 1)\n")
-local output = session:read({ timeout_ms = 1000 })
-session:close()
 ```
 
 ## 3.2 宿主强制忽略 skill
@@ -288,12 +364,14 @@ return result
 `vulcan.models.*` 是 Lua skill 使用模型能力的固定标准接口。
 它不是通用 host tool 调用，也不允许 Lua 选择 provider 配置。
 
-支持的方法：
+### 4.5.1 API 参考
 
-- `vulcan.models.status()`：返回 `{ ok = true, capabilities = { embed = boolean, llm = boolean } }`。
-- `vulcan.models.has(capability)`：返回宿主是否注册了 `embed` 或 `llm` callback。
-- `vulcan.models.embed(text)`：对单个非空字符串执行 embedding，并返回 table 包络。
-- `vulcan.models.llm(system, user)`：执行一轮非流式 LLM 调用，并返回 table 包络。
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.models.status()` | 无 | `{ ok = true, capabilities = { embed = boolean, llm = boolean } }` | 固定存在；只反映宿主是否注册了能力 |
+| `vulcan.models.has(capability)` | `capability: string` | `boolean` | 仅识别 `embed` 与 `llm` |
+| `vulcan.models.embed(text)` | `text: string`，必须非空 | 成功或失败包络 | 执行单文本 embedding |
+| `vulcan.models.llm(system, user)` | `system: string`，`user: string`，两者都必须非空 | 成功或失败包络 | 执行一轮非流式 LLM 调用 |
 
 最小示例：
 
@@ -313,7 +391,9 @@ end
 return result.vector
 ```
 
-embedding 成功包络：
+### 4.5.2 返回结构
+
+`embed(...)` 成功包络：
 
 ```lua
 {
@@ -326,7 +406,18 @@ embedding 成功包络：
 }
 ```
 
-LLM 成功包络：
+字段说明：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `ok` | `boolean` | 成功时固定为 `true` |
+| `vector` | `number[]` | embedding 向量 |
+| `dimensions` | `integer` | 向量维度 |
+| `usage` | `table?` | 可选；宿主若提供则包含 token 用量 |
+| `usage.input_tokens` | `integer?` | 可选输入 token 数 |
+| `usage.output_tokens` | `integer?` | 可选输出 token 数，embedding 常见为无 |
+
+`llm(...)` 成功包络：
 
 ```lua
 {
@@ -339,7 +430,15 @@ LLM 成功包络：
 }
 ```
 
-错误包络：
+字段说明：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `ok` | `boolean` | 成功时固定为 `true` |
+| `assistant` | `string` | 模型回复文本 |
+| `usage` | `table?` | 可选 token 用量对象 |
+
+失败包络：
 
 ```lua
 {
@@ -354,12 +453,32 @@ LLM 成功包络：
 }
 ```
 
-行为规则：
+错误字段说明：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `error.code` | `string` | 稳定错误码 |
+| `error.message` | `string` | 面向 skill 的错误摘要 |
+| `error.provider_message` | `string?` | 宿主愿意透出的 provider 侧消息 |
+| `error.provider_code` | `string?` | provider 原始错误码 |
+| `error.provider_status` | `integer?` | 例如 HTTP 状态码 |
+
+当前稳定错误码包括：
+
+- `model_unavailable`
+- `invalid_argument`
+- `provider_error`
+- `timeout`
+- `budget_exceeded`
+- `internal_error`
+
+### 4.5.3 行为规则
 
 - `status()` 永远存在，并根据 callback 注册状态生成能力表。
-- `has()` 只识别 `embed` 与 `llm`；未知能力返回 `false`。
+- `has()` 只识别 `embed` 与 `llm`；未知能力、错误参数个数、错误类型都会返回 `false`，不会抛出 Lua 异常。
 - `embed()` 只接受一个非空字符串，不支持批量输入。
 - `llm()` 只接受两个非空字符串，不支持 messages、tool call、stream 或 thinking 控制。
+- `embed()` / `llm()` 的参数错误、能力未注册、provider 调用失败，都会返回失败包络，而不是抛 Lua 运行时异常。
 - Lua 不能传 `model`、`temperature`、`max_tokens`、`base_url`、`api_key`、`dimensions` 或 provider-specific 参数。
 - LuaSkills 会把 caller context 传给宿主 callback，用于审计与成本归因，但不会通过模型 API 暴露给 Lua。
 - 模型配置、API key、provider 路由、超时、预算和脱敏都由宿主负责。
@@ -375,12 +494,14 @@ LLM 成功包络：
 `vulcan.host.*` 是固定的宿主注册工具桥接。
 它刻意比任意 `vulcan.xxx` 注入更窄：Lua 可以列出、探测和调用宿主工具，但不能自己创建新的顶级命名空间，也不能注册宿主工具。
 
-支持的方法：
+### 4.6.1 API 参考
 
-- `vulcan.host.list()`：返回当前宿主开放给 Lua 的工具元数据 table。
-- `vulcan.host.has(tool_name)`：判断指定宿主工具是否存在。
-- `vulcan.host.has_tool(tool_name)`：`has` 的别名。
-- `vulcan.host.call(tool_name, args)`：使用 Lua table 参数调用指定宿主工具，并返回 Lua table 结果。
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.host.list()` | 无 | `table` | 宿主开放的工具元数据；结构由宿主定义 |
+| `vulcan.host.has(tool_name)` | `tool_name: string` | `boolean` | 判断工具是否存在 |
+| `vulcan.host.has_tool(tool_name)` | `tool_name: string` | `boolean` | `has` 的别名 |
+| `vulcan.host.call(tool_name, args)` | `tool_name: string`；`args: table` | `table` | 调用宿主工具并返回结果 |
 
 最小示例：
 
@@ -403,7 +524,9 @@ end
 return result.value
 ```
 
-推荐的宿主工具成功返回包络：
+### 4.6.2 推荐返回包络
+
+推荐的成功返回包络：
 
 ```lua
 {
@@ -429,11 +552,50 @@ return result.value
 }
 ```
 
-行为规则：
+### 4.6.3 运行时归一化规则
 
-- 宿主未注册 host-tool callback 时，`list()` 返回空 table。
-- 宿主未注册 host-tool callback 时，`has()` 和 `has_tool()` 返回 `false`。
-- 宿主 callback 缺失或调用返回错误时，`call()` 返回错误包络。
+- `list()` 在宿主未注册 host-tool callback 时返回空 table `{}`。
+- `has()` / `has_tool()` 在宿主未注册 callback 时返回 `false`。
+- `has()` 的宿主回调返回值允许两种形式：
+  - 直接返回 `boolean`
+  - 返回对象，并在 `exists`、`has`、`available` 之一上放 `boolean`
+- `call()` 要求 `args` 必须是 Lua table；空 table 会被保持为 JSON 空对象 `{}`，而不是空数组 `[]`。
+- 如果宿主 `call` 回调返回的是对象，会原样透传给 Lua。
+- 如果宿主 `call` 回调返回的是标量或数组，运行时会自动包装成：
+
+```lua
+{
+    ok = true,
+    value = <宿主原始返回值>,
+}
+```
+
+- 当宿主未注册 callback 时，`call()` 返回：
+
+```lua
+{
+    ok = false,
+    error = {
+        code = "host_tool_callback_missing",
+        message = "...",
+    },
+}
+```
+
+- 当宿主 callback 在分发阶段失败时，`call()` 返回：
+
+```lua
+{
+    ok = false,
+    error = {
+        code = "host_tool_callback_error",
+        message = "...",
+    },
+}
+```
+
+### 4.6.4 行为规则
+
 - `args` 必须是 Lua table；对象型入参建议使用显式 key。
 - 该桥接不支持 stream，宿主工具应返回完整 table 结果。
 - 权限、超时、审计和 secret 管理仍由宿主负责。
@@ -451,10 +613,20 @@ vulcan.runtime.log("warn", "budget is low")
 vulcan.runtime.log("error", "query failed")
 ```
 
+API 契约：
+
+| 项 | 类型 | 说明 |
+| --- | --- | --- |
+| `level` | `string` | 建议使用 `info`、`warn`、`error`；运行时会按文本内容粗分级 |
+| `message` | `string` | 要写入宿主日志的文本 |
+| 返回值 | `nil` | 成功时不返回业务值 |
+
 说明：
 
-- `level` 会按文本内容粗分为 `error/fatal`、`warn`、其他。
-- 该能力在普通 skill VM 中可用。
+- `level` 文本中包含 `error` 或 `fatal` 时按错误日志处理。
+- `level` 文本中包含 `warn` 时按警告日志处理。
+- 其他情况按普通信息日志处理。
+- 该能力只在普通 skill VM 中可用。
 - 在 `vulcan.runtime.lua.exec(...)` 的隔离执行环境中，该函数会被禁用。
 
 ### 5.2 `vulcan.runtime.cwd()`
@@ -465,6 +637,10 @@ vulcan.runtime.log("error", "query failed")
 local cwd = vulcan.runtime.cwd()
 ```
 
+| 返回值 | 类型 | 说明 |
+| --- | --- | --- |
+| `cwd` | `string` | 宿主进程当前工作目录 |
+
 ### 5.3 `vulcan.runtime.temp_dir`
 
 宿主注入的临时目录路径，可能为 `nil`。
@@ -473,6 +649,10 @@ local cwd = vulcan.runtime.cwd()
 local temp_dir = vulcan.runtime.temp_dir
 ```
 
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `vulcan.runtime.temp_dir` | `string \| nil` | 宿主配置的临时目录；未配置时为 `nil` |
+
 ### 5.4 `vulcan.runtime.resources_dir`
 
 宿主注入的资源目录路径，可能为 `nil`。
@@ -480,6 +660,10 @@ local temp_dir = vulcan.runtime.temp_dir
 ```lua
 local resources_dir = vulcan.runtime.resources_dir
 ```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `vulcan.runtime.resources_dir` | `string \| nil` | 宿主配置的资源目录；未配置时为 `nil` |
 
 ### 5.5 `vulcan.runtime.overflow_type`
 
@@ -496,22 +680,37 @@ local resources_dir = vulcan.runtime.resources_dir
 
 - `tool_name`
 - `skill_name`
+- `entry_name`
+- `root_name`
 - `luaexec_active`
 - `luaexec_caller_tool_name`
 
-这组字段属于**内部执行上下文**，建议只用于调试和定位问题，不建议作为长期公共协议依赖。
+字段说明：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `tool_name` | `string \| nil` | 当前对外工具名，即宿主可见的 canonical tool name |
+| `skill_name` | `string \| nil` | 当前 skill 标识 |
+| `entry_name` | `string \| nil` | 当前 skill 内部 entry 名 |
+| `root_name` | `string \| nil` | 当前 skill 所属运行时根层级，如 `ROOT` / `PROJECT` / `USER` |
+| `luaexec_active` | `boolean` | 当前调用是否处于 `vulcan.runtime.lua.exec(...)` 隔离链路中 |
+| `luaexec_caller_tool_name` | `string \| nil` | 若当前是 `luaexec` 内部执行，则表示外层触发它的工具名 |
+
+这组字段属于**内部执行上下文**，建议只用于调试、日志、审计定位，不建议作为长期公共协议依赖。
 
 ### 5.7 `vulcan.runtime.lua.exec(input)`
 
 执行一次隔离的内联 Lua 运行时调用，返回 **Markdown 字符串**，不是普通 Lua table。
 
-当前输入结构支持：
+当前输入结构：
 
-- `task`：人类可读任务摘要，可选
-- `code`：内联 Lua 代码，可选
-- `file`：要执行的 Lua 文件路径，可选
-- `args`：传给代码的结构化参数对象，可选，默认空对象
-- `timeout_ms`：超时时间（毫秒），可选，默认 `60000`
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `task` | `string` | 否 | 人类可读任务摘要，仅用于结果头部展示 |
+| `code` | `string` | 与 `file` 二选一 | 要执行的内联 Lua 代码 |
+| `file` | `string` | 与 `code` 二选一 | 要执行的 Lua 文件路径 |
+| `args` | `table` | 否 | 注入到执行上下文中的结构化参数；默认空对象 |
+| `timeout_ms` | `integer` | 否 | 超时时间（毫秒），默认 `60000` |
 
 最小示例：
 
@@ -529,6 +728,14 @@ local rendered = vulcan.runtime.lua.exec({
 
 return rendered
 ```
+
+返回值与行为：
+
+| 项 | 类型 | 说明 |
+| --- | --- | --- |
+| 返回值 | `string` | 已渲染 Markdown 文本 |
+| `print(...)` 输出 | 文本 | 会被捕获并写入最终渲染结果 |
+| 代码返回值 | 任意 JSON 可序列化值 | 不直接作为 Lua table 返回，而是被渲染进结果文本 |
 
 重要限制：
 
@@ -549,6 +756,7 @@ return rendered
   - 可由宿主通过 `LuaRuntimeHostOptions.runlua_pool_config` 覆盖
   - 这只影响 `vulcan.runtime.lua.exec(...)`，不改变普通 skill VM 池
   - 当前不再支持为 `vulcan.runtime.lua.exec(...)` 单独配置外部执行器路径
+- 该调用会重置请求级上下文，不会继承外层 VM 中临时写进全局表的任意自定义状态。
 
 ### 5.8 `vulcan.runtime.skills.*`
 
@@ -575,12 +783,15 @@ ROOT -> PROJECT -> USER
 - `vulcan.runtime.skills.enable(input)`
 - `vulcan.runtime.skills.disable(input)`
 
-`status()` 当前固定返回：
+稳定字段：
 
-- `enabled`
-- `callback_registered`
-- `mode`
-- `message`
+| API / 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `vulcan.runtime.skills.enabled` | `boolean` | 宿主是否在策略层开启了 skill 管理桥接 |
+| `status().enabled` | `boolean` | 与上面一致 |
+| `status().callback_registered` | `boolean` | 宿主是否实际注册了 skill 管理 callback |
+| `status().mode` | `string` | 当前固定为 `host_callback` |
+| `status().message` | `string` | 当前桥接状态说明 |
 
 `layers()` 用于返回当前宿主允许普通桥接操作的层级标签。推荐返回内容包含：
 
@@ -597,7 +808,8 @@ ROOT -> PROJECT -> USER
 
 - 这组能力只有在宿主显式打开 `enable_skill_management_bridge` 时才允许执行。
 - 即使宿主策略打开了，如果没有注册对应回调，也会返回明确错误。
-- `input` / 返回值结构是宿主桥接契约的一部分，建议由宿主侧文档或测试夹具统一约束。
+- `install/update/uninstall/enable/disable` 的 `input` / 返回值结构是宿主桥接契约的一部分，运行时只负责分发，不负责替你定义业务字段。
+- 如果 payload 显式试图操作 `ROOT` 层，运行时会直接拒绝调用。
 
 ### 5.9 `vulcan.config.*`
 
@@ -605,11 +817,13 @@ ROOT -> PROJECT -> USER
 
 当前提供：
 
-- `vulcan.config.get(key)`
-- `vulcan.config.set(key, value)`
-- `vulcan.config.delete(key)`
-- `vulcan.config.has(key)`
-- `vulcan.config.list()`
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.config.get(key)` | `key: string` | `string \| nil` | 读取当前 skill 配置值 |
+| `vulcan.config.has(key)` | `key: string` | `boolean` | 判断键是否存在 |
+| `vulcan.config.set(key, value)` | `key: string`；`value: string` | `true` | 设置当前 skill 配置值 |
+| `vulcan.config.delete(key)` | `key: string` | `boolean` | 删除键；是否成功由底层 store 决定 |
+| `vulcan.config.list()` | 无 | `table<string, string>` | 列出当前 skill 命名空间下的全部字符串配置 |
 
 最小示例：
 
@@ -643,40 +857,102 @@ local config = vulcan.config.list()
 - 当前配置值第一版统一为 `string`。
 - 如果你确实需要复杂结构，建议把 JSON 文本作为字符串存入，再由 skill 自己 `vulcan.json.decode(...)`。
 - 配置默认只作用于当前 skill，不能直接跨 skill 读写其他命名空间。
+- 这组 API **要求当前存在活动 skill 上下文**；如果在没有当前 skill 身份的系统运行时里调用，会直接报错。
 - 当前不做“未配置即不加载”的自动策略；更推荐 skill 在缺配置时返回明确提示，告知用户如何完成配置。
 - 统一主配置文件默认位于 `<runtime_root>/config/skill_config.json`；宿主也可以显式覆盖路径。
 
 ## 6. `vulcan.fs.*`
 
-### 6.1 支持的方法
+### 6.1 API 参考
 
-- `vulcan.fs.list(dir)`
-- `vulcan.fs.read(path)`
-- `vulcan.fs.write(path, content)`
-- `vulcan.fs.exists(path)`
-- `vulcan.fs.is_dir(path)`
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.fs.list(dir)` | `dir: string` | `string[]` | 返回目录下的文件名列表，仅文件名，不含父路径 |
+| `vulcan.fs.read(path)` | `path: string` | `string` | 以 UTF-8 文本方式读取整个文件；非 UTF-8 文件会报错 |
+| `vulcan.fs.write(path, content)` | `path: string`；`content: string` | `true` | 覆盖写入文本；不会自动创建父目录 |
+| `vulcan.fs.read_bytes(path)` | `path: string` | `string` | 读取原始字节并返回 Base64 文本 |
+| `vulcan.fs.write_bytes(path, base64_text)` | `path: string`；`base64_text: string` | `true` | 解析 Base64 并写入原始字节 |
+| `vulcan.fs.rename(old_path, new_path)` | `old_path: string`；`new_path: string` | `true` | 重命名或移动文件/目录 |
+| `vulcan.fs.copy(src_path, dst_path, options?)` | `src_path: string`；`dst_path: string`；`options?: { overwrite?: boolean }` | `boolean` | 复制常规文件或整个目录树；若目标已存在且不允许覆盖则返回 `false` |
+| `vulcan.fs.remove(path, options?)` | `path: string`；`options?: { recursive?: boolean }` | `boolean` | 删除文件或目录；目标不存在时返回 `false` |
+| `vulcan.fs.mkdir(path, options?)` | `path: string`；`options?: { recursive?: boolean }` | `boolean` | 创建目录；目标目录已存在时返回 `false` |
+| `vulcan.fs.stat(path)` | `path: string` | `table \| nil` | 目标不存在返回 `nil`；存在时返回元数据表 |
+| `vulcan.fs.exists(path)` | `path: string` | `boolean` | 判断路径是否存在 |
+| `vulcan.fs.is_dir(path)` | `path: string` | `boolean` | 判断路径是否为目录 |
 
-### 6.2 示例
+### 6.2 `fs.stat(path)` 返回结构
+
+`vulcan.fs.stat(path)` 在目标存在时返回：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kind` | `"file" \| "dir" \| "symlink" \| "other"` | 规范化目标类型 |
+| `is_file` | `boolean` | 是否为常规文件 |
+| `is_dir` | `boolean` | 是否为目录 |
+| `is_symlink` | `boolean` | 是否为符号链接 |
+| `readonly` | `boolean` | 当前元数据是否只读 |
+| `size` | `integer?` | 常规文件大小（字节）；目录通常没有该字段 |
+| `modified_unix_ms` | `integer?` | 最后修改时间的 Unix 毫秒时间戳；宿主无法获取时可能缺失 |
+
+### 6.3 示例
 
 ```lua
 local entries = vulcan.fs.list(vulcan.context.entry_dir)
 local exists = vulcan.fs.exists(vulcan.context.entry_file)
 local content = vulcan.fs.read(vulcan.context.entry_file)
+local payload_base64 = vulcan.fs.read_bytes(vulcan.context.entry_file)
+local info = vulcan.fs.stat(vulcan.context.entry_file)
+local created = vulcan.fs.mkdir(vulcan.path.join(vulcan.context.entry_dir, "输出目录"), {
+    recursive = true,
+})
 ```
 
-### 6.3 注意事项
+字节保真示例：
+
+```lua
+local payload = vulcan.fs.read_bytes("D:/data/image.bin")
+
+vulcan.fs.write_bytes("D:/data/image.copy.bin", payload)
+```
+
+### 6.4 行为规则与注意事项
 
 - 当前没有沙箱限制，skill 理论上可以访问宿主可访问的任意路径。
-- `fs.read` / `fs.write` 处理的是文本内容。
+- `fs.list(dir)` 返回的是**子项名称**，不是绝对路径；如需完整路径，请配合 `vulcan.path.join(...)`。
+- `fs.read` / `fs.write` 处理的是文本内容。`fs.read` 使用 UTF-8 读取；如果文件不是合法 UTF-8，请改用 `fs.read_bytes`。
+- `fs.read_bytes(path)` 返回 base64 文本，`fs.write_bytes(path, base64_text)` 接收 base64 文本并写入原始字节，适合需要跨 Lua / 宿主边界保真传递非 UTF-8 内容的场景。
+- `fs.rename`、`fs.remove`、`fs.mkdir` 优先用于需要兼容 Windows 中文路径的文件生命周期操作，不建议继续依赖原生 `os.rename` / `os.remove`。
+- `fs.copy(src_path, dst_path)` 默认不会覆盖已有目标；只有显式传入 `{ overwrite = true }` 时才会覆盖。
+- 目标是否“已存在”是按路径条目本身判断的，因此悬空符号链接也会被视为已存在目标。
+- 当源路径是目录时，`fs.copy` 会递归复制整个目录树。
+- 当 `overwrite = true` 且目标已存在时，运行时会先整体删除目标路径，再复制新内容；这意味着目标树会被“替换”，而不是“合并”。
+- 当源路径是目录时，目标路径关系校验会先解析现有父级链接，再判断目标是否会实际落回源目录树内部。
+- 当前目录树复制会拒绝符号链接子项，避免跨平台行为不一致。
+- 当源路径是目录时，目标路径不能等于源目录，也不能位于源目录内部；否则会直接报错，避免把复制结果卷回源树。
+- `fs.remove(path, { recursive = true })` 用于递归删除目录；目标不存在时返回 `false`。
+- `fs.remove(path)` 删除目录时若未设置 `recursive = true`，会尝试按空目录删除；目录非空时会报错。
+- 当路径本身是符号链接时，`fs.remove` 会删除链接条目本身，而不是删除它指向的目标。
+- `fs.mkdir(path, { recursive = true })` 用于递归创建目录；目标目录已存在时返回 `false`。
+- `fs.mkdir(path)` 如果目标路径已存在但不是目录，会直接报错。
+- `fs.rename(old_path, new_path)` 成功时返回 `true`，其余错误直接抛出运行时异常。
+- `fs.stat(path)` 在目标不存在时返回 `nil`；目标存在时返回包含 `kind`、`is_file`、`is_dir`、`is_symlink`、`readonly`、普通文件可选 `size` 以及可选 `modified_unix_ms` 的 table。
 - 路径参数必须是字符串，且会经过基础路径语法校验。
 
 ## 7. `vulcan.path.*`
 
-当前只暴露：
+### 7.1 API 参考
 
-- `vulcan.path.join(...)`
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.path.join(...)` | 一个或多个 `string` 路径片段 | `string` | 按宿主平台规则拼接路径；至少要传一个片段 |
+| `vulcan.path.dirname(path)` | `path: string` | `string` | 返回父目录 |
+| `vulcan.path.basename(path)` | `path: string` | `string` | 返回末尾文件名部分 |
+| `vulcan.path.stem(path)` | `path: string` | `string` | 返回不带扩展名的末尾文件名 |
+| `vulcan.path.extname(path)` | `path: string` | `string` | 返回扩展名；包含前导点 |
+| `vulcan.path.normalize(path)` | `path: string` | `string` | 做词法规范化，不访问文件系统 |
+| `vulcan.path.is_abs(path)` | `path: string` | `boolean` | 判断是否为绝对路径 |
 
-示例：
+### 7.2 示例
 
 ```lua
 local config_path = vulcan.path.join(
@@ -684,34 +960,123 @@ local config_path = vulcan.path.join(
     "runtime",
     "config.json"
 )
+local ext = vulcan.path.extname(config_path)
 ```
 
-路径返回规则：
+### 7.3 返回规则
 
 - 会按宿主系统返回正常路径文本。
 - Windows 下不会把 `\\?\` 或 `\\?\UNC\` verbatim 前缀直接泄漏给 Lua。
+- `path.dirname(path)` 在相对路径没有父级片段时返回 `.`。
+- `path.basename(path)`、`path.stem(path)`、`path.extname(path)` 在末尾组件缺失时返回空字符串。
+- `path.extname(path)` 在存在扩展名时会包含前导点，例如 `.lua`。
+- `path.normalize(path)` 只做词法规范化；它会折叠 `.` 与 `..`，不会触碰文件系统，结果为空时返回 `.`。
 
 ## 8. `vulcan.process.*`
 
-当前暴露：
+### 8.1 API 参考
 
-- `vulcan.process.exec(spec)`
-- `vulcan.process.session.open(spec)`
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.process.exec(spec)` | `spec: string \| table` | 结果 table | 启动一次性子进程并等待结束 |
+| `vulcan.process.launchers()` | 无 | `table` | 返回当前宿主支持的 `shell` 参数值列表与默认值 |
+| `vulcan.process.which(program)` | `program: string` | `string \| nil` | 搜索可执行文件 |
+| `vulcan.process.session.open(spec)` | `spec: table` | 进程会话句柄 | 启动交互式子进程会话 |
 
-### 8.1 请求结构
+`vulcan.process.which(program)` 会按宿主平台搜索可执行文件；找到时返回宿主可见绝对路径，找不到时返回 `nil`。Windows 下会结合 `PATHEXT` 解析无扩展名命令。
 
-支持两种模式：
+`vulcan.process.launchers()` 返回结构固定为：
 
-1. shell 模式
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `default` | `string` | 当前宿主默认 shell 参数值；Windows 通常为 `cmd`，类 Unix 通常为 `sh` |
+| `shells` | `array<string>` | 当前宿主支持的 `shell` 参数值列表；顺序稳定，默认值总在第一个 |
+
+最小示例：
+
+```lua
+local launchers = vulcan.process.launchers()
+local shell = launchers.default
+
+for _, name in ipairs(launchers.shells or {}) do
+    if name == "bash" then
+        shell = "bash"
+        break
+    end
+    if name == "pwsh" then
+        shell = "pwsh"
+        break
+    end
+end
+
+local command = shell == "cmd" and "dir" or "ls"
+local result = vulcan.process.exec({
+    command = command,
+    shell = shell,
+})
+```
+
+### 8.2 `exec(spec)` 请求结构
+
+`vulcan.process.exec(spec)` 支持两种输入形式：
+
+1. 直接传字符串，等价于 shell/command 模式
+2. 传 table，显式描述启动参数
+
+最简单的字符串模式：
+
+```lua
+local result = vulcan.process.exec("echo hello")
+```
+
+table 模式字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `command` | `string` | 与 `program` 二选一 | shell 命令文本 |
+| `program` | `string` | 与 `command` 二选一 | 可执行程序路径或命令名 |
+| `args` | `array` | 否 | 仅 `program` 模式可用；建议传字符串数组，数字/布尔值也会被转成字符串 |
+| `cwd` | `string` | 否 | 子进程工作目录 |
+| `env` | `table<string, scalar>` | 否 | 环境变量映射；值会转成字符串 |
+| `stdin` | `string` | 否 | 启动后一次性写入 stdin 的文本 |
+| `timeout_ms` | `integer` | 否 | 正整数毫秒超时；省略时表示不设置超时 |
+| `shell` | `boolean \| string` | 否 | `command` 模式下可选；布尔值用于兼容旧逻辑，字符串必须来自 `vulcan.process.launchers().shells` |
+| `encoding` | `string` | 否 | 同时作为 `stdout/stderr/stdin` 默认编码 |
+| `stdout_encoding` | `string` | 否 | 单独覆盖 stdout 解码编码 |
+| `stderr_encoding` | `string` | 否 | 单独覆盖 stderr 解码编码 |
+| `stdin_encoding` | `string` | 否 | 单独覆盖 stdin 编码 |
+
+`shell` 字段规则：
+
+- 省略 `shell`：`command` 模式自动使用 `vulcan.process.launchers().default`
+- `shell = true`：兼容旧语义，等价于默认 shell
+- `shell = false`：只允许配合 `program` 模式；`command` 模式会报错
+- `shell = "cmd" | "pwsh" | "powershell" | "bash" | "zsh" | "sh"`：显式选择命令承载器；必须出现在 `vulcan.process.launchers().shells` 中
+- `program` 模式不能配 shell 名称字符串，否则会报错
+
+`command` 模式示例：
 
 ```lua
 local result = vulcan.process.exec({
-    shell = "echo hello",
+    command = "echo hello",
     timeout_ms = 3000,
 })
 ```
 
-2. program 模式
+基于 `launchers()` 选择 shell 的示例：
+
+```lua
+local launchers = vulcan.process.launchers()
+local command = launchers.default == "cmd" and "echo hello" or "printf hello"
+
+local result = vulcan.process.exec({
+    command = command,
+    shell = launchers.default,
+    encoding = "utf-8",
+})
+```
+
+`program` 模式示例：
 
 ```lua
 local result = vulcan.process.exec({
@@ -722,30 +1087,109 @@ local result = vulcan.process.exec({
         DEMO_MODE = "1",
     },
     timeout_ms = 5000,
+    encoding = "utf-8",
 })
 ```
 
-常用字段：
-
-- `shell`
-- `program`
-- `args`
-- `cwd`
-- `env`
-- `stdin`
-- `timeout_ms`
-
-### 8.2 返回结构
+### 8.3 `exec(spec)` 返回结构
 
 返回 table 固定包含：
 
-- `ok`
-- `success`
-- `code`
-- `stdout`
-- `stderr`
-- `timed_out`
-- `error`
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `ok` | `boolean` | 进程执行链是否整体成功结束 |
+| `success` | `boolean` | 进程是否未超时且以成功状态退出 |
+| `code` | `integer \| nil` | 退出码；无法获取时为 `nil` |
+| `stdout` | `string` | 按编码解码后的 stdout；若使用 `base64` 编码，则这里就是 Base64 文本 |
+| `stderr` | `string` | 按编码解码后的 stderr |
+| `stdout_encoding` | `string` | 实际 stdout 解码编码标签 |
+| `stderr_encoding` | `string` | 实际 stderr 解码编码标签 |
+| `stdout_lossy` | `boolean` | stdout 解码时是否发生替换或兜底 |
+| `stderr_lossy` | `boolean` | stderr 解码时是否发生替换或兜底 |
+| `stdout_base64` | `string \| nil` | 可用时的 stdout 原始字节 Base64 |
+| `stderr_base64` | `string \| nil` | 可用时的 stderr 原始字节 Base64 |
+| `timed_out` | `boolean` | 是否超时 |
+| `error` | `string \| nil` | 失败时的人类可读错误摘要 |
+
+### 8.4 `session.open(spec)` 与会话句柄
+
+`vulcan.process.session.open(spec)` 只接受 table，字段如下：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `program` | `string` | 是 | 可执行程序路径或命令名 |
+| `args` | `string[]` | 否 | 参数数组，省略时默认为空数组 |
+| `cwd` | `string` | 否 | 子进程工作目录 |
+| `encoding` | `string` | 否 | 作为 stdout/stderr/stdin 默认编码 |
+| `stdout_encoding` | `string` | 否 | 单独覆盖 stdout 编码 |
+| `stderr_encoding` | `string` | 否 | 单独覆盖 stderr 编码 |
+| `stdin_encoding` | `string` | 否 | 单独覆盖 stdin 编码 |
+| `buffer_limit_bytes` | `integer` | 否 | stdout/stderr 内部缓冲上限 |
+
+会话句柄方法：
+
+| 方法 | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `session:write(...)` | 一个或多个 Lua 标量 | `true` | 按 `stdin_encoding` 编码后写入 stdin，并立即 flush |
+| `session:read(options?)` | `options?: { timeout_ms?: integer, max_bytes?: integer, until_text?: string }` | 结果 table | 读取并**排空**当前已捕获输出 |
+| `session:status()` | 无 | 状态 table | 查看当前运行状态，不会终止进程 |
+| `session:close(options?)` | `options?: { timeout_ms?: integer }` | 状态 table | 关闭 stdin，等待退出；超时后会杀死进程树 |
+| `session:kill()` | 无 | `true` | 直接终止进程树并关闭会话 |
+
+`session:read(...)` 返回：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `stdout` | `string` | 本次读取并排空的 stdout 文本 |
+| `stderr` | `string` | 本次读取并排空的 stderr 文本 |
+| `stdout_encoding` | `string` | 实际 stdout 解码编码 |
+| `stderr_encoding` | `string` | 实际 stderr 解码编码 |
+| `stdout_lossy` | `boolean` | stdout 是否发生 lossy 解码 |
+| `stderr_lossy` | `boolean` | stderr 是否发生 lossy 解码 |
+| `stdout_base64` | `string \| nil` | 可用时的原始 stdout 字节 |
+| `stderr_base64` | `string \| nil` | 可用时的原始 stderr 字节 |
+| `timed_out` | `boolean` | 是否在本次读取等待期内超时 |
+
+`session:status()` / `session:close(...)` 返回：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `running` | `boolean` | 进程是否仍在运行 |
+| `exited` | `boolean` | 进程是否已经退出 |
+| `success` | `boolean \| nil` | 已退出时表示退出是否成功；运行中通常为 `nil` |
+| `code` | `integer \| nil` | 已退出时的退出码；无法获取时可能为 `nil` |
+
+交互式示例：
+
+```lua
+local session = vulcan.process.session.open({
+    program = "python",
+    args = { "-i" },
+    encoding = "utf-8",
+})
+
+session:write("print(1 + 1)\n")
+local output = session:read({
+    timeout_ms = 1000,
+    until_text = "2",
+})
+local status = session:close({
+    timeout_ms = 3000,
+})
+
+return vulcan.json.encode({
+    stdout = output.stdout,
+    exited = status.exited,
+    success = status.success,
+})
+```
+
+### 8.5 注意事项
+
+- `exec(spec)` 与 `session.open(spec)` 都不会替你做 shell 转义；如果你自行拼接命令文本，需要自己处理安全性。
+- `session:read(...)` 会排空缓冲；下一次读取只会拿到新增输出。
+- `session:close(...)` 超时后会主动终止整个进程树，而不是仅终止直接子进程。
+- `which(program)` 显式路径和 `PATH` 搜索都支持；Windows 下还会按 `PATHEXT` 自动补常见扩展名。
 
 ## 9. `vulcan.os.*`
 
@@ -760,6 +1204,15 @@ local info = vulcan.os.info()
 -- info.os
 -- info.arch
 ```
+
+返回结构：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `os` | `string` | 当前规范化平台名，常见为 `windows`、`linux`、`macos` |
+| `arch` | `string` | 当前规范化架构名，常见为 `x86_64`、`i686`、`aarch64`、`armv7l` |
+
+`vulcan.os.*` 当前故意只保留信息查询，不负责托管原生 `os.rename` / `os.remove` 等有平台历史包袱的接口。
 
 ## 10. `vulcan.json.*`
 
@@ -781,16 +1234,43 @@ local obj = vulcan.json.decode(text)
 
 说明：
 
-- Lua table 会被转换成 JSON 对象或数组。
-- 解码后的 JSON 对象/数组会转换回 Lua table。
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.json.encode(value)` | 任意可 JSON 化 Lua 值 | `string` | 编码为 JSON 文本 |
+| `vulcan.json.decode(text)` | `text: string` | Lua 值 | 解析 JSON 文本 |
+
+JSON 编码规则：
+
+- `nil` -> `null`
+- `boolean` -> JSON boolean
+- `integer` / `number` -> JSON number
+- `string` -> JSON string
+- `table` -> JSON 数组或对象
+
+数组/对象判定规则非常重要：
+
+- 若 Lua table 的 `raw_len() > 0`，运行时会按**数组**序列化
+- 若 `raw_len() == 0` 且存在字符串 key，会按**对象**序列化
+- 空 table 最终会被序列化成 `[]`，不是 `{}`
+
+不支持直接编码的 Lua 值：
+
+- `function`
+- `thread`
+- `userdata`
+- `lightuserdata`
+
+这些值传给 `vulcan.json.encode(...)` 会直接报运行时错误。
 
 ## 11. `vulcan.cache.*`
 
 当前提供：
 
-- `vulcan.cache.put(value, ttl_sec?)`
-- `vulcan.cache.get(cache_id)`
-- `vulcan.cache.delete(cache_id)`
+| API | 参数与类型 | 返回值 | 说明 |
+| --- | --- | --- | --- |
+| `vulcan.cache.put(value, ttl_sec?)` | `value: JSON 可序列化 Lua 值`；`ttl_sec?: integer` | `string` | 写入缓存并返回 `cache_id` |
+| `vulcan.cache.get(cache_id)` | `cache_id: string` | Lua 值或 `nil` | 按当前 scope 读取缓存 |
+| `vulcan.cache.delete(cache_id)` | `cache_id: string` | `boolean` | 删除缓存项 |
 
 示例：
 
@@ -805,27 +1285,31 @@ local deleted = vulcan.cache.delete(cache_id)
 
 注意事项：
 
+- `value` 的可序列化规则与 `vulcan.json.encode(...)` 一致。
 - 缓存作用域会优先落到当前 `tool_name`，否则落到当前 `skill_name`。
 - 如果都取不到，会退化到内部 `__runtime` 作用域。
 - 在 `vulcan.runtime.lua.exec(...)` 中，缓存接口会被主动清空，不可用。
+- `cache_id` 是 scope 内部标识；不要假设它跨 skill 或跨宿主实例稳定。
 
 ## 12. `vulcan.context.*`
 
 `vulcan.context` 用来读取当前请求和当前入口的运行时上下文。
 
-当前字段包括：
+### 12.1 顶层字段总览
 
-- `request`
-- `client_info`
-- `client_capabilities`
-- `host_result`
-- `client_budget`
-- `tool_config`
-- `skill_dir`
-- `entry_dir`
-- `entry_file`
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `request` | `table` | 空 table | 原始请求上下文 |
+| `client_info` | `table \| nil` | `nil` | 当前客户端元信息 |
+| `client_capabilities` | `table` | 空 table | 宿主注入的客户端能力快照 |
+| `client_budget` | `table` | 空 table | 宿主注入的预算快照 |
+| `tool_config` | `table` | 空 table | 宿主注入的工具配置 |
+| `host_result` | `table` | 空 table | 宿主结构化结果桥接能力视图 |
+| `skill_dir` | `string \| nil` | `nil` | 当前 skill 根目录 |
+| `entry_dir` | `string \| nil` | `nil` | 当前 entry 所在目录 |
+| `entry_file` | `string \| nil` | `nil` | 当前 entry 文件绝对路径 |
 
-### 12.1 `vulcan.context.request`
+### 12.2 `vulcan.context.request`
 
 宿主传入的原始请求上下文对象，默认是空对象。
 
@@ -838,7 +1322,9 @@ local deleted = vulcan.cache.delete(cache_id)
 - `client_info`
 - `client_capabilities`
 
-### 12.2 `vulcan.context.client_info`
+这部分结构由宿主定义，skill 不应假设一定存在某个字段。
+
+### 12.3 `vulcan.context.client_info`
 
 当前请求的客户端元信息，常见字段：
 
@@ -851,11 +1337,11 @@ local deleted = vulcan.cache.delete(cache_id)
 - 如果宿主没有注入 `client_info`，这里可能是 `nil`。
 - 如果你在 `luaexec` 中看到 `name = "luaexec_call"`，那是内部隔离执行环境的模拟上下文，不是外部真实客户端。
 
-### 12.3 `vulcan.context.client_capabilities`
+### 12.4 `vulcan.context.client_capabilities`
 
 宿主传入的客户端能力对象，默认是空对象。
 
-### 12.4 `vulcan.context.client_budget`
+### 12.5 `vulcan.context.client_budget`
 
 宿主解析后的预算快照对象，默认是空对象。
 
@@ -867,11 +1353,11 @@ local deleted = vulcan.cache.delete(cache_id)
 - `tool_result`
 - `file_read`
 
-### 12.5 `vulcan.context.tool_config`
+### 12.6 `vulcan.context.tool_config`
 
 宿主解析后的工具配置对象，默认是空对象。
 
-### 12.6 `vulcan.context.skill_dir / entry_dir / entry_file`
+### 12.7 `vulcan.context.skill_dir / entry_dir / entry_file`
 
 当前执行 skill 的文件上下文：
 
@@ -886,7 +1372,7 @@ local deleted = vulcan.cache.delete(cache_id)
 - 在 `system_runtime_lease` / `system_lua_lib` 这类宿主 LuaRuntime 场景里，这三个值默认也应视为 `nil`，因为这时不存在“当前 skill 文件”语义。
 - 当前实现会自动把 Windows verbatim 路径前缀去掉，保证 Lua 侧拿到的是正常系统路径。
 
-### 12.7 `vulcan.context.host_result`
+### 12.8 `vulcan.context.host_result`
 
 宿主结构化结果桥接的标准化视图。
 
@@ -898,11 +1384,11 @@ local deleted = vulcan.cache.delete(cache_id)
 
 说明：
 
-- 宿主未显式开启 `host_result` 时，这个对象可能不存在，或 `enabled ~= true`。
+- 当前运行时基线里 `host_result` 顶层对象始终存在，但宿主未显式开启时通常不会有 `enabled = true`。
 - 支持结构化结果的 skill 不应只看 `client_capabilities.host_result` 原始对象，而应优先读取这份标准化视图。
 - 当前推荐的标准结果种类是 `change_set`，用于把 IDE 每轮操作级结果独立返回给宿主。
 
-### 12.8 结构化第四返回值
+### 12.9 结构化第四返回值
 
 当宿主显式开启 `host_result` 时，skill 可以返回：
 
@@ -958,16 +1444,62 @@ return "Applied 1 edit.", nil, nil, {
 - `change = "modify"` 时，必须提供非空 `hunks`；每个 `hunk` 都必须包含 `before`、`after`、`delete`、`insert`。
 - `before` 与 `after` 应表示紧贴修改块前后的连续上下文字符串，不应误用为整文件快照。
 - `delete[].line` 表示旧文件中的被删行号，`insert[].line` 表示新文件中的插入后行号，两者都应按升序排列。
-- `change = "create"` 或 `change = "delete"` 时，应直接提供完整文件 `content`。
+- `change = "create"` 时，应直接提供完整文件 `content`。
+- `change = "delete"` 时，支持两种内容模式：
+  - `content_mode = "full"`，或完全省略 `content_mode`。这时应提供完整 `content`；`total_line_count` 在输入侧可省略，运行时会自动补齐 `content_mode = "full"` 与 `total_line_count`。
+  - `content_mode = "truncated"`。这时必须提供 `total_line_count`、`content_head`、`content_tail`；`content_head` 表示前片段，`content_tail` 表示后片段，中间内容固定视为省略。
+- 对 skill 开发者的强约束是：应优先在 skill 自身逻辑里主动控制超大删除结果，尽量在返回前就决定是否输出截断片段；运行时自动截断只是一层兜底保护，不应被当作常规主路径。
+- `change = "delete"` 的运行时归一化规则是稳定的：
+  - 如果 skill 直接返回完整 `content`，运行时会先计算 `total_line_count`。
+  - 当删除内容总行数不超过 `500` 行时，运行时会保留全文，并自动规范成 `content_mode = "full"`。
+  - 当删除内容总行数超过 `500` 行时，运行时会强制改写为 `content_mode = "truncated"`，即使 skill 原样返回了完整 `content` 也一样。
+  - 强制截断后的固定输出格式为：前 `50` 行写入 `content_head`，后 `50` 行写入 `content_tail`，中间部分不再返回。
 - `change = "rename"` 时，应提供 `old_path` 与 `new_path`，两者都必须是绝对路径。
+
+删除记录示例：
+
+```lua
+{
+    change = "delete",
+    path = "D:/projects/demo/src/legacy.lua",
+    content = "line 1\nline 2\nline 3\n"
+}
+```
+
+上面的旧写法仍然兼容，但运行时会对宿主输出归一化为：
+
+```json
+{
+  "change": "delete",
+  "path": "D:/projects/demo/src/legacy.lua",
+  "content_mode": "full",
+  "total_line_count": 3,
+  "content": "line 1\nline 2\nline 3\n"
+}
+```
+
+当删除文件超过 `500` 行时，运行时会自动改写为：
+
+```json
+{
+  "change": "delete",
+  "path": "D:/projects/demo/src/legacy.lua",
+  "content_mode": "truncated",
+  "total_line_count": 1200,
+  "content_head": "前 50 行拼接后的文本",
+  "content_tail": "后 50 行拼接后的文本"
+}
+```
 
 ## 13. `vulcan.deps.*`
 
 当前字段包括：
 
-- `vulcan.deps.tools_path`
-- `vulcan.deps.lua_path`
-- `vulcan.deps.ffi_path`
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `vulcan.deps.tools_path` | `string \| nil` | 当前 skill 的工具依赖目录 |
+| `vulcan.deps.lua_path` | `string \| nil` | 当前 skill 的 Lua 依赖目录 |
+| `vulcan.deps.ffi_path` | `string \| nil` | 当前 skill 的 FFI 依赖目录 |
 
 这三项表示当前 skill 的依赖根路径：
 
@@ -1015,6 +1547,36 @@ local ffi_root = vulcan.deps.ffi_path
 - `vulcan.sqlite.delete_fts_document(input)`
 - `vulcan.sqlite.search_fts(input)`
 
+除 `enabled` 之外，这些方法可分为两类：
+
+| 类别 | API | 入参 | 返回值 | 说明 |
+| --- | --- | --- | --- | --- |
+| 固定探测 | `enabled` | 无 | `boolean` | 当前 skill 是否已绑定 SQLite |
+| 固定探测 | `info()` | 无 | `table` | 绑定信息；至少可用于探测是否可用 |
+| 固定探测 | `status()` | 无 | `table` | 当前状态；至少可用于探测是否可用 |
+| provider 转发 | 其余全部方法 | 单个 `input: table` 或无参 | `table`、数组、标量，取决于 provider | LuaSkills 只负责把动作和当前绑定上下文转发给宿主/provider |
+
+动作映射关系：
+
+| Lua API | provider action |
+| --- | --- |
+| `execute_script(input)` | `execute_script` |
+| `execute_batch(input)` | `execute_batch` |
+| `query_json(input)` | `query_json` |
+| `query_stream(input)` | `query_stream` |
+| `query_stream_wait_metrics(input)` | `query_stream_wait_metrics` |
+| `query_stream_chunk(input)` | `query_stream_chunk` |
+| `query_stream_close(input)` | `query_stream_close` |
+| `tokenize_text(input)` | `tokenize_text` |
+| `upsert_custom_word(input)` | `upsert_custom_word` |
+| `remove_custom_word(input)` | `remove_custom_word` |
+| `list_custom_words()` | `list_custom_words` |
+| `ensure_fts_index(input)` | `ensure_fts_index` |
+| `rebuild_fts_index(input)` | `rebuild_fts_index` |
+| `upsert_fts_document(input)` | `upsert_fts_document` |
+| `delete_fts_document(input)` | `delete_fts_document` |
+| `search_fts(input)` | `search_fts` |
+
 ### 14.2 行为规则
 
 - `enabled = true` 表示当前 skill 已绑定 SQLite 能力。
@@ -1024,12 +1586,19 @@ local ffi_root = vulcan.deps.ffi_path
   - `info()` / `status()` 会返回禁用状态描述
   - 其余方法会直接报错：`current skill has not enabled sqlite`
 
+稳定开发约束：
+
+- `input` 一律应传 Lua table，不要传裸字符串或裸数组。
+- 返回值结构由当前 SQLite provider 决定；LuaSkills 不在运行时对业务字段做二次改写。
+- 宿主/provider 侧总会额外拿到绑定上下文，例如 `space_label`、`skill_id`、`binding_tag`、`database_kind`、`default_database_path`。
+
 ### 14.3 开发建议
 
 - 把 `info()` / `status()` 当成探测入口。
 - 业务调用前先判断 `enabled`，避免把“能力未绑定”误当成查询失败。
 - 具体输入输出字段请结合宿主的 SQLite provider 契约与：
   - [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md)
+- 如果你是 skill 作者而不是宿主实现者，建议优先参考对应记忆类 skill 的现有调用示例，而不是猜测 SQL provider 的自定义返回字段。
 
 ## 15. `vulcan.lancedb.*`
 
@@ -1046,6 +1615,17 @@ local ffi_root = vulcan.deps.ffi_path
 - `vulcan.lancedb.delete(input)`
 - `vulcan.lancedb.drop_table(input)`
 
+| 类别 | API | 入参 | 返回值 | 说明 |
+| --- | --- | --- | --- | --- |
+| 固定探测 | `enabled` | 无 | `boolean` | 当前 skill 是否已绑定 LanceDB |
+| 固定探测 | `info()` | 无 | `table` | 绑定信息；至少可用于探测是否可用 |
+| 固定探测 | `status()` | 无 | `table` | 当前状态；至少可用于探测是否可用 |
+| provider 转发 | `create_table(input)` | `input: table` | provider 定义 | 创建表 |
+| provider 转发 | `vector_upsert(input)` | `input: table` | provider 定义 | 写入或更新向量数据 |
+| provider 转发 | `vector_search(input)` | `input: table` | provider 定义 | 向量检索 |
+| provider 转发 | `delete(input)` | `input: table` | provider 定义 | 删除数据 |
+| provider 转发 | `drop_table(input)` | `input: table` | provider 定义 | 删除表 |
+
 ### 15.2 行为规则
 
 - `enabled = true` 表示当前 skill 已绑定 LanceDB 能力。
@@ -1054,6 +1634,12 @@ local ffi_root = vulcan.deps.ffi_path
   - `enabled = false`
   - `info()` / `status()` 会返回禁用状态描述
   - 其余方法会直接报错：`current skill has not enabled lancedb`
+
+稳定开发约束：
+
+- `input` 应传单个 Lua table。
+- 具体业务字段与返回值由 LanceDB provider 定义；LuaSkills 只做转发与能力守卫。
+- 宿主/provider 同样会拿到稳定绑定上下文，例如 `space_label`、`binding_tag`、`database_kind` 等。
 
 ### 15.3 特别说明
 
