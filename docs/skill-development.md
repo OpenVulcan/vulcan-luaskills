@@ -158,6 +158,32 @@ Host and adapter rules:
 
 These rules apply to every projection layer, including MCP, gRPC, FFI/SDK hosts, IDE integrations, and embedded product hosts.
 
+## 2.4 Managed Project-Path Field Contract
+
+Some skills need one caller-visible project or workspace path that follows the host's active project scope instead of the raw runtime process working directory. LuaSkills reserves `PWD` as the conventional entry-argument name for that purpose.
+
+This is a LuaSkills ecosystem compatibility convention, not one runtime-enforced magic field. The runtime treats `PWD` as ordinary entry input. Hosts and adapters that project LuaSkills entries into user-facing or model-facing tools decide whether the field stays visible, hidden, or automatically injected.
+
+Skill author rules:
+
+- New skills that need one host- or caller-provided project/workspace root should use the entry argument name `PWD`.
+- Treat `PWD` as one portability-oriented project/workspace path contract, not as proof of authority, one sandbox boundary, or a guarantee that the runtime process itself is currently inside that directory.
+- Skills should prefer explicit `PWD` over `vulcan.runtime.cwd()` when behavior must follow the host's active project/workspace scope rather than the runtime process directory.
+- Skills must not assume every host can inject `PWD`; help text should describe both managed and non-managed behavior.
+- If the caller explicitly passes `PWD`, the skill should reuse it rather than overwrite it with one guessed path.
+- If `PWD` is omitted and the skill has a safe fallback, the skill may fall back to `vulcan.runtime.cwd()` or another documented project-resolution path, but that fallback should be explicit in help and behavior.
+
+Host and adapter rules:
+
+- When exposing entry schemas, scan for an input property named `PWD`.
+- If the host has a stable current project, workspace root, or equivalent path context, it should hide `PWD` from the model/user-facing schema and remove it from the visible `required` list.
+- Before invoking the entry in managed mode, the host should inject the current project/workspace path into `PWD`.
+- In managed mode, the host should supply the real project/workspace path directly instead of asking the model or user to provide it.
+- If the host cannot provide a stable current project/workspace path, it should leave `PWD` visible and let the caller provide it.
+- This is a host compatibility convention for better cross-host behavior, not a hard LuaSkills runtime restriction. Hosts may adopt it progressively.
+
+These rules apply to every projection layer, including MCP, gRPC, FFI/SDK hosts, IDE integrations, and embedded product hosts.
+
 ## 3. Top-Level Capability Overview
 
 | Top-level item | Purpose | Available by default | Notes |
@@ -640,6 +666,12 @@ local cwd = vulcan.runtime.cwd()
 | Return Value | Type | Meaning |
 | --- | --- | --- |
 | `cwd` | `string` | current host process working directory |
+
+Notes:
+
+- This is the raw runtime process working directory.
+- Do not confuse it with the conventional entry argument `PWD`.
+- When a skill needs to follow the host-managed project/workspace scope, prefer explicit entry input `PWD`; the two values may differ.
 
 ### 5.3 `vulcan.runtime.temp_dir`
 

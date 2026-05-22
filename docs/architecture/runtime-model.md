@@ -56,6 +56,28 @@ The host owns:
 
 This keeps LuaSkills portable across MCP, gRPC, FFI/SDK, IDE, and embedded hosts while giving each host room to bind the identity to its own conversation, task, workspace, or product session model.
 
+## Managed Project-Path Boundary
+
+LuaSkills also reserves `PWD` as the conventional entry argument name for skills that need one caller-visible project or workspace path aligned with the host's active project scope.
+
+LuaSkills owns:
+
+- The conventional argument name `PWD`.
+- The expectation that project-aware skills use this name when they need one host- or caller-provided project/workspace root.
+- The expectation that `PWD` means one portability-oriented project/workspace path contract, not one authority token or guaranteed raw process cwd.
+
+The runtime treats `PWD` as ordinary entry input. It does not automatically hide, inject, normalize, or rewrite the value.
+
+The host owns:
+
+- Detecting `PWD` in entry schemas when projecting entries into tools.
+- Hiding the field from model/user-facing schemas when the host can provide one stable current project/workspace path.
+- Injecting the current project/workspace path before calling the entry.
+- Leaving the field visible when no stable project/workspace path exists.
+- Making it clear in managed mode that the path is host-supplied and should not be requested from the user.
+
+This keeps LuaSkills portable across MCP, gRPC, FFI/SDK, IDE, and embedded hosts while letting each host map `PWD` to its own project, workspace, or product root model. It is a compatibility convention, not one runtime hard restriction.
+
 ## Standard Model Capability Boundary
 
 `vulcan.models.*` is part of the LuaSkills standard runtime surface, but the real model implementation is always host-owned.

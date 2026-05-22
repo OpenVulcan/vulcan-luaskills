@@ -63,6 +63,22 @@ Host-side setup:
 
 If the host cannot provide a stable identity, leave `LUASKILL_SID` visible and let the caller or the skill's create/start/bootstrap fallback flow provide it.
 
+## Managed Project-Path Quick Path
+
+If an FFI or SDK host projects LuaSkills entries into model-facing or user-facing tools, it should also implement the conventional `PWD` managed project-path contract when the host has a stable project or workspace context.
+
+Host-side setup:
+
+1. Inspect each entry input schema after `list_entries`.
+2. When a schema contains `PWD` and the host has one stable current project/workspace path, hide that field from the projected tool schema.
+3. Remove the hidden field from the projected `required` list.
+4. Inject the current project/workspace path into `PWD` before `call_skill`.
+5. In managed mode, do not ask the model or user to type the project path manually.
+
+If the host cannot provide one stable project/workspace path, leave `PWD` visible and let the caller provide it.
+
+This is a host compatibility convention for better cross-host behavior, not one LuaSkills runtime hard restriction.
+
 ## Model Capability Quick Path
 
 Use `vulcan.models.*` when Lua skills need model capabilities that remain fully controlled by the host.
@@ -101,6 +117,7 @@ SDK mapping:
 - Use `luaskills_ffi_set_host_tool_json_callback` when Lua skills need to call host-registered tools through `vulcan.host.*`.
 - Use `luaskills_ffi_set_model_embed_json_callback` and `luaskills_ffi_set_model_llm_json_callback` when Lua skills need host-managed model capabilities through `vulcan.models.*`.
 - When projecting entries as tools, follow the `LUASKILL_SID` managed identity contract instead of inventing host-specific session parameter names.
+- When projecting entries as tools, follow the conventional `PWD` managed project-path contract instead of forcing every model or user to type host-known project roots manually.
 - Do not throw exceptions across C ABI boundaries.
 - Do not re-enter the same engine from the same thread.
 - Free owned buffers with the matching LuaSkills free function.
