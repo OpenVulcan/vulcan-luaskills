@@ -83,50 +83,34 @@ def parse_lua_packages(lua_packages_path: Path) -> list[dict[str, Any]]:
 
 
 def load_packages_source(project_root: Path) -> dict[str, Any]:
-    """Load one staged runtime-packages source description when it exists.
-    在暂存的 runtime-packages 来源存在时加载该描述。
+    """Load one staged runtime-packages source description from the active bundle state.
+    从活动 bundle 状态加载一份暂存的 runtime-packages 来源描述。
     """
 
     active_path = project_root / "target" / "runtime-packages" / "active.json"
-    if active_path.exists():
-        payload = json.loads(active_path.read_text(encoding="utf-8"))
-        return {
-            "source_repository": payload.get("repository", "LuaSkills/luaskills-packages"),
-            "bundle_id": payload.get("bundle_id", "official"),
-            "bundle_version": payload.get("bundle_version", normalize_tag(payload.get("resolved_tag", "v0.0.0"))),
-            "series": payload.get("series", "0.0"),
-            "generation_mode": payload.get("generation_mode", "release-bundle"),
-            "bundle_root": Path(payload["bundle_root"]).resolve(),
-            "dist_root": Path(payload["dist_root"]).resolve(),
-            "compat_lua_packages": Path(payload["compat_lua_packages"]).resolve(),
-            "resolved_tag": payload.get("resolved_tag", ""),
-        }
+    if not active_path.exists():
+        raise RuntimeError(
+            "runtime packages active state was not found under target/runtime-packages/active.json; "
+            "run scripts/fetch_runtime_packages_bundle.py first"
+        )
 
-    provenance_path = project_root / "scripts" / "lua_packages.generated-from.json"
-    if provenance_path.exists():
-        payload = json.loads(provenance_path.read_text(encoding="utf-8"))
-        return {
-            "source_repository": payload.get("source_repository", "LuaSkills/luaskills-packages"),
-            "bundle_id": payload.get("bundle_id", "compat-generated"),
-            "bundle_version": payload.get("bundle_version", "0.0.0-local"),
-            "series": payload.get("series", derive_series(payload.get("bundle_version", "0.0.0-local"))),
-            "generation_mode": payload.get("generation_mode", "compat-generated"),
-            "bundle_root": None,
-            "dist_root": None,
-            "compat_lua_packages": project_root / "scripts" / "lua_packages.txt",
-            "resolved_tag": payload.get("resolved_tag", ""),
-        }
+    payload = json.loads(active_path.read_text(encoding="utf-8"))
+    compat_lua_packages = Path(payload["compat_lua_packages"]).resolve()
+    if not compat_lua_packages.exists():
+        raise RuntimeError(
+            f"active runtime packages bundle is missing lua_packages.txt: {compat_lua_packages}"
+        )
 
     return {
-        "source_repository": "LuaSkills/luaskills-packages",
-        "bundle_id": "compat-generated",
-        "bundle_version": "0.0.0-local",
-        "series": "compat",
-        "generation_mode": "compat-generated",
-        "bundle_root": None,
-        "dist_root": None,
-        "compat_lua_packages": project_root / "scripts" / "lua_packages.txt",
-        "resolved_tag": "",
+        "source_repository": payload.get("repository", "LuaSkills/luaskills-packages"),
+        "bundle_id": payload.get("bundle_id", "official"),
+        "bundle_version": payload.get("bundle_version", normalize_tag(payload.get("resolved_tag", "v0.0.0"))),
+        "series": payload.get("series", "0.0"),
+        "generation_mode": payload.get("generation_mode", "release-bundle"),
+        "bundle_root": Path(payload["bundle_root"]).resolve(),
+        "dist_root": Path(payload["dist_root"]).resolve(),
+        "compat_lua_packages": compat_lua_packages,
+        "resolved_tag": payload.get("resolved_tag", ""),
     }
 
 
@@ -137,7 +121,7 @@ def normalize_tag(tag: str) -> str:
 
     if tag.startswith("v"):
         return tag[1:]
-    return tag or "0.0.0-local"
+    return tag or "0.0.0"
 
 
 def derive_series(bundle_version: str) -> str:
@@ -310,7 +294,7 @@ def generate_runtime_packages_metadata(
     package_source = load_packages_source(project_root)
     lua_packages_path = package_source["compat_lua_packages"]
     packages = parse_lua_packages(lua_packages_path)
-    bundle_version = package_source.get("bundle_version") or "0.0.0-local"
+    bundle_version = package_source.get("bundle_version") or normalize_tag(package_source.get("resolved_tag", "v0.0.0"))
 
     compat_lua_packages_path = packages_root / "lua_packages.txt"
     write_text(compat_lua_packages_path, lua_packages_path.read_text(encoding="utf-8"))
@@ -324,7 +308,7 @@ def generate_runtime_packages_metadata(
             "platform": platform,
             "source": {
                 "repository": package_source.get("source_repository", "LuaSkills/luaskills-packages"),
-                "bundle_id": package_source.get("bundle_id", "compat-generated"),
+                "bundle_id": package_source.get("bundle_id", "official"),
                 "bundle_version": bundle_version,
                 "series": package_source.get("series", derive_series(bundle_version)),
             },
@@ -417,13 +401,13 @@ def generate_runtime_packages_metadata(
     runtime_packages_manifest = {
         "schema_version": 1,
         "repository": package_source.get("source_repository", "LuaSkills/luaskills-packages"),
-        "bundle_id": package_source.get("bundle_id", "compat-generated"),
+        "bundle_id": package_source.get("bundle_id", "official"),
         "bundle_version": bundle_version,
         "series": package_source.get("series", derive_series(bundle_version)),
         "resolved_tag": package_source.get("resolved_tag", ""),
         "platform": platform,
         "layout": "luaskills-packages-runtime-v1",
-        "generation_mode": package_source.get("generation_mode", "compat-generated"),
+        "generation_mode": package_source.get("generation_mode", "release-bundle"),
         "paths": {
             "install_manifest": "resources/luaskills-packages/install-manifest.json",
             "compat_lua_packages_txt": "resources/luaskills-packages/lua_packages.txt",

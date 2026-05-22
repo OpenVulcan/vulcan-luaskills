@@ -825,12 +825,6 @@ python (Join-Path $ProjectRoot "scripts\generate_runtime_packages_metadata.py") 
     --runtime-root $RuntimeRoot `
     --platform $Platform
 
-# Keep the legacy top-level lua_packages.txt in sync with the runtime packages metadata tree.
-# 让 legacy 顶层 lua_packages.txt 与 runtime packages 元数据目录树保持一致。
-Copy-Item -Force `
-    -LiteralPath (Join-Path $RuntimeRoot "resources\luaskills-packages\lua_packages.txt") `
-    -Destination (Join-Path $RuntimeRoot "resources\lua_packages.txt")
-
 $ArchiveName = "lua-runtime-$Platform.tar.gz"
 $ArchivePath = Join-Path $OutputDir $ArchiveName
 if (Test-Path -LiteralPath $ArchivePath) {

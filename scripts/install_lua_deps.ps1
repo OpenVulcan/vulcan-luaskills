@@ -1,8 +1,8 @@
 # install_lua_deps.ps1 - Install Lua C modules via luarocks into third_party/lua_packages/
 # Developer/build use only. End users do not need luarocks.
 # Reuses LuaJIT source from luajit-src cargo crate - no network download needed.
-# Prefers one staged luaskills-packages bundle and falls back to scripts/lua_packages.txt only when no bundle is active.
-# 优先读取已暂存的 luaskills-packages bundle，仅在没有活动 bundle 时才回退到 scripts/lua_packages.txt。
+# Requires one staged luaskills-packages bundle and reads lua_packages.txt only from that bundle.
+# 依赖一个已暂存的 luaskills-packages bundle，并且只从该 bundle 读取 lua_packages.txt。
 # Only helper tools needed for archive extraction or LuaRocks module builds are installed locally when required.
 # 仅在需要解压归档或构建 LuaRocks 模块时，才会在本地安装辅助工具。
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/install_lua_deps.ps1
@@ -110,35 +110,46 @@ function Ensure-RuntimePackagesBundleState {
     用于解析辅助脚本与 bundle 状态文件的仓库根目录。
 
     .OUTPUTS
-    Hashtable bundle state when one bundle is available, or null when staging is unavailable.
-    当 bundle 可用时返回哈希表状态；若暂存不可用则返回 null。
+    Hashtable bundle state when one valid bundle is available.
+    当存在一个有效 bundle 时返回对应的哈希表状态。
     #>
     param([string]$RootPath)
 
     $ExistingState = Resolve-RuntimePackagesBundleState -RootPath $RootPath
-    if ($ExistingState) {
+    if (
+        $ExistingState `
+        -and $ExistingState.compat_lua_packages `
+        -and (Test-Path -LiteralPath $ExistingState.compat_lua_packages)
+    ) {
         return $ExistingState
     }
 
     $FetchScript = Join-Path $RootPath "scripts\fetch_runtime_packages_bundle.py"
     if (-not (Test-Path -LiteralPath $FetchScript)) {
-        return $null
+        throw "Runtime packages bundle fetch script was not found: $FetchScript"
     }
 
     $PythonCommand = Resolve-PythonCommand
     if (-not $PythonCommand) {
-        Write-Warning "Python is not available, so luaskills-packages bundle staging will be skipped."
-        return $null
+        throw "Python is required to stage luaskills-packages bundles, but no python command is available."
     }
 
     try {
         & $PythonCommand $FetchScript --project-root $RootPath
     } catch {
-        Write-Warning "Failed to stage luaskills-packages bundle automatically: $_"
-        return $null
+        throw "Failed to stage luaskills-packages bundle automatically: $_"
     }
 
-    return Resolve-RuntimePackagesBundleState -RootPath $RootPath
+    $ResolvedState = Resolve-RuntimePackagesBundleState -RootPath $RootPath
+    if (
+        -not $ResolvedState `
+        -or -not $ResolvedState.compat_lua_packages `
+        -or -not (Test-Path -LiteralPath $ResolvedState.compat_lua_packages)
+    ) {
+        throw "Runtime packages bundle staging completed, but the active bundle does not expose a readable lua_packages.txt file."
+    }
+
+    return $ResolvedState
 }
 
 # ScriptDir points at the current script directory when PowerShell exposes it.
@@ -164,17 +175,13 @@ Set-Location $ProjectDir
 # RuntimePackagesState stores the staged luaskills-packages bundle metadata when one bundle is active.
 # RuntimePackagesState 在存在活动 bundle 时保存暂存的 luaskills-packages bundle 元数据。
 $RuntimePackagesState = Ensure-RuntimePackagesBundleState -RootPath $ProjectDir
-$script:RuntimePackagesConfigBase = $ProjectDir
-$PackagesFile = Join-Path $ProjectDir "scripts\lua_packages.txt"
-$PackagesSourceLabel = "repository-compat"
-if ($RuntimePackagesState) {
-    $BundlePackagesFile = $RuntimePackagesState.compat_lua_packages
-    if ($BundlePackagesFile -and (Test-Path -LiteralPath $BundlePackagesFile)) {
-        $script:RuntimePackagesConfigBase = $RuntimePackagesState.bundle_root
-        $PackagesFile = $BundlePackagesFile
-        $PackagesSourceLabel = "bundle:$($RuntimePackagesState.resolved_tag)"
-    }
+$BundlePackagesFile = [string]$RuntimePackagesState.compat_lua_packages
+if (-not $BundlePackagesFile -or -not (Test-Path -LiteralPath $BundlePackagesFile)) {
+    throw "Active runtime packages bundle is missing lua_packages.txt: $BundlePackagesFile"
 }
+$script:RuntimePackagesConfigBase = [string]$RuntimePackagesState.bundle_root
+$PackagesFile = $BundlePackagesFile
+$PackagesSourceLabel = "bundle:$($RuntimePackagesState.resolved_tag)"
 
 # Use RuntimeInformation for platform detection so the script behaves consistently on Windows PowerShell 5.1 and PowerShell 7+.
 $script:IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)

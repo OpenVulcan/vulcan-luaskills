@@ -444,10 +444,6 @@ python3 "$PROJECT_ROOT/scripts/generate_runtime_packages_metadata.py" \
   --runtime-root "$RUNTIME_ROOT" \
   --platform "$PLATFORM"
 
-# Keep the legacy top-level lua_packages.txt in sync with the runtime packages metadata tree.
-# 让 legacy 顶层 lua_packages.txt 与 runtime packages 元数据目录树保持一致。
-cp -f "$RUNTIME_ROOT/resources/luaskills-packages/lua_packages.txt" "$RUNTIME_ROOT/resources/lua_packages.txt"
-
 ARCHIVE_NAME="lua-runtime-${PLATFORM}.tar.gz"
 create_tar_from_dir "$RUNTIME_ROOT" "$OUTPUT_DIR/$ARCHIVE_NAME"
 echo "Lua runtime package created: $OUTPUT_DIR/$ARCHIVE_NAME"

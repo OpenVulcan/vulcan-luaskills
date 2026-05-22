@@ -140,9 +140,14 @@ def resolve_binding(binding: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def find_release_for_series(repository: str, series: str) -> dict[str, Any]:
-    """Resolve the latest GitHub release inside one compatible major.minor series.
-    解析一个兼容 major.minor 协议线中的最新 GitHub release。
+def find_release_for_series(
+    repository: str,
+    series: str,
+    bundle_asset_template: str,
+    bundle_sha256_template: str,
+) -> dict[str, Any]:
+    """Resolve the latest usable GitHub release inside one compatible major.minor series.
+    解析一个兼容 major.minor 协议线中最新且可用的 GitHub release。
     """
 
     releases_url = f"https://api.github.com/repos/{repository}/releases?per_page=100"
@@ -161,54 +166,25 @@ def find_release_for_series(repository: str, series: str) -> dict[str, Any]:
             continue
         matches.append((version, release))
     matches.sort(key=lambda item: item[0], reverse=True)
-    latest_release = matches[0][1] if matches else None
-
-    latest_tag = find_latest_tag_for_series(repository, series)
-    if latest_tag is not None:
-        latest_tag_version = parse_semver(normalize_tag_to_version(latest_tag))
-        if latest_release is None:
-            raise RuntimeError(
-                f"luaskills-packages series {series} has newer tag {latest_tag} but no published release assets yet"
-            )
-        latest_release_version = parse_semver(
-            normalize_tag_to_version(latest_release["tag_name"])
-        )
-        if latest_tag_version > latest_release_version:
-            raise RuntimeError(
-                "luaskills-packages series "
-                f"{series} has newer tag {latest_tag} without published release assets; "
-                f"latest published release is {latest_release['tag_name']}"
-            )
-
-    if latest_release is None:
+    if not matches:
         raise RuntimeError(
             f"no luaskills-packages release found for series {series} in {repository}"
         )
-    return latest_release
 
+    for _, release in matches:
+        tag_name = str(release.get("tag_name", ""))
+        required_asset_names = (
+            bundle_asset_template.format(tag=tag_name),
+            bundle_sha256_template.format(tag=tag_name),
+        )
+        release_asset_names = {str(asset.get("name", "")) for asset in release.get("assets", [])}
+        if all(asset_name in release_asset_names for asset_name in required_asset_names):
+            return release
 
-def find_latest_tag_for_series(repository: str, series: str) -> str | None:
-    """Resolve the latest Git tag inside one compatible major.minor series.
-    解析一个兼容 major.minor 协议线中的最新 Git 标签。
-    """
-
-    tags_url = f"https://api.github.com/repos/{repository}/tags?per_page=100"
-    payload = request_json(tags_url)
-    matches: list[tuple[tuple[int, int, int], str]] = []
-    for tag in payload:
-        tag_name = str(tag.get("name", ""))
-        version_text = normalize_tag_to_version(tag_name)
-        try:
-            version = parse_semver(version_text)
-        except ValueError:
-            continue
-        if f"{version[0]}.{version[1]}" != series:
-            continue
-        matches.append((version, tag_name))
-    if not matches:
-        return None
-    matches.sort(key=lambda item: item[0], reverse=True)
-    return matches[0][1]
+    raise RuntimeError(
+        "no luaskills-packages release in series "
+        f"{series} provides both {bundle_asset_template} and {bundle_sha256_template}"
+    )
 
 
 def find_release_by_tag(repository: str, tag: str) -> dict[str, Any]:
@@ -300,22 +276,15 @@ def prepare_override_bundle_root(external_root: Path, project_root: Path) -> dic
 
 
 def write_active_bundle_state(project_root: Path, active_state: dict[str, Any]) -> None:
-    """Write the active bundle state and the legacy generated-from compatibility file.
-    写入活动 bundle 状态以及 legacy generated-from 兼容文件。
+    """Write the active bundle state and remove obsolete local compatibility metadata.
+    写入活动 bundle 状态，并移除已废弃的本地兼容元数据。
     """
 
     active_path = project_root / "target" / "runtime-packages" / "active.json"
     write_json(active_path, active_state)
-
-    generated_from = {
-        "source_repository": active_state["repository"],
-        "bundle_id": active_state["bundle_id"],
-        "bundle_version": active_state["bundle_version"],
-        "resolved_tag": active_state["resolved_tag"],
-        "series": active_state["series"],
-        "generation_mode": active_state["generation_mode"],
-    }
-    write_json(project_root / "scripts" / "lua_packages.generated-from.json", generated_from)
+    legacy_generated_from_path = project_root / "scripts" / "lua_packages.generated-from.json"
+    if legacy_generated_from_path.exists():
+        legacy_generated_from_path.unlink()
 
 
 def stage_release_bundle(project_root: Path, binding: dict[str, str], refresh: bool) -> dict[str, Any]:
@@ -327,7 +296,12 @@ def stage_release_bundle(project_root: Path, binding: dict[str, str], refresh: b
     if explicit_tag:
         release = find_release_by_tag(binding["repository"], explicit_tag)
     else:
-        release = find_release_for_series(binding["repository"], binding["series"])
+        release = find_release_for_series(
+            binding["repository"],
+            binding["series"],
+            binding["bundle_asset_template"],
+            binding["bundle_sha256_template"],
+        )
 
     resolved_tag = release["tag_name"]
     bundle_root = project_root / "target" / "runtime-packages" / "bundles" / resolved_tag

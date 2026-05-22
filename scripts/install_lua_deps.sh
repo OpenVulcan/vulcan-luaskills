@@ -2,8 +2,8 @@
 # install_lua_deps.sh — Install Lua C modules via luarocks into third_party/lua_packages/
 # Developer/build use only. End users do not need luarocks.
 # Reuses LuaJIT source from cargo target — no network download needed.
-# Prefers one staged luaskills-packages bundle and falls back to scripts/lua_packages.txt only when no bundle is active.
-# 优先读取已暂存的 luaskills-packages bundle，仅在没有活动 bundle 时才回退到 scripts/lua_packages.txt。
+# Requires one staged luaskills-packages bundle and reads lua_packages.txt only from that bundle.
+# 依赖一个已暂存的 luaskills-packages bundle，并且只从该 bundle 读取 lua_packages.txt。
 # Only helper tools needed for archive extraction or LuaRocks module builds are installed locally when required.
 # 仅在需要解压归档或构建 LuaRocks 模块时，才会在本地安装辅助工具。
 # Usage: bash scripts/install_lua_deps.sh
@@ -43,20 +43,38 @@ ensure_runtime_packages_bundle_state() {
     # 在辅助脚本可用时确保已暂存一个 luaskills-packages bundle 状态文件。
     local fetch_script="$PROJECT_DIR/scripts/fetch_runtime_packages_bundle.py"
     local state_output=""
-    if state_output="$(load_runtime_packages_bundle_state 2>/dev/null)"; then
-        printf '%s\n' "$state_output"
-        return 0
+    local bundle_packages_file=""
+    if state_output="$(load_runtime_packages_bundle_state 2>/dev/null || true)"; then
+        if [ -n "$state_output" ]; then
+            while IFS='=' read -r key value; do
+                case "$key" in
+                    compat_lua_packages) bundle_packages_file="$value" ;;
+                esac
+            done <<< "$state_output"
+            if [ -n "$bundle_packages_file" ] && [ -f "$bundle_packages_file" ]; then
+                printf '%s\n' "$state_output"
+                return 0
+            fi
+        fi
     fi
-    [ -f "$fetch_script" ] || return 1
+    [ -f "$fetch_script" ] || {
+        echo "ERROR: runtime packages bundle fetch script was not found: $fetch_script" >&2
+        return 1
+    }
     command -v python3 >/dev/null 2>&1 || {
-        echo "WARNING: python3 is not available, so luaskills-packages bundle staging will be skipped." >&2
+        echo "ERROR: python3 is required to stage luaskills-packages bundles." >&2
         return 1
     }
     if ! python3 "$fetch_script" --project-root "$PROJECT_DIR"; then
-        echo "WARNING: failed to stage luaskills-packages bundle automatically." >&2
+        echo "ERROR: failed to stage luaskills-packages bundle automatically." >&2
         return 1
     fi
-    load_runtime_packages_bundle_state 2>/dev/null
+    state_output="$(load_runtime_packages_bundle_state 2>/dev/null || true)"
+    [ -n "$state_output" ] || {
+        echo "ERROR: runtime packages bundle staging finished, but target/runtime-packages/active.json is still unavailable." >&2
+        return 1
+    }
+    printf '%s\n' "$state_output"
 }
 
 THIRD_PARTY="$PROJECT_DIR/third_party"
@@ -67,24 +85,23 @@ LUAROCKS_DIR="$THIRD_PARTY/luarocks"
 DEPS_DIR="$THIRD_PARTY/deps"
 LIST_SEP=$'\036'
 RUNTIME_PACKAGES_CONFIG_ROOT="$PROJECT_DIR"
-PACKAGES_FILE="$SCRIPT_DIR/lua_packages.txt"
-PACKAGES_SOURCE_LABEL="repository-compat"
+runtime_bundle_state="$(ensure_runtime_packages_bundle_state)"
+while IFS='=' read -r key value; do
+    case "$key" in
+        bundle_root) runtime_bundle_root="$value" ;;
+        compat_lua_packages) runtime_bundle_packages="$value" ;;
+        resolved_tag) runtime_bundle_tag="$value" ;;
+        repository) runtime_bundle_repository="$value" ;;
+    esac
+done <<< "$runtime_bundle_state"
 
-if runtime_bundle_state="$(ensure_runtime_packages_bundle_state 2>/dev/null)"; then
-    while IFS='=' read -r key value; do
-        case "$key" in
-            bundle_root) runtime_bundle_root="$value" ;;
-            compat_lua_packages) runtime_bundle_packages="$value" ;;
-            resolved_tag) runtime_bundle_tag="$value" ;;
-            repository) runtime_bundle_repository="$value" ;;
-        esac
-    done <<< "$runtime_bundle_state"
-    if [ -n "${runtime_bundle_packages:-}" ] && [ -f "$runtime_bundle_packages" ]; then
-        RUNTIME_PACKAGES_CONFIG_ROOT="${runtime_bundle_root:-$PROJECT_DIR}"
-        PACKAGES_FILE="$runtime_bundle_packages"
-        PACKAGES_SOURCE_LABEL="bundle:${runtime_bundle_tag:-unknown}"
-    fi
-fi
+RUNTIME_PACKAGES_CONFIG_ROOT="${runtime_bundle_root:-$PROJECT_DIR}"
+PACKAGES_FILE="${runtime_bundle_packages:-}"
+PACKAGES_SOURCE_LABEL="bundle:${runtime_bundle_tag:-unknown}"
+[ -n "$PACKAGES_FILE" ] && [ -f "$PACKAGES_FILE" ] || {
+    echo "ERROR: active runtime packages bundle is missing lua_packages.txt: ${PACKAGES_FILE:-<empty>}" >&2
+    exit 1
+}
 
 ensure_dir() { mkdir -p "$1"; }
 
