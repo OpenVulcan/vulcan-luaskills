@@ -19,8 +19,8 @@ python luaskills-debug-skill/scripts/run_debug.py list-tools --skill-path D:\pat
 python luaskills-debug-skill/scripts/run_debug.py call --skill-path D:\path\to\skill --tool ping --args-json "{\"note\":\"hello\"}" --output json
 ```
 
-The wrapper defaults `runtime_root` to `D:\projects\vulcan-luaskills\output\luaskills-debug-runtime\<skill_id>` when you do not pass `--runtime-root`.
-当你不传 `--runtime-root` 时，包装脚本会默认把 `runtime_root` 设为 `D:\projects\vulcan-luaskills\output\luaskills-debug-runtime\<skill_id>`。
+In a source checkout, the wrapper defaults `runtime_root` to `output/luaskills-debug-runtime/<skill_id>`. In a standalone debug-tool package, it defaults to the package-local `runtime/` directory.
+在源码仓库中，包装脚本默认把 `runtime_root` 设为 `output/luaskills-debug-runtime/<skill_id>`；在独立 debug-tool 包中，它默认使用包内 `runtime/` 目录。
 
 ## Workflow
 
@@ -83,8 +83,10 @@ Avoid parallel runs against the same default runtime root.
 Use `scripts/run_debug.py` as the primary entrypoint.
 把 `scripts/run_debug.py` 当作主要入口。
 
-- The script builds `luaskills-debug` with `cargo build --bin luaskills-debug` when the local debug binary is missing.
-- 当本地调试二进制缺失时，脚本会自动执行 `cargo build --bin luaskills-debug` 进行构建。
+- In a source checkout, the script builds `luaskills-debug` with `cargo build --bin luaskills-debug` when the local debug binary is missing.
+- 在源码仓库中，当本地调试二进制缺失时，脚本会自动执行 `cargo build --bin luaskills-debug` 进行构建。
+- In a standalone debug-tool package, the script uses the packaged `bin/luaskills-debug` executable and does not require Cargo.
+- 在独立 debug-tool 包中，脚本会使用包内 `bin/luaskills-debug` 可执行文件，不要求存在 Cargo。
 - The script forwards `inspect`, `list-tools`, and `call` to the real bin without introducing any SDK or FFI layer.
 - 这个脚本会把 `inspect`、`list-tools` 和 `call` 原样转发给真实 bin，不会额外引入 SDK 或 FFI 层。
 - Add `--rebuild` when you know the debug bin source changed and you want a fresh build first.

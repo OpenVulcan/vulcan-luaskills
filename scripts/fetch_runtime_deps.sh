@@ -61,6 +61,18 @@ VLDB_LANCEDB_REPO="${VLDB_LANCEDB_REPO:-OpenVulcan/vldb-lancedb}"
 # VldbLanceDBVersion 保存 vldb-lancedb 资产的 GitHub Release 标签。
 VLDB_LANCEDB_VERSION="${VLDB_LANCEDB_VERSION:-v0.1.5}"
 
+# SkipLuaSkillsFfi disables the extra LuaSkills FFI SDK download during lua/all setup.
+# SkipLuaSkillsFfi 用于在 lua/all 初始化期间禁用额外的 LuaSkills FFI SDK 下载。
+SKIP_LUASKILLS_FFI="${SKIP_LUASKILLS_FFI:-0}"
+
+# SkipLuaRuntimeLibs disables copying the runtime package libs/ directory into the runtime root.
+# SkipLuaRuntimeLibs 用于禁用把 runtime package 的 libs/ 目录复制到 runtime root。
+SKIP_LUA_RUNTIME_LIBS="${SKIP_LUA_RUNTIME_LIBS:-0}"
+
+# LuaPackagesOnly narrows runtime setup to lua_packages/ only and skips runtime metadata plus FFI SDK staging.
+# LuaPackagesOnly 将 runtime 初始化收窄为只放 lua_packages/，并跳过 runtime 元数据与 FFI SDK 暂存。
+LUA_PACKAGES_ONLY="${LUA_PACKAGES_ONLY:-0}"
+
 ensure_dir() {
   # Create one directory when it does not exist.
   # 在目录不存在时创建该目录。
@@ -206,24 +218,34 @@ install_lua_runtime() {
   fi
   tar -xzf "$archive" -C "$extract_dir"
   ensure_dir "$RUNTIME_ROOT"
-  for dir_name in lua_packages libs resources; do
+  local runtime_dirs=(lua_packages)
+  if [ "$LUA_PACKAGES_ONLY" != "1" ]; then
+    runtime_dirs+=(resources)
+    if [ "$SKIP_LUA_RUNTIME_LIBS" != "1" ]; then
+      runtime_dirs+=(libs)
+    fi
+  fi
+  local dir_name=""
+  for dir_name in "${runtime_dirs[@]}"; do
     if [ -d "$extract_dir/$dir_name" ]; then
       ensure_dir "$RUNTIME_ROOT/$dir_name"
       cp -a "$extract_dir/$dir_name"/. "$RUNTIME_ROOT/$dir_name"/
     fi
   done
-  if [ -d "$extract_dir/licenses" ]; then
-    ensure_dir "$RUNTIME_ROOT/licenses"
-    cp -a "$extract_dir/licenses"/. "$RUNTIME_ROOT/licenses"/
+  if [ "$LUA_PACKAGES_ONLY" != "1" ]; then
+    if [ -d "$extract_dir/licenses" ]; then
+      ensure_dir "$RUNTIME_ROOT/licenses"
+      cp -a "$extract_dir/licenses"/. "$RUNTIME_ROOT/licenses"/
+    fi
+    [ -f "$RUNTIME_ROOT/resources/lua-runtime-manifest.json" ] || {
+      echo "Lua runtime manifest was not found after installing $asset_name" >&2
+      return 1
+    }
+    [ -f "$RUNTIME_ROOT/resources/luaskills-packages-manifest.json" ] || {
+      echo "LuaSkills packages manifest was not found after installing $asset_name" >&2
+      return 1
+    }
   fi
-  [ -f "$RUNTIME_ROOT/resources/lua-runtime-manifest.json" ] || {
-    echo "Lua runtime manifest was not found after installing $asset_name" >&2
-    return 1
-  }
-  [ -f "$RUNTIME_ROOT/resources/luaskills-packages-manifest.json" ] || {
-    echo "LuaSkills packages manifest was not found after installing $asset_name" >&2
-    return 1
-  }
 }
 
 luaskills_library_candidates() {
@@ -389,7 +411,9 @@ esac
 case "$TARGET" in
   all)
     install_lua_runtime
-    install_luaskills_ffi
+    if [ "$SKIP_LUASKILLS_FFI" != "1" ] && [ "$LUA_PACKAGES_ONLY" != "1" ]; then
+      install_luaskills_ffi
+    fi
     if [ "$DATABASE" = "vldb-controller" ]; then
       install_vldb_controller
     elif [ "$DATABASE" = "vldb-direct" ]; then
@@ -398,7 +422,9 @@ case "$TARGET" in
     ;;
   lua)
     install_lua_runtime
-    install_luaskills_ffi
+    if [ "$SKIP_LUASKILLS_FFI" != "1" ] && [ "$LUA_PACKAGES_ONLY" != "1" ]; then
+      install_luaskills_ffi
+    fi
     ;;
   vldb)
     if [ "$DATABASE" = "vldb-controller" ]; then

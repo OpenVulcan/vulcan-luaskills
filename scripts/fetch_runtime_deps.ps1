@@ -15,6 +15,9 @@ param(
     [string]$VldbSQLiteVersion = "v0.1.5",
     [string]$VldbLanceDBRepo = "OpenVulcan/vldb-lancedb",
     [string]$VldbLanceDBVersion = "v0.1.5",
+    [switch]$LuaPackagesOnly,
+    [switch]$SkipLuaSkillsFfi,
+    [switch]$SkipLuaRuntimeLibs,
     [switch]$DevCache
 )
 
@@ -299,10 +302,50 @@ function Save-ReleaseAssetWithSha256 {
     Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
     Invoke-WebRequest -Uri $ShaUrl -OutFile $ShaPath -UseBasicParsing
     $Expected = ((Get-Content -LiteralPath $ShaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
-    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash.ToLowerInvariant()
+    $Actual = Get-FileSha256Hex -Path $Destination
     if ($Expected -ne $Actual) {
         throw "SHA-256 mismatch for $AssetName. Expected $Expected, got $Actual"
     }
+}
+
+function Get-FileSha256Hex {
+    <#
+    .SYNOPSIS
+    Resolve one file SHA-256 digest with a portable fallback for older Windows PowerShell hosts.
+    使用兼容旧版 Windows PowerShell 宿主的回退路径解析单个文件的 SHA-256 摘要。
+
+    .PARAMETER Path
+    File path whose SHA-256 digest should be returned as lowercase hexadecimal text.
+    需要以小写十六进制文本返回 SHA-256 摘要的文件路径。
+
+    .OUTPUTS
+    Lowercase hexadecimal SHA-256 digest of the target file.
+    目标文件的小写十六进制 SHA-256 摘要。
+    #>
+    param([string]$Path)
+
+    $GetFileHashCommand = Get-Command -Name "Get-FileHash" -ErrorAction SilentlyContinue
+    if ($GetFileHashCommand) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    }
+
+    $Sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $Stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $DigestBytes = $Sha256.ComputeHash($Stream)
+        } finally {
+            $Stream.Dispose()
+        }
+    } finally {
+        $Sha256.Dispose()
+    }
+
+    $Builder = New-Object -TypeName System.Text.StringBuilder
+    foreach ($Byte in $DigestBytes) {
+        [void]$Builder.AppendFormat("{0:x2}", $Byte)
+    }
+    return $Builder.ToString()
 }
 
 function Expand-ArchiveSmart {
@@ -406,10 +449,22 @@ function Install-LuaRuntime {
     下载并安装一个 luaskills runtime-packages 归档。
 
     .PARAMETER RuntimeRootPath
-    Runtime root that receives lua_packages, libs, resources, and licenses.
-    接收 lua_packages、libs、resources 与 licenses 的运行根目录。
+    Runtime root that receives lua_packages plus optional packaged-runtime metadata.
+    接收 lua_packages 以及可选打包运行时元数据的运行根目录。
+
+    .PARAMETER SkipRuntimeLibraries
+    Whether the runtime package install should omit the bundled libs directory.
+    当前 runtime package 安装是否应省略包内 libs 目录。
+
+    .PARAMETER LuaPackagesOnly
+    Whether the runtime package install should stage only lua_packages and skip resources, licenses, and libs.
+    当前 runtime package 安装是否应只暂存 lua_packages，并跳过 resources、licenses 与 libs。
     #>
-    param([string]$RuntimeRootPath)
+    param(
+        [string]$RuntimeRootPath,
+        [switch]$SkipRuntimeLibraries,
+        [switch]$LuaPackagesOnly
+    )
 
     $Platform = Get-PlatformKey
     $AssetName = "lua-runtime-packages-$Platform.tar.gz"
@@ -435,7 +490,15 @@ function Install-LuaRuntime {
         }
         Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
 
-        foreach ($DirName in @("lua_packages", "libs", "resources")) {
+        if ($LuaPackagesOnly) {
+            $RuntimeDirNames = @("lua_packages")
+        } else {
+            $RuntimeDirNames = @("lua_packages", "resources")
+            if (-not $SkipRuntimeLibraries) {
+                $RuntimeDirNames += "libs"
+            }
+        }
+        foreach ($DirName in $RuntimeDirNames) {
             $Source = Join-Path $ExtractDir $DirName
             if (Test-Path -LiteralPath $Source) {
                 Ensure-Dir (Join-Path $RuntimeRootPath $DirName)
@@ -443,20 +506,22 @@ function Install-LuaRuntime {
             }
         }
 
-        $LicenseSource = Join-Path $ExtractDir "licenses"
-        if (Test-Path -LiteralPath $LicenseSource) {
-            $LicenseDest = Join-Path $RuntimeRootPath "licenses"
-            Ensure-Dir $LicenseDest
-            Copy-Item -Recurse -Force -Path (Join-Path $LicenseSource "*") -Destination $LicenseDest -ErrorAction SilentlyContinue
-        }
+        if (-not $LuaPackagesOnly) {
+            $LicenseSource = Join-Path $ExtractDir "licenses"
+            if (Test-Path -LiteralPath $LicenseSource) {
+                $LicenseDest = Join-Path $RuntimeRootPath "licenses"
+                Ensure-Dir $LicenseDest
+                Copy-Item -Recurse -Force -Path (Join-Path $LicenseSource "*") -Destination $LicenseDest -ErrorAction SilentlyContinue
+            }
 
-        $RuntimeManifestPath = Join-Path $RuntimeRootPath "resources\lua-runtime-manifest.json"
-        $PackagesManifestPath = Join-Path $RuntimeRootPath "resources\luaskills-packages-manifest.json"
-        if (-not (Test-Path -LiteralPath $RuntimeManifestPath)) {
-            throw "Lua runtime manifest was not found after installing $AssetName"
-        }
-        if (-not (Test-Path -LiteralPath $PackagesManifestPath)) {
-            throw "LuaSkills packages manifest was not found after installing $AssetName"
+            $RuntimeManifestPath = Join-Path $RuntimeRootPath "resources\lua-runtime-manifest.json"
+            $PackagesManifestPath = Join-Path $RuntimeRootPath "resources\luaskills-packages-manifest.json"
+            if (-not (Test-Path -LiteralPath $RuntimeManifestPath)) {
+                throw "Lua runtime manifest was not found after installing $AssetName"
+            }
+            if (-not (Test-Path -LiteralPath $PackagesManifestPath)) {
+                throw "LuaSkills packages manifest was not found after installing $AssetName"
+            }
         }
     } finally {
         Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -677,8 +742,10 @@ Ensure-Dir $RuntimeRoot
 Ensure-Dir (Join-Path $RuntimeRoot "resources")
 
 if ($Target -eq "all" -or $Target -eq "lua") {
-    Install-LuaRuntime -RuntimeRootPath $RuntimeRoot
-    Install-LuaSkillsFfi -RuntimeRootPath $RuntimeRoot
+    Install-LuaRuntime -RuntimeRootPath $RuntimeRoot -SkipRuntimeLibraries:$SkipLuaRuntimeLibs -LuaPackagesOnly:$LuaPackagesOnly
+    if (-not $SkipLuaSkillsFfi -and -not $LuaPackagesOnly) {
+        Install-LuaSkillsFfi -RuntimeRootPath $RuntimeRoot
+    }
 }
 
 if (($Target -eq "all" -and $Database -eq "vldb-controller") -or ($Target -eq "vldb" -and $Database -eq "vldb-controller") -or $Target -eq "vldb-controller") {

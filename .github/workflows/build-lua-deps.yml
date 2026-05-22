@@ -169,18 +169,18 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build LuaSkills library (Windows)
+      - name: Build LuaSkills library and debug tool (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release
+          cargo build --release --lib --bins
 
-      - name: Build LuaSkills library (Unix)
+      - name: Build LuaSkills library and debug tool (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release
+          cargo build --release --lib --bins
 
       - name: Package release assets (Windows)
         if: runner.os == 'Windows'
@@ -189,12 +189,14 @@ jobs:
           powershell -ExecutionPolicy Bypass -File scripts/package_ffi_sdk.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR"
           powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode ffi -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
           powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode rust -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
+          powershell -ExecutionPolicy Bypass -File scripts/package_debug_tool.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
           # ExpectedAssets prevents the release step from silently publishing an incomplete platform set.
           # ExpectedAssets 防止发布步骤静默上传缺少关键文件的平台产物集合。
           $expectedAssets = @(
             "luaskills-ffi-sdk-${{ matrix.platform }}.tar.gz",
             "luaskills-demo-ffi-${{ matrix.platform }}.tar.gz",
-            "luaskills-demo-rust-${{ matrix.platform }}.tar.gz"
+            "luaskills-demo-rust-${{ matrix.platform }}.tar.gz",
+            "luaskills-debug-tool-${{ matrix.platform }}.tar.gz"
           )
           $releasePackageDir = Join-Path $env:GITHUB_WORKSPACE $env:RELEASE_PACKAGE_DIR
           foreach ($asset in $expectedAssets) {
@@ -217,12 +219,14 @@ jobs:
           bash scripts/package_ffi_sdk.sh "${{ matrix.platform }}"
           bash scripts/package_demo.sh ffi "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}"
           bash scripts/package_demo.sh rust "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}"
+          bash scripts/package_debug_tool.sh "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}"
           # ExpectedAssets prevents the release step from silently publishing an incomplete platform set.
           # ExpectedAssets 防止发布步骤静默上传缺少关键文件的平台产物集合。
           for asset in \
             "luaskills-ffi-sdk-${{ matrix.platform }}.tar.gz" \
             "luaskills-demo-ffi-${{ matrix.platform }}.tar.gz" \
-            "luaskills-demo-rust-${{ matrix.platform }}.tar.gz"; do
+            "luaskills-demo-rust-${{ matrix.platform }}.tar.gz" \
+            "luaskills-debug-tool-${{ matrix.platform }}.tar.gz"; do
             test -f "$GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR/$asset" || {
               echo "Missing expected release asset: $GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR/$asset" >&2
               exit 1

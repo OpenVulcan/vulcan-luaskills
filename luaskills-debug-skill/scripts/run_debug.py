@@ -11,13 +11,43 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Define the repository root that owns the debug binary and output folders.
-# 定义拥有调试二进制和输出目录的仓库根目录。
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Define the repository or standalone package root that owns debug runtime files.
+# 定义拥有调试运行文件的仓库根目录或独立包根目录。
+DEBUG_WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 
 # Define the binary name with a Windows-specific extension when needed.
 # 根据平台定义调试二进制名称，在 Windows 下追加专用扩展名。
 BIN_NAME = "luaskills-debug.exe" if os.name == "nt" else "luaskills-debug"
+
+
+def is_repository_workspace(root: Path) -> bool:
+    """Return whether one root looks like the LuaSkills source repository.
+    判断单个根目录是否像 LuaSkills 源码仓库。
+    """
+
+    # Cargo.toml and scripts/ are the stable markers used by repository-side wrappers.
+    # Cargo.toml 与 scripts/ 是仓库侧包装脚本使用的稳定标记。
+    return (root / "Cargo.toml").exists() and (root / "scripts").is_dir()
+
+
+def packaged_binary_path(root: Path) -> Path:
+    """Return the expected packaged release debug binary path.
+    返回预期的包内 release 调试二进制路径。
+    """
+
+    # Standalone debug packages place the binary under bin/ for direct execution.
+    # 独立调试包会把二进制放在 bin/ 下以便直接执行。
+    return root / "bin" / BIN_NAME
+
+
+def is_standalone_debug_package(root: Path) -> bool:
+    """Return whether one root looks like an extracted debug tool package.
+    判断单个根目录是否像已解压的调试工具包。
+    """
+
+    # The manifest and packaged binary together identify the release debug package layout.
+    # manifest 与包内二进制共同标识发布调试包目录结构。
+    return (root / "debug-tool-manifest.json").exists() and packaged_binary_path(root).exists()
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -102,7 +132,9 @@ def compute_default_runtime_root(skill_path: Path) -> Path:
 
     # Reuse one stable output subdirectory per physical skill directory name.
     # 以物理 skill 目录名为单位复用稳定的输出子目录。
-    return REPO_ROOT / "output" / "luaskills-debug-runtime" / skill_path.name
+    if is_standalone_debug_package(DEBUG_WORKSPACE_ROOT):
+        return DEBUG_WORKSPACE_ROOT / "runtime"
+    return DEBUG_WORKSPACE_ROOT / "output" / "luaskills-debug-runtime" / skill_path.name
 
 
 def ensure_binary(rebuild: bool) -> Path:
@@ -110,14 +142,24 @@ def ensure_binary(rebuild: bool) -> Path:
     当调试二进制缺失或调用方强制重建时构建该二进制。
     """
 
+    # Prefer the packaged release binary when the script is running from a standalone debug package.
+    # 当脚本运行在独立调试包中时，优先使用包内 release 二进制。
+    package_binary_path = packaged_binary_path(DEBUG_WORKSPACE_ROOT)
+    if is_standalone_debug_package(DEBUG_WORKSPACE_ROOT):
+        return package_binary_path
+
     # Resolve the expected cargo debug binary path under the repository target directory.
     # 解析仓库 target 目录下预期的 cargo debug 二进制路径。
-    binary_path = REPO_ROOT / "target" / "debug" / BIN_NAME
+    binary_path = DEBUG_WORKSPACE_ROOT / "target" / "debug" / BIN_NAME
     if rebuild or not binary_path.exists():
+        if not is_repository_workspace(DEBUG_WORKSPACE_ROOT):
+            raise SystemExit(
+                "Cannot rebuild luaskills-debug because this wrapper is not running inside a LuaSkills source repository."
+            )
         # Rebuild the binary through cargo so the wrapper always uses the repository source of truth.
         # 通过 cargo 重建二进制，确保包装脚本始终使用仓库内的真实实现。
         build_command = ["cargo", "build", "--bin", "luaskills-debug"]
-        completed_process = subprocess.run(build_command, cwd=REPO_ROOT, check=False)
+        completed_process = subprocess.run(build_command, cwd=DEBUG_WORKSPACE_ROOT, check=False)
         if completed_process.returncode != 0:
             raise SystemExit(completed_process.returncode)
     return binary_path
@@ -199,9 +241,9 @@ def main(argv: list[str] | None = None) -> int:
     binary_path = ensure_binary(parsed_args.rebuild)
     forwarded_command = build_forwarded_command(parsed_args, binary_path)
 
-    # Run the real debug binary inside the repository root and return its exit code unchanged.
-    # 在仓库根目录内运行真实调试二进制，并原样返回它的退出码。
-    completed_process = subprocess.run(forwarded_command, cwd=REPO_ROOT, check=False)
+    # Run the real debug binary inside the repository or package root and return its exit code unchanged.
+    # 在仓库根目录或包根目录内运行真实调试二进制，并原样返回它的退出码。
+    completed_process = subprocess.run(forwarded_command, cwd=DEBUG_WORKSPACE_ROOT, check=False)
     return completed_process.returncode
 
 
