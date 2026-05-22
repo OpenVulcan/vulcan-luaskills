@@ -439,6 +439,7 @@ fn load_bound_skill_manifest(skill_path: &Path) -> Result<SkillMeta, String> {
         )
     })?;
     manifest.bind_directory_skill_id(directory_name.to_string());
+    manifest.resolve_entry_input_schemas(skill_path)?;
     validate_luaskills_identifier(manifest.effective_skill_id(), "skill_id")?;
     Ok(manifest)
 }
@@ -889,6 +890,10 @@ mod tests {
             skill_dir: "D:/demo-skill".to_string(),
             description: String::new(),
             parameters: Vec::new(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
         }
     }
 

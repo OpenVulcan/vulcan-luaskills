@@ -3396,6 +3396,8 @@ impl LuaEngine {
             ));
             return Ok(());
         }
+        meta.resolve_entry_input_schemas(dir)
+            .map_err(|error| format!("skill {}: {}", meta.name, error))?;
         validate_luaskills_identifier(meta.effective_skill_id(), "skill_id")
             .map_err(|error| format!("skill {}: {}", meta.name, error))?;
         validate_luaskills_version(meta.version(), "version")
@@ -3706,6 +3708,7 @@ impl LuaEngine {
                             required: parameter.required,
                         })
                         .collect(),
+                    input_schema: tool.resolved_input_schema().clone(),
                 })
             })
             .collect()

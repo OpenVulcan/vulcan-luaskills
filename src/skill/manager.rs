@@ -1867,6 +1867,7 @@ fn read_skill_manifest_from_directory(skill_dir: &Path) -> Result<SkillMeta, Str
     let mut meta: SkillMeta = serde_yaml::from_value(yaml_value)
         .map_err(|error| format!("Failed to decode {}: {}", skill_yaml_path.display(), error))?;
     meta.bind_directory_skill_id(skill_id.clone());
+    meta.resolve_entry_input_schemas(skill_dir)?;
     validate_luaskills_version(meta.version(), "skill.yaml version")?;
     if meta.effective_skill_id() != skill_id {
         return Err(format!(

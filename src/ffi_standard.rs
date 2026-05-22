@@ -695,6 +695,10 @@ fn alloc_entry_descriptor(value: &RuntimeEntryDescriptor) -> FfiRuntimeEntryDesc
         root_name: alloc_owned_buffer_from_string(&value.root_name),
         skill_dir: alloc_owned_buffer_from_string(&value.skill_dir),
         description: alloc_owned_buffer_from_string(&value.description),
+        input_schema_json: alloc_owned_buffer_from_string(
+            &serde_json::to_string(&value.input_schema)
+                .expect("runtime entry input schema should serialize"),
+        ),
         parameters: parameters_ptr,
         parameters_len,
     }
@@ -1450,6 +1454,7 @@ unsafe fn free_entry_descriptor(value: FfiRuntimeEntryDescriptor) {
     unsafe { luaskills_ffi_buffer_free(value.root_name) };
     unsafe { luaskills_ffi_buffer_free(value.skill_dir) };
     unsafe { luaskills_ffi_buffer_free(value.description) };
+    unsafe { luaskills_ffi_buffer_free(value.input_schema_json) };
     if !value.parameters.is_null() && value.parameters_len > 0 {
         let parameters = unsafe {
             Vec::from_raw_parts(value.parameters, value.parameters_len, value.parameters_len)

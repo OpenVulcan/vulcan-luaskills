@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// One parameter descriptor exposed by a LuaSkills runtime entry.
 /// LuaSkills 运行时入口对外暴露的单个参数描述。
@@ -43,4 +44,7 @@ pub struct RuntimeEntryDescriptor {
     /// Parameter descriptors of the current entry.
     /// 当前入口的参数描述列表。
     pub parameters: Vec<RuntimeEntryParameterDescriptor>,
+    /// Final AI-facing input schema resolved from entry metadata.
+    /// 从入口元数据解析得到的最终面向 AI 输入 schema。
+    pub input_schema: Value,
 }

@@ -71,7 +71,63 @@ GitHub-managed skill installs and release assets must use the same `skill_id`:
 - The zip must contain only one top-level directory named exactly `{skill_id}`, and it must contain `{skill_id}/skill.yaml`.
 - Repository name, release asset prefix, checksum asset prefix, zip top-level directory, and final install directory should all use the same `skill_id`.
 
-## 2.2 Managed Identity Field Contract
+## 2.2 Entry Input Schema
+
+LuaSkills now supports one full AI-facing object input schema per entry.
+
+Recommended rule:
+
+- Keep `skill.yaml` for human-friendly metadata such as `name`, `version`, `lua_entry`, and help links.
+- Put complex tool input schemas in external JSON files under `schemas/`.
+- Use `input_schema_file` when the schema contains nested objects, arrays with `items`, `oneOf` / `anyOf`, or strict `additionalProperties` rules.
+- Keep legacy `parameters` only for backward compatibility or simple flat entries.
+
+Current entry-schema fields:
+
+- `parameters`: legacy flat parameter list. When `input_schema` and `input_schema_file` are both absent, the runtime projects `parameters` into one object schema automatically.
+- `input_schema`: optional inline object schema inside `skill.yaml`.
+- `input_schema_file`: optional relative JSON file path under `schemas/`. This is the recommended format for non-trivial schemas.
+
+Rules:
+
+- The final entry input schema must be one JSON object schema whose root `type` is `object`.
+- `input_schema` and `input_schema_file` must not be declared together on the same entry.
+- `input_schema_file` must stay under `schemas/` and must be one relative path.
+- When `parameters` is empty but a full schema is present, LuaSkills derives one legacy top-level parameter preview from root `properties` for compatibility exports.
+
+Example:
+
+```yaml
+entries:
+  - name: node_source
+    description: Read selected nodes.
+    lua_entry: runtime/node_source.lua
+    lua_module: demo.node_source
+    input_schema_file: schemas/node_source.input.schema.json
+```
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string" },
+          "structural_path": { "type": "string" }
+        },
+        "required": ["file", "structural_path"]
+      }
+    }
+  },
+  "required": ["nodes"]
+}
+```
+
+## 2.3 Managed Identity Field Contract
 
 Some skills need to bind multiple entry calls to the same session, task, or context state. LuaSkills reserves `LUASKILL_SID` as the standard managed identity field for skill entry arguments.
 

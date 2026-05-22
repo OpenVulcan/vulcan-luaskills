@@ -168,6 +168,7 @@ class FfiRuntimeEntryDescriptor(ctypes.Structure):
         ("root_name", FfiOwnedBuffer),
         ("skill_dir", FfiOwnedBuffer),
         ("description", FfiOwnedBuffer),
+        ("input_schema_json", FfiOwnedBuffer),
         ("parameters", ctypes.POINTER(FfiRuntimeEntryParameterDescriptor)),
         ("parameters_len", ctypes.c_size_t),
     ]
@@ -437,6 +438,10 @@ def main() -> None:
             print("First canonical entry:", read_owned_buffer_text(first_entry.canonical_name))
             print("First entry skill id:", read_owned_buffer_text(first_entry.skill_id))
             print("First entry description:", read_owned_buffer_text(first_entry.description))
+            print(
+                "First entry input schema:",
+                read_owned_buffer_text(first_entry.input_schema_json),
+            )
             print("First entry parameter count:", first_entry.parameters_len)
             if first_entry.parameters_len > 0:
                 first_parameter = first_entry.parameters[0]

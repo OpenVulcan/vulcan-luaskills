@@ -204,6 +204,7 @@ function main(): void {
     root_name: FfiOwnedBuffer,
     skill_dir: FfiOwnedBuffer,
     description: FfiOwnedBuffer,
+    input_schema_json: FfiOwnedBuffer,
     parameters: "void *",
     parameters_len: "size_t",
   });
@@ -308,6 +309,7 @@ function main(): void {
           canonical_name: { ptr: Buffer | null; len: number | bigint };
           skill_id: { ptr: Buffer | null; len: number | bigint };
           description: { ptr: Buffer | null; len: number | bigint };
+          input_schema_json: { ptr: Buffer | null; len: number | bigint };
           parameters: Buffer | null;
           parameters_len: number | bigint;
         }>)
@@ -318,6 +320,7 @@ function main(): void {
       console.log("First canonical entry:", readOwnedBuffer(firstEntry.canonical_name));
       console.log("First entry skill id:", readOwnedBuffer(firstEntry.skill_id));
       console.log("First entry description:", readOwnedBuffer(firstEntry.description));
+      console.log("First entry input schema:", readOwnedBuffer(firstEntry.input_schema_json));
       const parameters = firstEntry.parameters
         ? (koffi.decode(
             firstEntry.parameters,

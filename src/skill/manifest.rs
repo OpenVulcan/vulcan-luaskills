@@ -1,5 +1,8 @@
 use semver::Version;
 use serde::Deserialize;
+use serde_json::{Map as JsonMap, Value as JsonValue};
+use std::fs;
+use std::path::Path;
 
 // ============================================================
 // Lua Skill metadata (loaded from skill.yaml only)
@@ -192,6 +195,14 @@ pub struct SkillToolMeta {
     /// 当前入口独有的参数定义。
     #[serde(default)]
     pub parameters: Vec<SkillParam>,
+    /// Optional inline JSON Schema object used as the final AI-facing input schema.
+    /// 作为最终面向 AI 输入 schema 的可选内联 JSON Schema 对象。
+    #[serde(default)]
+    pub input_schema: Option<JsonValue>,
+    /// Optional JSON Schema file path under `schemas/` used to define the final AI-facing input schema.
+    /// 位于 `schemas/` 目录下、用于定义最终面向 AI 输入 schema 的可选 JSON Schema 文件路径。
+    #[serde(default)]
+    pub input_schema_file: String,
     /// Optional help topic/workflow reference name.
     /// 可选的帮助 topic/workflow 引用名称。
     #[serde(default)]
@@ -290,6 +301,363 @@ fn default_skill_enable_flag() -> bool {
     true
 }
 
+/// Validate one relative metadata path against a fixed prefix and reject traversal.
+/// 按固定目录前缀校验单个 skill 元数据相对路径，并拒绝路径穿越。
+fn validate_skill_relative_path(
+    relative_path: &str,
+    expected_prefix: &str,
+    field_label: &str,
+) -> Result<(), String> {
+    let trimmed = relative_path.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field_label} must not be empty"));
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(format!(
+            "{field_label} must be a relative path under {expected_prefix}"
+        ));
+    }
+
+    let normalized = trimmed.replace('\\', "/");
+    let required_prefix = format!("{expected_prefix}/");
+    if !normalized.starts_with(&required_prefix) {
+        return Err(format!("{field_label} must start with {required_prefix}"));
+    }
+
+    for component in path.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(format!("{field_label} must not contain parent"));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate one JSON Schema `type` field used by one AI-facing tool schema node.
+/// 校验单个面向 AI 的工具 schema 节点使用的 JSON Schema `type` 字段。
+fn validate_tool_schema_type_field(
+    object: &JsonMap<String, JsonValue>,
+    field_label: &str,
+) -> Result<(), String> {
+    let Some(type_value) = object.get("type") else {
+        return Ok(());
+    };
+    match type_value {
+        JsonValue::String(type_name) => {
+            if type_name.trim().is_empty() {
+                return Err(format!("{field_label}.type must not be empty"));
+            }
+        }
+        JsonValue::Array(items) => {
+            if items.is_empty() {
+                return Err(format!("{field_label}.type must not be an empty array"));
+            }
+            for (index, item) in items.iter().enumerate() {
+                let type_name = item.as_str().ok_or_else(|| {
+                    format!("{field_label}.type[{index}] must be one string")
+                })?;
+                if type_name.trim().is_empty() {
+                    return Err(format!("{field_label}.type[{index}] must not be empty"));
+                }
+            }
+        }
+        _ => {
+            return Err(format!(
+                "{field_label}.type must be one string or one string array"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate one JSON Schema string-name array such as `required`.
+/// 校验单个 JSON Schema 字符串名称数组，例如 `required`。
+fn validate_tool_schema_name_array(value: &JsonValue, field_label: &str) -> Result<(), String> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| format!("{field_label} must be an array of strings"))?;
+    for (index, item) in items.iter().enumerate() {
+        let item_text = item
+            .as_str()
+            .ok_or_else(|| format!("{field_label}[{index}] must be one string"))?;
+        if item_text.trim().is_empty() {
+            return Err(format!("{field_label}[{index}] must not be empty"));
+        }
+    }
+    Ok(())
+}
+
+/// Validate one JSON Schema array of nested schema nodes.
+/// 校验单个由嵌套 schema 节点组成的 JSON Schema 数组。
+fn validate_tool_schema_node_array(value: &JsonValue, field_label: &str) -> Result<(), String> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| format!("{field_label} must be an array of schema objects"))?;
+    if items.is_empty() {
+        return Err(format!("{field_label} must not be empty"));
+    }
+    for (index, item) in items.iter().enumerate() {
+        validate_tool_schema_node(item, &format!("{field_label}[{index}]"))?;
+    }
+    Ok(())
+}
+
+/// Validate one JSON Schema object-map whose values are nested schema nodes.
+/// 校验单个值为嵌套 schema 节点的 JSON Schema 对象映射。
+fn validate_tool_schema_object_map(value: &JsonValue, field_label: &str) -> Result<(), String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{field_label} must be an object"))?;
+    for (name, item) in object {
+        if name.trim().is_empty() {
+            return Err(format!("{field_label} must not contain empty property names"));
+        }
+        validate_tool_schema_node(item, &format!("{field_label}.{}", name))?;
+    }
+    Ok(())
+}
+
+/// Validate one JSON Schema node used inside one AI-facing tool input schema tree.
+/// 校验单个面向 AI 的工具输入 schema 树中使用的 JSON Schema 节点。
+fn validate_tool_schema_node(schema: &JsonValue, field_label: &str) -> Result<(), String> {
+    let object = schema
+        .as_object()
+        .ok_or_else(|| format!("{field_label} must be one JSON object schema"))?;
+
+    validate_tool_schema_type_field(object, field_label)?;
+
+    if let Some(properties) = object.get("properties") {
+        validate_tool_schema_object_map(properties, &format!("{field_label}.properties"))?;
+    }
+    if let Some(pattern_properties) = object.get("patternProperties") {
+        validate_tool_schema_object_map(
+            pattern_properties,
+            &format!("{field_label}.patternProperties"),
+        )?;
+    }
+    if let Some(definitions) = object.get("$defs").or_else(|| object.get("definitions")) {
+        validate_tool_schema_object_map(definitions, &format!("{field_label}.$defs"))?;
+    }
+    if let Some(required) = object.get("required") {
+        validate_tool_schema_name_array(required, &format!("{field_label}.required"))?;
+    }
+    if let Some(enum_values) = object.get("enum") {
+        enum_values
+            .as_array()
+            .ok_or_else(|| format!("{field_label}.enum must be an array"))?;
+    }
+    if let Some(items) = object.get("items") {
+        match items {
+            JsonValue::Object(_) => {
+                validate_tool_schema_node(items, &format!("{field_label}.items"))?;
+            }
+            JsonValue::Array(_) => {
+                validate_tool_schema_node_array(items, &format!("{field_label}.items"))?;
+            }
+            _ => {
+                return Err(format!(
+                    "{field_label}.items must be one schema object or one schema array"
+                ));
+            }
+        }
+    }
+    if let Some(prefix_items) = object.get("prefixItems") {
+        validate_tool_schema_node_array(prefix_items, &format!("{field_label}.prefixItems"))?;
+    }
+    if let Some(contains) = object.get("contains") {
+        validate_tool_schema_node(contains, &format!("{field_label}.contains"))?;
+    }
+    if let Some(property_names) = object.get("propertyNames") {
+        validate_tool_schema_node(property_names, &format!("{field_label}.propertyNames"))?;
+    }
+    if let Some(additional_properties) = object.get("additionalProperties") {
+        match additional_properties {
+            JsonValue::Bool(_) => {}
+            JsonValue::Object(_) => validate_tool_schema_node(
+                additional_properties,
+                &format!("{field_label}.additionalProperties"),
+            )?,
+            _ => {
+                return Err(format!(
+                    "{field_label}.additionalProperties must be one boolean or one schema object"
+                ));
+            }
+        }
+    }
+    for keyword in ["oneOf", "anyOf", "allOf"] {
+        if let Some(value) = object.get(keyword) {
+            validate_tool_schema_node_array(value, &format!("{field_label}.{keyword}"))?;
+        }
+    }
+    if let Some(not_schema) = object.get("not") {
+        validate_tool_schema_node(not_schema, &format!("{field_label}.not"))?;
+    }
+    if let Some(if_schema) = object.get("if") {
+        validate_tool_schema_node(if_schema, &format!("{field_label}.if"))?;
+    }
+    if let Some(then_schema) = object.get("then") {
+        validate_tool_schema_node(then_schema, &format!("{field_label}.then"))?;
+    }
+    if let Some(else_schema) = object.get("else") {
+        validate_tool_schema_node(else_schema, &format!("{field_label}.else"))?;
+    }
+
+    Ok(())
+}
+
+/// Validate one final entry input schema before it is exposed to hosts and models.
+/// 在把最终入口输入 schema 暴露给宿主与模型之前进行校验。
+fn validate_entry_input_schema_root(schema: &JsonValue, field_label: &str) -> Result<(), String> {
+    validate_tool_schema_node(schema, field_label)?;
+    let object = schema
+        .as_object()
+        .ok_or_else(|| format!("{field_label} must be one JSON object schema"))?;
+    match object.get("type") {
+        Some(JsonValue::String(type_name)) if type_name == "object" => Ok(()),
+        Some(_) => Err(format!("{field_label}.type must be \"object\"")),
+        None => Err(format!("{field_label}.type must be present and equal to \"object\"")),
+    }
+}
+
+/// Build one legacy object-style input schema from the flat `parameters` list.
+/// 基于扁平 `parameters` 列表构造单个旧版对象式输入 schema。
+fn build_entry_input_schema_from_parameters(parameters: &[SkillParam]) -> JsonValue {
+    let mut properties = JsonMap::new();
+    let mut required = Vec::new();
+    for parameter in parameters {
+        properties.insert(
+            parameter.name.clone(),
+            build_parameter_schema_fragment(parameter),
+        );
+        if parameter.required {
+            required.push(JsonValue::String(parameter.name.clone()));
+        }
+    }
+
+    let mut schema = JsonMap::new();
+    schema.insert("type".to_string(), JsonValue::String("object".to_string()));
+    schema.insert("properties".to_string(), JsonValue::Object(properties));
+    if !required.is_empty() {
+        schema.insert("required".to_string(), JsonValue::Array(required));
+    }
+    JsonValue::Object(schema)
+}
+
+/// Build one simple property schema fragment from one legacy flat parameter descriptor.
+/// 基于单个旧版扁平参数描述构造简单属性 schema 片段。
+fn build_parameter_schema_fragment(parameter: &SkillParam) -> JsonValue {
+    let mut schema = JsonMap::new();
+    schema.insert(
+        "type".to_string(),
+        JsonValue::String(parameter.param_type.clone()),
+    );
+    if !parameter.description.trim().is_empty() {
+        schema.insert(
+            "description".to_string(),
+            JsonValue::String(parameter.description.clone()),
+        );
+    }
+    JsonValue::Object(schema)
+}
+
+/// Derive one readable legacy parameter type string from one JSON Schema property node.
+/// 从单个 JSON Schema 属性节点推导可读的旧版参数类型字符串。
+fn derive_parameter_type_from_schema(schema: &JsonValue) -> String {
+    let Some(object) = schema.as_object() else {
+        return "schema".to_string();
+    };
+    if let Some(type_name) = object.get("type").and_then(JsonValue::as_str) {
+        return type_name.to_string();
+    }
+    if let Some(type_items) = object.get("type").and_then(JsonValue::as_array) {
+        let names: Vec<String> = type_items
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .map(ToString::to_string)
+            .collect();
+        if !names.is_empty() {
+            return names.join(" | ");
+        }
+    }
+    if object.contains_key("properties") {
+        return "object".to_string();
+    }
+    if object.contains_key("items") || object.contains_key("prefixItems") {
+        return "array".to_string();
+    }
+    if object.contains_key("oneOf") || object.contains_key("anyOf") || object.contains_key("allOf")
+    {
+        return "union".to_string();
+    }
+    "schema".to_string()
+}
+
+/// Derive legacy flat parameter descriptors from the top-level object properties of one schema.
+/// 从单个 schema 的顶层对象属性中推导旧版扁平参数描述。
+fn derive_legacy_parameters_from_input_schema(schema: &JsonValue) -> Vec<SkillParam> {
+    let Some(object) = schema.as_object() else {
+        return Vec::new();
+    };
+    let Some(properties) = object.get("properties").and_then(JsonValue::as_object) else {
+        return Vec::new();
+    };
+    let required_names = object
+        .get("required")
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    properties
+        .iter()
+        .map(|(name, property_schema)| SkillParam {
+            name: name.clone(),
+            param_type: derive_parameter_type_from_schema(property_schema),
+            description: property_schema
+                .as_object()
+                .and_then(|item| item.get("description"))
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            required: required_names.iter().any(|required_name| required_name == name),
+        })
+        .collect()
+}
+
+/// Load one external JSON Schema file referenced by one skill entry.
+/// 加载单个 skill 入口引用的外部 JSON Schema 文件。
+fn load_entry_input_schema_file(
+    skill_dir: &Path,
+    relative_path: &str,
+    entry_name: &str,
+) -> Result<JsonValue, String> {
+    validate_skill_relative_path(relative_path, "schemas", "entry.input_schema_file")?;
+    let schema_path = skill_dir.join(relative_path);
+    let schema_text = fs::read_to_string(&schema_path).map_err(|error| {
+        format!(
+            "skill entry {} input_schema_file {} read failed: {}",
+            entry_name,
+            schema_path.display(),
+            error
+        )
+    })?;
+    serde_json::from_str(&schema_text).map_err(|error| {
+        format!(
+            "skill entry {} input_schema_file {} parse failed: {}",
+            entry_name,
+            schema_path.display(),
+            error
+        )
+    })
+}
+
 impl SkillMeta {
     /// Return the effective LanceDB configuration.
     /// 返回生效的 LanceDB 配置。
@@ -307,6 +675,15 @@ impl SkillMeta {
     /// 绑定从物理目录名称派生出的稳定运行时技能标识符。
     pub fn bind_directory_skill_id(&mut self, skill_id: String) {
         self.resolved_skill_id = skill_id;
+    }
+
+    /// Resolve every entry input schema into one final object schema before runtime export.
+    /// 在运行时导出之前，把每个入口输入 schema 解析为最终对象 schema。
+    pub fn resolve_entry_input_schemas(&mut self, skill_dir: &Path) -> Result<(), String> {
+        for tool in &mut self.entries {
+            tool.resolve_input_schema(skill_dir)?;
+        }
+        Ok(())
     }
 
     /// Return the effective skill id used by canonical entry names.
@@ -375,11 +752,68 @@ impl SkillMeta {
     }
 }
 
+impl SkillToolMeta {
+    /// Resolve the final AI-facing input schema for one entry from inline schema, file, or legacy parameters.
+    /// 基于内联 schema、外部文件或旧版参数，为单个入口解析最终面向 AI 的输入 schema。
+    pub fn resolve_input_schema(&mut self, skill_dir: &Path) -> Result<(), String> {
+        let entry_name = self.name.trim().to_string();
+        let has_inline_input_schema = self.input_schema.is_some();
+        let schema_file = self.input_schema_file.trim().to_string();
+        if has_inline_input_schema && !schema_file.is_empty() {
+            return Err(format!(
+                "skill entry {} must not declare both input_schema and input_schema_file",
+                entry_name
+            ));
+        }
+
+        let resolved_input_schema = if !schema_file.is_empty() {
+            load_entry_input_schema_file(skill_dir, &schema_file, &entry_name)?
+        } else if let Some(schema) = self.input_schema.clone() {
+            schema
+        } else {
+            build_entry_input_schema_from_parameters(&self.parameters)
+        };
+
+        validate_entry_input_schema_root(
+            &resolved_input_schema,
+            &format!("skill entry {} input_schema", entry_name),
+        )?;
+
+        if self.parameters.is_empty() {
+            self.parameters = derive_legacy_parameters_from_input_schema(&resolved_input_schema);
+        }
+        self.input_schema = Some(resolved_input_schema);
+        Ok(())
+    }
+
+    /// Return the resolved AI-facing input schema for one entry.
+    /// 返回单个入口已解析完成、面向 AI 的输入 schema。
+    pub fn resolved_input_schema(&self) -> &JsonValue {
+        self.input_schema
+            .as_ref()
+            .expect("entry input schema must be resolved before use")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
+        build_entry_input_schema_from_parameters, derive_legacy_parameters_from_input_schema,
         is_valid_luaskills_identifier, validate_luaskills_identifier, validate_luaskills_version,
+        SkillMeta, SkillParam,
     };
+    use serde_json::json;
+    use std::fs;
+
+    /// Build one unique temporary directory path for manifest tests.
+    /// 为 manifest 测试构造单个唯一临时目录路径。
+    fn make_manifest_test_dir(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("luaskills_manifest_{label}_{nonce}"))
+    }
 
     /// Verify that legal lowercase-hyphen identifiers are accepted.
     /// 验证合法的小写短横线标识符会被接受。
@@ -416,5 +850,146 @@ mod tests {
         assert!(validate_luaskills_version("", "version").is_err());
         assert!(validate_luaskills_version("v1.0.0", "version").is_err());
         assert!(validate_luaskills_version("1", "version").is_err());
+    }
+
+    /// Verify legacy flat parameters project into one object-style input schema.
+    /// 验证旧版扁平参数会被投影为对象式输入 schema。
+    #[test]
+    fn legacy_parameters_project_to_input_schema() {
+        let schema = build_entry_input_schema_from_parameters(&[
+            SkillParam {
+                name: "path".to_string(),
+                param_type: "string".to_string(),
+                description: "Absolute file path.".to_string(),
+                required: true,
+            },
+            SkillParam {
+                name: "recursive".to_string(),
+                param_type: "boolean".to_string(),
+                description: "Whether to recurse.".to_string(),
+                required: false,
+            },
+        ]);
+
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["properties"]["path"]["type"], "string");
+        assert_eq!(schema["properties"]["recursive"]["type"], "boolean");
+        assert_eq!(schema["required"], json!(["path"]));
+    }
+
+    /// Verify top-level schema properties can be projected back into legacy flat parameters.
+    /// 验证顶层 schema 属性能够反向投影回旧版扁平参数。
+    #[test]
+    fn input_schema_projects_back_to_legacy_parameters() {
+        let parameters = derive_legacy_parameters_from_input_schema(&json!({
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "description": "Node selector list."
+                },
+                "strict": {
+                    "type": "boolean",
+                    "description": "Enable strict validation."
+                }
+            },
+            "required": ["nodes"]
+        }));
+
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(parameters[0].name, "nodes");
+        assert_eq!(parameters[0].param_type, "array");
+        assert!(parameters[0].required);
+        assert_eq!(parameters[1].name, "strict");
+        assert_eq!(parameters[1].param_type, "boolean");
+        assert!(!parameters[1].required);
+    }
+
+    /// Verify one external JSON Schema file becomes the resolved entry input schema.
+    /// 验证单个外部 JSON Schema 文件会成为已解析的入口输入 schema。
+    #[test]
+    fn skill_meta_resolves_external_entry_input_schema_file() {
+        let skill_dir = make_manifest_test_dir("schema_file");
+        fs::create_dir_all(skill_dir.join("schemas")).expect("create schemas dir");
+        fs::write(
+            skill_dir.join("schemas").join("search.input.schema.json"),
+            serde_json::to_string_pretty(&json!({
+                "type": "object",
+                "properties": {
+                    "nodes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "file": { "type": "string" },
+                                "structural_path": { "type": "string" }
+                            },
+                            "required": ["file", "structural_path"]
+                        }
+                    }
+                },
+                "required": ["nodes"]
+            }))
+            .expect("serialize schema file"),
+        )
+        .expect("write schema file");
+
+        let mut meta: SkillMeta = serde_yaml::from_str(
+            r#"
+name: demo-skill
+version: 0.1.0
+enable: true
+entries:
+  - name: search
+    description: Demo search.
+    lua_entry: runtime/search.lua
+    lua_module: demo_search
+    input_schema_file: schemas/search.input.schema.json
+"#,
+        )
+        .expect("parse manifest");
+        meta.bind_directory_skill_id("demo-skill".to_string());
+        meta.resolve_entry_input_schemas(&skill_dir)
+            .expect("resolve entry input schemas");
+
+        let tool = meta.find_tool_by_local_name("search").expect("search entry");
+        assert_eq!(tool.resolved_input_schema()["type"], "object");
+        assert_eq!(tool.resolved_input_schema()["required"], json!(["nodes"]));
+        assert_eq!(tool.parameters.len(), 1);
+        assert_eq!(tool.parameters[0].name, "nodes");
+        assert_eq!(tool.parameters[0].param_type, "array");
+
+        fs::remove_dir_all(&skill_dir).expect("cleanup schema file test dir");
+    }
+
+    /// Verify invalid root input schema types are rejected during resolution.
+    /// 验证非法根输入 schema 类型会在解析阶段被拒绝。
+    #[test]
+    fn skill_meta_rejects_non_object_entry_input_schema() {
+        let skill_dir = make_manifest_test_dir("invalid_schema");
+        fs::create_dir_all(&skill_dir).expect("create invalid schema dir");
+
+        let mut meta: SkillMeta = serde_yaml::from_str(
+            r#"
+name: demo-skill
+version: 0.1.0
+enable: true
+entries:
+  - name: search
+    description: Demo search.
+    lua_entry: runtime/search.lua
+    lua_module: demo_search
+    input_schema:
+      type: array
+"#,
+        )
+        .expect("parse invalid manifest");
+        meta.bind_directory_skill_id("demo-skill".to_string());
+        let error = meta
+            .resolve_entry_input_schemas(&skill_dir)
+            .expect_err("non-object root schema should fail");
+        assert!(error.contains("input_schema.type must be \"object\""));
+
+        fs::remove_dir_all(&skill_dir).expect("cleanup invalid schema dir");
     }
 }

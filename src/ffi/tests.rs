@@ -553,6 +553,56 @@ fn write_query_test_skill(skill_root: &Path, skill_id: &str) -> PathBuf {
     skill_dir
 }
 
+/// Write one FFI query-test skill whose final input schema is provided by one external JSON file.
+/// 写入一个最终输入 schema 由外部 JSON 文件提供的 FFI 查询测试技能。
+fn write_query_schema_test_skill(skill_root: &Path, skill_id: &str) -> PathBuf {
+    let skill_dir = skill_root.join(skill_id);
+    std::fs::create_dir_all(skill_dir.join("runtime")).expect("create query schema runtime dir");
+    std::fs::create_dir_all(skill_dir.join("help")).expect("create query schema help dir");
+    std::fs::create_dir_all(skill_dir.join("schemas")).expect("create query schema schema dir");
+    std::fs::write(
+        skill_dir.join("skill.yaml"),
+        format!(
+            "name: {skill_id}\nversion: 0.1.0\nenable: true\ndebug: false\nhelp:\n  main:\n    description: Main help.\n    file: help/main.md\nentries:\n  - name: inspect\n    description: Query schema entry.\n    lua_entry: runtime/inspect.lua\n    lua_module: {skill_id}.inspect\n    input_schema_file: schemas/inspect.input.schema.json\n"
+        ),
+    )
+    .expect("write query schema skill yaml");
+    std::fs::write(
+        skill_dir.join("schemas").join("inspect.input.schema.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file": { "type": "string" },
+                            "structural_path": { "type": "string" }
+                        },
+                        "required": ["file", "structural_path"]
+                    }
+                }
+            },
+            "required": ["nodes"]
+        }))
+        .expect("serialize query schema input schema"),
+    )
+    .expect("write query schema input schema");
+    std::fs::write(
+        skill_dir.join("runtime").join("inspect.lua"),
+        "return function(args)\n  return 'schema-query-ok'\nend\n",
+    )
+    .expect("write query schema runtime entry");
+    std::fs::write(
+        skill_dir.join("help").join("main.md"),
+        format!("# {skill_id}\n\nQuery help.\n"),
+    )
+    .expect("write query schema help file");
+    skill_dir
+}
+
 /// Verify JSON FFI query entrypoints enforce authority-based ROOT visibility.
 /// 验证 JSON FFI 查询入口会执行基于权限的 ROOT 可见性控制。
 #[test]
@@ -795,6 +845,85 @@ fn ffi_query_json_filters_root_for_delegated_authority() {
             .contains("requires host-injected authority")
     );
 
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+/// Verify JSON FFI entry listing exports the resolved object schema for schema-file based entries.
+/// 验证 JSON FFI 入口列表会导出基于 schema 文件入口的已解析对象 schema。
+#[test]
+fn ffi_list_entries_json_exposes_resolved_input_schema() {
+    let _guard = ffi_test_guard();
+    let temp_root = std::env::temp_dir().join(format!(
+        "luaskills_ffi_query_schema_test_{}",
+        std::process::id()
+    ));
+    if temp_root.exists() {
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+    let root_root = RuntimeSkillRoot {
+        name: "ROOT".to_string(),
+        skills_dir: temp_root.join("root_skills"),
+    };
+    write_query_schema_test_skill(&root_root.skills_dir, "vulcan-schema-skill");
+    let mut engine = LuaEngine::new(LuaEngineOptions::new(
+        LuaVmPoolConfig {
+            min_size: 1,
+            max_size: 1,
+            idle_ttl_secs: 30,
+        },
+        crate::LuaRuntimeHostOptions {
+            temp_dir: Some(temp_root.join("temp")),
+            resources_dir: Some(temp_root.join("resources")),
+            lua_packages_dir: Some(temp_root.join("lua_packages")),
+            host_provided_tool_root: Some(temp_root.join("bin").join("tools")),
+            host_provided_lua_root: Some(temp_root.join("lua_packages")),
+            host_provided_ffi_root: Some(temp_root.join("libs")),
+            download_cache_root: Some(temp_root.join("temp").join("downloads")),
+            ..crate::LuaRuntimeHostOptions::default()
+        },
+    ))
+    .expect("create FFI query schema engine");
+    engine
+        .load_from_roots(&[root_root])
+        .expect("load FFI query schema root");
+    let engine_id = FFI_ENGINE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    ffi_engine_registry()
+        .lock()
+        .expect("lock ffi engine registry")
+        .insert(engine_id, FfiEngineSlot::new(engine));
+
+    let list_request = CString::new(
+        serde_json::json!({
+            "engine_id": engine_id,
+            "authority": SkillManagementAuthority::System
+        })
+        .to_string(),
+    )
+    .expect("schema list request");
+    let listed = unsafe {
+        decode_response_json(luaskills_ffi_list_entries_json(borrowed_json_buffer(
+            &list_request,
+        )))
+    };
+    assert_eq!(listed["ok"], true);
+    let result = listed["result"].as_array().expect("schema list result array");
+    let entry = result
+        .iter()
+        .find(|item| item["local_name"] == "inspect")
+        .expect("inspect schema entry");
+    assert_eq!(entry["input_schema"]["type"], "object");
+    assert_eq!(entry["input_schema"]["required"], serde_json::json!(["nodes"]));
+    assert_eq!(
+        entry["input_schema"]["properties"]["nodes"]["items"]["properties"]["file"]["type"],
+        "string"
+    );
+    assert_eq!(entry["parameters"][0]["name"], "nodes");
+    assert_eq!(entry["parameters"][0]["param_type"], "array");
+
+    ffi_engine_registry()
+        .lock()
+        .expect("lock ffi engine registry")
+        .remove(&engine_id);
     let _ = std::fs::remove_dir_all(&temp_root);
 }
 

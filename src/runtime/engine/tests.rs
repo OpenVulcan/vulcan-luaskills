@@ -316,6 +316,114 @@ fn write_model_test_skill_to_root(skill_root: &Path, skill_id: &str, lua_source:
     skill_dir
 }
 
+/// Write one skill fixture whose final AI-facing input schema comes from one external JSON file.
+/// 写入一个最终面向 AI 输入 schema 来自外部 JSON 文件的技能夹具。
+fn write_schema_file_skill_to_root(skill_root: &Path, skill_id: &str) -> PathBuf {
+    let skill_dir = skill_root.join(skill_id);
+    fs::create_dir_all(skill_dir.join("runtime")).expect("create schema skill runtime dir");
+    fs::create_dir_all(skill_dir.join("schemas")).expect("create schema skill schema dir");
+    fs::write(
+        skill_dir.join("skill.yaml"),
+        format!(
+            "name: {skill_id}\nversion: 0.1.0\nenable: true\ndebug: false\nentries:\n  - name: inspect\n    description: Schema file entry.\n    lua_entry: runtime/inspect.lua\n    lua_module: {skill_id}.inspect\n    input_schema_file: schemas/inspect.input.schema.json\n"
+        ),
+    )
+    .expect("write schema skill yaml");
+    fs::write(
+        skill_dir.join("schemas").join("inspect.input.schema.json"),
+        serde_json::to_string_pretty(&json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "description": "Node selector list.",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "file": { "type": "string" },
+                            "structural_path": { "type": "string" }
+                        },
+                        "required": ["file", "structural_path"]
+                    }
+                },
+                "strict": {
+                    "type": "boolean",
+                    "description": "Enable strict validation."
+                }
+            },
+            "required": ["nodes"]
+        }))
+        .expect("serialize schema skill input schema"),
+    )
+    .expect("write schema skill input schema");
+    fs::write(
+        skill_dir.join("runtime").join("inspect.lua"),
+        "return function(args)\n  return 'schema-ok'\nend\n",
+    )
+    .expect("write schema skill runtime entry");
+    skill_dir
+}
+
+/// Verify runtime entry export carries the resolved external JSON input schema and derived parameters.
+/// 验证运行时入口导出会携带已解析的外部 JSON 输入 schema 与推导出的参数列表。
+#[test]
+fn list_entries_exposes_resolved_entry_input_schema() {
+    let runtime_root = make_temp_runtime_root("entry-input-schema-export");
+    if runtime_root.exists() {
+        let _ = fs::remove_dir_all(&runtime_root);
+    }
+    create_runtime_test_layout(&runtime_root);
+    write_schema_file_skill_to_root(&runtime_root.join("skills"), "demo-schema-skill");
+
+    let mut engine = LuaEngine::new(LuaEngineOptions::new(
+        LuaVmPoolConfig {
+            min_size: 1,
+            max_size: 1,
+            idle_ttl_secs: 30,
+        },
+        LuaRuntimeHostOptions {
+            temp_dir: Some(runtime_root.join("temp")),
+            resources_dir: Some(runtime_root.join("resources")),
+            lua_packages_dir: Some(runtime_root.join("lua_packages")),
+            host_provided_tool_root: Some(runtime_root.join("bin").join("tools")),
+            host_provided_lua_root: Some(runtime_root.join("lua_packages")),
+            host_provided_ffi_root: Some(runtime_root.join("libs")),
+            download_cache_root: Some(runtime_root.join("temp").join("downloads")),
+            ..LuaRuntimeHostOptions::default()
+        },
+    ))
+    .expect("create engine for schema export test");
+    engine
+        .load_from_roots(&[RuntimeSkillRoot {
+            name: "ROOT".to_string(),
+            skills_dir: runtime_root.join("skills"),
+        }])
+        .expect("load schema export test root");
+
+    let entries = engine.list_entries();
+    let entry = entries
+        .iter()
+        .find(|item| item.local_name == "inspect")
+        .expect("inspect entry");
+    assert_eq!(entry.input_schema["type"], "object");
+    assert_eq!(entry.input_schema["required"], json!(["nodes"]));
+    assert_eq!(entry.input_schema["properties"]["nodes"]["type"], "array");
+    assert_eq!(
+        entry.input_schema["properties"]["nodes"]["items"]["properties"]["file"]["type"],
+        "string"
+    );
+    assert_eq!(entry.parameters.len(), 2);
+    assert_eq!(entry.parameters[0].name, "nodes");
+    assert_eq!(entry.parameters[0].param_type, "array");
+    assert!(entry.parameters[0].required);
+    assert_eq!(entry.parameters[1].name, "strict");
+    assert_eq!(entry.parameters[1].param_type, "boolean");
+
+    let _ = fs::remove_dir_all(&runtime_root);
+}
+
 /// Verify the canonical `change_set` validator accepts explicit AI-oriented modify hunks and file lifecycle records.
 /// 验证 canonical `change_set` 校验器会接受面向 AI 的显式 modify hunk 与文件生命周期记录。
 #[test]

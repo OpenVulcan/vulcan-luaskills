@@ -69,7 +69,63 @@ GitHub 托管 skill 的安装与发布资产必须保持同一个 `skill_id`：
 - zip 内部只能包含与 `skill_id` 同名的顶层目录，并且必须包含 `{skill_id}/skill.yaml`。
 - 仓库名、release 资产名前缀、checksum 文件名前缀、zip 顶层目录和最终安装目录应全部使用同一个 `skill_id`。
 
-## 2.2 托管身份字段契约
+## 2.2 入口输入 Schema
+
+LuaSkills 现在支持为每个入口声明一份完整的、面向 AI 的对象输入 schema。
+
+推荐规则：
+
+- `skill.yaml` 继续承担 `name`、`version`、`lua_entry`、help 链接等人类友好的元数据。
+- 复杂工具输入 schema 建议放到 `schemas/` 目录下的外部 JSON 文件中。
+- 当 schema 包含嵌套对象、带 `items` 的数组、`oneOf` / `anyOf`、严格 `additionalProperties` 规则时，应优先使用 `input_schema_file`。
+- 旧版 `parameters` 仅作为向后兼容或简单扁平入口的声明方式保留。
+
+当前入口 schema 字段：
+
+- `parameters`：旧版扁平参数列表。当 `input_schema` 与 `input_schema_file` 都缺失时，运行时会自动把 `parameters` 投影成对象 schema。
+- `input_schema`：可选的内联对象 schema，直接写在 `skill.yaml` 中。
+- `input_schema_file`：位于 `schemas/` 目录下的可选相对 JSON 文件路径。对于非简单 schema，这是推荐格式。
+
+约束规则：
+
+- 最终入口输入 schema 必须是一个 JSON 对象 schema，并且根节点 `type` 必须是 `object`。
+- 同一个入口不能同时声明 `input_schema` 和 `input_schema_file`。
+- `input_schema_file` 必须是位于 `schemas/` 下的相对路径。
+- 当 `parameters` 为空但存在完整 schema 时，LuaSkills 会从根 `properties` 自动推导一份旧版顶层参数预览，以兼容旧导出接口。
+
+示例：
+
+```yaml
+entries:
+  - name: node_source
+    description: 读取指定节点。
+    lua_entry: runtime/node_source.lua
+    lua_module: demo.node_source
+    input_schema_file: schemas/node_source.input.schema.json
+```
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string" },
+          "structural_path": { "type": "string" }
+        },
+        "required": ["file", "structural_path"]
+      }
+    }
+  },
+  "required": ["nodes"]
+}
+```
+
+## 2.3 托管身份字段契约
 
 有些 skill 需要把多次 entry 调用绑定到同一个会话、任务或上下文状态。LuaSkills 保留 `LUASKILL_SID` 作为 skill entry 参数中的标准托管身份字段。
 

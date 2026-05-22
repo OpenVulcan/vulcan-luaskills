@@ -383,6 +383,9 @@ pub struct FfiRuntimeEntryDescriptor {
     /// Human-readable entry description.
     /// 人类可读入口描述。
     pub description: FfiOwnedBuffer,
+    /// Final AI-facing input schema encoded as UTF-8 JSON text.
+    /// 编码为 UTF-8 JSON 文本的最终面向 AI 输入 schema。
+    pub input_schema_json: FfiOwnedBuffer,
     /// Parameter descriptor array.
     /// 参数描述数组。
     pub parameters: *mut FfiRuntimeEntryParameterDescriptor,

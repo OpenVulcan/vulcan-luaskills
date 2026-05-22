@@ -265,6 +265,15 @@ fn entry_list_free_handles_nested_owned_buffers() {
             description: "Optional note".to_string(),
             required: false,
         }],
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "Optional note"
+                }
+            }
+        }),
     };
 
     let mut items = vec![alloc_entry_descriptor(&runtime_entry)];
@@ -286,6 +295,21 @@ fn entry_list_free_handles_nested_owned_buffers() {
     assert_eq!(
         read_owned_buffer_text(&first_entry.description),
         "Demo entry description"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&read_owned_buffer_text(
+            &first_entry.input_schema_json
+        ))
+        .expect("parse entry input schema json"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "Optional note"
+                }
+            }
+        })
     );
     assert_eq!(first_entry.parameters_len, 1);
 
@@ -546,6 +570,21 @@ fn standard_ffi_load_and_list_entries_round_trip() {
     assert_eq!(
         read_owned_buffer_text(&entry_ref.description),
         "Ping entry."
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&read_owned_buffer_text(
+            &entry_ref.input_schema_json
+        ))
+        .expect("parse listed entry input schema json"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "Optional note."
+                }
+            }
+        })
     );
     assert_eq!(entry_ref.parameters_len, 1);
     let parameter_ref = unsafe { &*entry_ref.parameters };
