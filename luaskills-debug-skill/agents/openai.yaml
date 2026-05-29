@@ -1,4 +1,0 @@
-interface:
-  display_name: "LuaSkills Debug Skill"
-  short_description: "Debug one local LuaSkill package through a real runtime_root"
-  default_prompt: "Use $luaskills-debug-skill to inspect, list tools for, or call one local LuaSkill package through a real runtime_root."

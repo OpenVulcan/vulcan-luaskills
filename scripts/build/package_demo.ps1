@@ -2,7 +2,7 @@
     [string]$Mode = "ffi",
     [string]$Platform = "",
     [string]$OutputDir = "target\release-packages",
-    [string]$ReleaseTag = "v0.4.1"
+    [string]$ReleaseTag = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +57,15 @@ Set-Location $ProjectRoot
 
 if ($Mode -ne "ffi" -and $Mode -ne "rust") {
     throw "Mode must be 'ffi' or 'rust'."
+}
+
+if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
+    $CargoTomlText = Get-Content -Raw -LiteralPath "Cargo.toml"
+    $CargoVersionMatch = [regex]::Match($CargoTomlText, '(?m)^version\s*=\s*"([^"]+)"')
+    if (-not $CargoVersionMatch.Success) {
+        throw "Unable to resolve fallback release tag from Cargo.toml."
+    }
+    $ReleaseTag = "v$($CargoVersionMatch.Groups[1].Value)"
 }
 
 function Ensure-Dir {
@@ -345,15 +354,27 @@ REM PackageRoot 指向解压后的 demo 包根目录。
 set "PACKAGE_ROOT=%~dp0"
 set "RUNTIME_ROOT=%PACKAGE_ROOT%runtime"
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\fetch_runtime_deps.ps1" -Target "%TARGET%" -RuntimeRoot "%RUNTIME_ROOT%"
+if /I not "%TARGET%"=="ffi" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\deps\fetch_deps.ps1" -Target "%TARGET%" -RuntimeRoot "%RUNTIME_ROOT%"
+)
 if errorlevel 1 (
   echo Failed to upgrade dependencies.
+  pause
+  exit /b 1
+)
+if exist "%PACKAGE_ROOT%scripts\ffi\fetch_ffi.ps1" (
+  if /I "%TARGET%"=="all" powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\ffi\fetch_ffi.ps1" -RuntimeRoot "%RUNTIME_ROOT%" -LuaSkillsVersion "__LUASKILLS_RELEASE_TAG__"
+  if /I "%TARGET%"=="ffi" powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\ffi\fetch_ffi.ps1" -RuntimeRoot "%RUNTIME_ROOT%" -LuaSkillsVersion "__LUASKILLS_RELEASE_TAG__"
+)
+if errorlevel 1 (
+  echo Failed to upgrade FFI dependencies.
   pause
   exit /b 1
 )
 echo Dependencies are ready.
 pause
 '@
+    $WindowsUpgradeScript = $WindowsUpgradeScript.Replace("__LUASKILLS_RELEASE_TAG__", $ReleaseTag)
     [System.IO.File]::WriteAllText((Join-Path $PackageRoot "upgrade_deps.bat"), $WindowsUpgradeScript, [System.Text.UTF8Encoding]::new($false))
 
     @'
@@ -372,8 +393,15 @@ TARGET="${1:-all}"
 # RuntimeRoot 是接收依赖的包内运行根目录。
 RUNTIME_ROOT="${RUNTIME_ROOT:-$PACKAGE_ROOT/runtime}"
 
-RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET"
+if [ "$TARGET" != "ffi" ]; then
+  RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/deps/fetch_deps.sh" "$TARGET"
+fi
+if [ -f "$PACKAGE_ROOT/scripts/ffi/fetch_ffi.sh" ] && { [ "$TARGET" = "all" ] || [ "$TARGET" = "ffi" ]; }; then
+  LUASKILLS_VERSION="${LUASKILLS_VERSION:-__LUASKILLS_RELEASE_TAG__}" RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/ffi/fetch_ffi.sh"
+fi
 '@ | Set-Content -Path (Join-Path $PackageRoot "upgrade_deps.sh") -Encoding UTF8
+    (Get-Content -Raw -Path (Join-Path $PackageRoot "upgrade_deps.sh")).Replace("__LUASKILLS_RELEASE_TAG__", $ReleaseTag) |
+        Set-Content -Path (Join-Path $PackageRoot "upgrade_deps.sh") -Encoding UTF8
 }
 
 function Write-PackagedDemoReadme {
@@ -424,7 +452,7 @@ function Write-PackagedDemoReadme {
         "",
         "## Package Contents",
         "",
-        "- runtime/: default demo runtime root; fetch scripts install lua-runtime-packages-$Platform.tar.gz and luaskills-ffi-sdk-$Platform.tar.gz into it.",
+        "- runtime/: default demo runtime root; categorized fetch scripts install runtime packages, and FFI packages can additionally install luaskills-ffi-sdk-$Platform.tar.gz.",
         "- scripts/: dependency fetch scripts for the current platform only.",
         "- licenses/: project and bundled component license files.",
         "- demo-manifest.json: package mode, platform, runtime root, and supported fetch targets."
@@ -457,7 +485,7 @@ function Write-PackagedDemoReadme {
         $FetchVldbCommand,
         '```',
         "",
-        "Windows packages include run.ps1, upgrade_deps.bat, and scripts/fetch_runtime_deps.ps1. Linux and macOS packages include run.sh, upgrade_deps.sh, and scripts/fetch_runtime_deps.sh."
+        "Windows packages include run.ps1, upgrade_deps.bat, and scripts/deps/fetch_deps.ps1. FFI packages also include scripts/ffi/fetch_ffi.ps1. Linux and macOS packages use the matching .sh scripts."
     )
 
     ($ReadmeLines -join [Environment]::NewLine) | Set-Content -Path (Join-Path $PackageRoot "README.md") -Encoding UTF8
@@ -480,7 +508,7 @@ if (Test-Path -LiteralPath $PackageRoot) {
 }
 
 Ensure-Dir $PackageRoot
-Ensure-Dir (Join-Path $PackageRoot "scripts")
+Ensure-Dir (Join-Path $PackageRoot "scripts\deps")
 Ensure-Dir (Join-Path $PackageRoot "runtime")
 Ensure-Dir (Join-Path $PackageRoot "licenses")
 Ensure-Dir $OutputDir
@@ -493,13 +521,19 @@ Remove-Item -Recurse -Force -LiteralPath (Join-Path $PackageRoot "target") -Erro
 
 Copy-Item -Recurse -Force -Path "examples\ffi\standard_runtime\runtime_root\*" -Destination (Join-Path $PackageRoot "runtime") -ErrorAction SilentlyContinue
 if (Test-WindowsPackagePlatform -PlatformKey $Platform) {
-    Copy-Item -Force -LiteralPath "scripts\fetch_runtime_deps.ps1" -Destination (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1")
+    Copy-Item -Force -LiteralPath "scripts\deps\fetch_deps.ps1" -Destination (Join-Path $PackageRoot "scripts\deps\fetch_deps.ps1")
 } else {
-    Copy-Item -Force -LiteralPath "scripts\fetch_runtime_deps.sh" -Destination (Join-Path $PackageRoot "scripts\fetch_runtime_deps.sh")
+    Copy-Item -Force -LiteralPath "scripts\deps\fetch_deps.sh" -Destination (Join-Path $PackageRoot "scripts\deps\fetch_deps.sh")
 }
 Copy-Item -Force -LiteralPath "LICENSE" -Destination (Join-Path $PackageRoot "licenses\LICENSE")
 
 if ($Mode -eq "ffi") {
+    Ensure-Dir (Join-Path $PackageRoot "scripts\ffi")
+    if (Test-WindowsPackagePlatform -PlatformKey $Platform) {
+        Copy-Item -Force -LiteralPath "scripts\ffi\fetch_ffi.ps1" -Destination (Join-Path $PackageRoot "scripts\ffi\fetch_ffi.ps1")
+    } else {
+        Copy-Item -Force -LiteralPath "scripts\ffi\fetch_ffi.sh" -Destination (Join-Path $PackageRoot "scripts\ffi\fetch_ffi.sh")
+    }
     Ensure-Dir (Join-Path $PackageRoot "include")
     Ensure-Dir (Join-Path $PackageRoot "lib")
     Copy-Item -Force -Path "include\*.h" -Destination (Join-Path $PackageRoot "include")

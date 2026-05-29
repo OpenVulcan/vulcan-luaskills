@@ -64,7 +64,7 @@ def parse_lua_packages(lua_packages_path: Path) -> list[dict[str, Any]]:
         if line.startswith("pkg "):
             tokens = line.split()
             current = {
-                "rock_name": tokens[1],
+                "package_name": tokens[1],
                 "version": tokens[2] if len(tokens) > 2 else None,
                 "config": [],
             }
@@ -91,7 +91,7 @@ def load_packages_source(project_root: Path) -> dict[str, Any]:
     if not active_path.exists():
         raise RuntimeError(
             "runtime packages active state was not found under target/runtime-packages/active.json; "
-            "run scripts/fetch_runtime_packages_bundle.py first"
+            "run scripts/deps/fetch_runtime_packages_bundle.py first"
         )
 
     payload = json.loads(active_path.read_text(encoding="utf-8"))
@@ -165,33 +165,6 @@ def normalize_bundle_license_index(index_path: Path) -> None:
     write_json(index_path, payload)
 
 
-def parse_luarocks_license_manifest(manifest_path: Path) -> list[dict[str, str]]:
-    """Parse the runtime LuaRocks TSV manifest into structured rows.
-    将运行时 LuaRocks TSV 清单解析为结构化行记录。
-    """
-
-    if not manifest_path.exists():
-        return []
-
-    rows: list[dict[str, str]] = []
-    for line in manifest_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        parts.extend([""] * (5 - len(parts)))
-        rows.append(
-            {
-                "name": parts[0],
-                "version": parts[1],
-                "license": parts[2],
-                "source": parts[3],
-                "homepage": parts[4],
-                "license_root": f"licenses/luarocks/{parts[0]}",
-            }
-        )
-    return rows
-
-
 def parse_native_license_manifest(manifest_path: Path) -> list[dict[str, Any]]:
     """Parse the runtime native-license manifest and keep only third-party components.
     解析运行时原生授权清单，并仅保留第三方组件。
@@ -219,14 +192,14 @@ def build_package_help_entries(
 
     entries: list[dict[str, str]] = []
     for package in packages:
-        file_name = f"{package['rock_name']}.json"
+        file_name = f"{package['package_name']}.json"
         help_path = help_packages_root / file_name
         summary_en = "Runtime package metadata imported from lua_packages.txt."
         summary_zh = "从 lua_packages.txt 导入的运行时包元数据。"
         payload = {
             "schema_version": 1,
             "help_kind": "package",
-            "package_name": package["rock_name"],
+            "package_name": package["package_name"],
             "version": package["version"],
             "summary_en": summary_en,
             "summary_zh": summary_zh,
@@ -236,7 +209,7 @@ def build_package_help_entries(
         write_json(help_path, payload)
         entries.append(
             {
-                "name": package["rock_name"],
+                "name": package["package_name"],
                 "version": package["version"] or "",
                 "help_path": f"resources/luaskills-packages/help/packages/{file_name}",
             }
@@ -246,7 +219,6 @@ def build_package_help_entries(
 
 def build_third_party_notices(
     native_components: list[dict[str, Any]],
-    luarocks_packages: list[dict[str, str]],
 ) -> str:
     """Render one Markdown notice summary for runtime-shipped third-party content.
     为运行时携带的第三方内容渲染一个 Markdown notice 摘要。
@@ -261,14 +233,6 @@ def build_third_party_notices(
     for component in native_components:
         lines.append(
             f"- `{component.get('name', '')}`: {component.get('license', '')}"
-        )
-    lines.extend(["", "## LuaRocks Packages", ""])
-    for package in luarocks_packages:
-        license_text = package["license"] or "unknown"
-        source_text = package["source"] or ""
-        lines.append(
-            f"- `{package['name']}` {package['version']}: {license_text}"
-            + (f" ({source_text})" if source_text else "")
         )
     lines.append("")
     return "\n".join(lines)
@@ -346,18 +310,13 @@ def generate_runtime_packages_metadata(
         )
     ):
         native_components = parse_native_license_manifest(licenses_root / "manifest.json")
-        luarocks_packages = parse_luarocks_license_manifest(
-            licenses_root / "luarocks" / "manifest.tsv"
-        )
         third_party_licenses = {
             "schema_version": 1,
             "native_components": native_components,
-            "luarocks_packages": luarocks_packages,
         }
         write_json(packages_root / "THIRD_PARTY_LICENSES.json", third_party_licenses)
     else:
         native_components = []
-        luarocks_packages = []
 
     if not (
         dist_root
@@ -366,24 +325,18 @@ def generate_runtime_packages_metadata(
             packages_root / "THIRD_PARTY_NOTICES.md",
         )
     ):
-        if not native_components and not luarocks_packages:
+        if not native_components:
             native_components = parse_native_license_manifest(licenses_root / "manifest.json")
-            luarocks_packages = parse_luarocks_license_manifest(
-                licenses_root / "luarocks" / "manifest.tsv"
-            )
         write_text(
             packages_root / "THIRD_PARTY_NOTICES.md",
-            build_third_party_notices(native_components, luarocks_packages),
+            build_third_party_notices(native_components),
         )
 
     if dist_root and copy_if_present(dist_root / "licenses", packages_license_root):
         normalize_bundle_license_index(packages_license_root / "index.json")
     else:
-        if not native_components and not luarocks_packages:
+        if not native_components:
             native_components = parse_native_license_manifest(licenses_root / "manifest.json")
-            luarocks_packages = parse_luarocks_license_manifest(
-                licenses_root / "luarocks" / "manifest.tsv"
-            )
         license_index = {
             "schema_version": 1,
             "native_components": [
@@ -394,7 +347,6 @@ def generate_runtime_packages_metadata(
                 }
                 for item in native_components
             ],
-            "luarocks_packages": luarocks_packages,
         }
         write_json(packages_license_root / "index.json", license_index)
 

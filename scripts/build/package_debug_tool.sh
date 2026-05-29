@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ProjectRoot points at the repository root regardless of the caller location.
 # ProjectRoot 指向仓库根目录，避免调用方当前位置影响路径解析。
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Platform stores the release asset platform key.
 # Platform 保存发布资产使用的平台标识。
@@ -11,16 +11,57 @@ PLATFORM="${1:-}"
 
 # OutputDir stores final release archives.
 # OutputDir 保存最终发布压缩包。
-OUTPUT_DIR="${OUTPUT_DIR:-target/release-packages}"
+OUTPUT_DIR="${3:-${OUTPUT_DIR:-target/release-packages}}"
 
-# ReleaseTag stores the LuaSkills release tag forwarded to dependency bootstrap scripts.
-# ReleaseTag 保存转发给依赖初始化脚本的 LuaSkills 发布标签。
-RELEASE_TAG="${2:-${RELEASE_TAG:-v0.4.1}}"
+# ReleaseTag stores the LuaSkills release tag recorded in package manifests.
+# ReleaseTag 保存写入包清单的 LuaSkills 发布标签。
+RELEASE_TAG="${2:-${RELEASE_TAG:-}}"
+
+normalize_output_dir() {
+  # Convert Windows drive paths into shell-native paths before tar sees a colon.
+  # 在 tar 看到冒号前，将 Windows 盘符路径转换为 shell 原生路径。
+  local raw_path="$1"
+  case "$raw_path" in
+    [A-Za-z]:/*)
+      local drive_lower rest
+      drive_lower="$(printf '%s' "${raw_path:0:1}" | tr '[:upper:]' '[:lower:]')"
+      rest="${raw_path:3}"
+      if [ -d "/mnt/$drive_lower" ]; then
+        printf '/mnt/%s/%s\n' "$drive_lower" "$rest"
+      else
+        printf '/%s/%s\n' "$drive_lower" "$rest"
+      fi
+      ;;
+    *) printf '%s\n' "$raw_path" ;;
+  esac
+}
+
+OUTPUT_DIR="$(normalize_output_dir "$OUTPUT_DIR")"
 
 ensure_dir() {
   # Create one directory when it does not exist.
   # 在目录不存在时创建该目录。
   mkdir -p "$1"
+}
+
+resolve_release_tag() {
+  # Resolve the LuaSkills release tag from input or Cargo.toml.
+  # 从输入参数或 Cargo.toml 解析 LuaSkills 发布标签。
+  local explicit_tag="$1"
+  if [ -n "$explicit_tag" ]; then
+    printf '%s\n' "$explicit_tag"
+    return 0
+  fi
+  python3 - "$PROJECT_ROOT/Cargo.toml" <<'PY'
+from pathlib import Path
+import re
+import sys
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', text)
+if not match:
+    raise SystemExit("Unable to resolve fallback release tag from Cargo.toml.")
+print(f"v{match.group(1)}")
+PY
 }
 
 create_tar_from_dir() {
@@ -84,7 +125,7 @@ param(
 \$RuntimeRoot = Join-Path \$PackageRoot "runtime"
 
 New-Item -ItemType Directory -Force -Path \$RuntimeRoot | Out-Null
-powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$PackageRoot "scripts\\fetch_runtime_deps.ps1") -Target \$Target -Database \$Database -RuntimeRoot \$RuntimeRoot -LuaSkillsVersion "$RELEASE_TAG" -SkipLuaSkillsFfi -SkipLuaRuntimeLibs
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$PackageRoot "scripts\\deps\\fetch_deps.ps1") -Target \$Target -Database \$Database -RuntimeRoot \$RuntimeRoot
 \$FetchExitCode = \$LASTEXITCODE
 if (\$FetchExitCode -ne 0) {
     exit \$FetchExitCode
@@ -115,7 +156,7 @@ echo Debug runtime dependencies are ready.
 pause
 BAT
 
-    cat > "$package_root/scripts/fetch_runtime_deps.sh" <<'SH'
+    cat > "$package_root/scripts/deps/fetch_deps.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -179,7 +220,7 @@ resolve_powershell_host() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PACKAGE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PACKAGE_ROOT_WIN="$(to_windows_path "$PACKAGE_ROOT")"
 TARGET="${1:-all}"
 DATABASE="${2:-vldb-controller}"
@@ -192,7 +233,7 @@ FORWARDED_ARGS=(
   -ExecutionPolicy
   Bypass
   -File
-  "${PACKAGE_ROOT_WIN}\scripts\fetch_runtime_deps.ps1"
+  "${PACKAGE_ROOT_WIN}\scripts\deps\fetch_deps.ps1"
   -Target
   "$TARGET"
   -Database
@@ -201,14 +242,8 @@ FORWARDED_ARGS=(
   "$RUNTIME_ROOT_WIN"
 )
 
-if [ -n "${LUASKILLS_VERSION:-}" ]; then
-  FORWARDED_ARGS+=(-LuaSkillsVersion "$LUASKILLS_VERSION")
-fi
 if [ "${LUA_PACKAGES_ONLY:-0}" = "1" ]; then
   FORWARDED_ARGS+=(-LuaPackagesOnly)
-fi
-if [ "${SKIP_LUASKILLS_FFI:-0}" = "1" ]; then
-  FORWARDED_ARGS+=(-SkipLuaSkillsFfi)
 fi
 if [ "${SKIP_LUA_RUNTIME_LIBS:-0}" = "1" ]; then
   FORWARDED_ARGS+=(-SkipLuaRuntimeLibs)
@@ -216,7 +251,7 @@ fi
 
 exec "$POWERSHELL_HOST" "${FORWARDED_ARGS[@]}"
 SH
-    chmod +x "$package_root/scripts/fetch_runtime_deps.sh"
+    chmod +x "$package_root/scripts/deps/fetch_deps.sh"
 
     cat > "$package_root/setup_runtime.sh" <<SH
 #!/usr/bin/env bash
@@ -228,7 +263,7 @@ DATABASE="\${2:-none}"
 RUNTIME_ROOT="\${RUNTIME_ROOT:-\$PACKAGE_ROOT/runtime}"
 
 mkdir -p "\$RUNTIME_ROOT"
-SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="$RELEASE_TAG" RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "\$TARGET" "\$DATABASE"
+RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/deps/fetch_deps.sh" "\$TARGET" "\$DATABASE"
 echo "Debug runtime dependencies are ready under \$RUNTIME_ROOT"
 SH
     chmod +x "$package_root/setup_runtime.sh"
@@ -268,7 +303,7 @@ DATABASE="\${2:-none}"
 RUNTIME_ROOT="\${RUNTIME_ROOT:-\$PACKAGE_ROOT/runtime}"
 
 mkdir -p "\$RUNTIME_ROOT"
-SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="$RELEASE_TAG" RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "\$TARGET" "\$DATABASE"
+RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/deps/fetch_deps.sh" "\$TARGET" "\$DATABASE"
 echo "Debug runtime dependencies are ready under \$RUNTIME_ROOT"
 SH
   chmod +x "$package_root/setup_runtime.sh"
@@ -685,23 +720,22 @@ write_debug_package_readme() {
 
   {
     printf '# LuaSkills debug tool package\n\n'
-    printf 'This package is a standalone skill-debug workspace for %s. It contains the release-mode `luaskills-debug` executable, a package-local `runtime/` directory, a `skills/` drop-in directory, the `luaskills-debug-skill/` Codex wrapper, and scripts that fetch the latest compatible Lua runtime packages.\n\n' "$PLATFORM"
+    printf 'This package is a standalone skill-debug workspace for %s. It contains the release-mode `luaskills-debug` executable, a package-local `runtime/` directory, a `skills/` drop-in directory, and scripts that fetch the latest compatible Lua runtime packages.\n\n' "$PLATFORM"
     printf '## Package Contents\n\n'
     printf -- '- `%s`: standalone debug executable.\n' "$binary_path"
     printf -- '- `runtime/`: package-local runtime root used by debug commands.\n'
     printf -- '- `skills/`: place exactly one skill package directory here for quick debugging.\n'
-    printf -- '- `luaskills-debug-skill/`: Codex skill wrapper for invoking the packaged debug binary.\n'
     printf -- '- `scripts/`: platform-matching dependency fetch script.\n'
     printf -- '- `setup_runtime.*` / `upgrade_deps.*`: fetch Lua runtime packages into `runtime/`.\n'
     printf -- '- `debug.*`: convenience launcher that auto-detects one skill under `skills/`.\n\n'
     printf '## Quick Start\n\n'
     printf '```%s\n%s\n%s\n%s\n%s\n```\n\n' "$shell_name" "$setup_command" "$inspect_command" "$list_command" "$call_command"
-    printf 'The default setup command fetches the `lua` target and stages `runtime/lua_packages/`, `runtime/resources/`, and `runtime/licenses/` metadata. It does not download the LuaSkills FFI SDK and does not copy the runtime package `libs/` directory.\n\n'
+    printf 'The default setup command fetches the `lua` target and stages `runtime/lua_packages/`, `runtime/libs/`, `runtime/resources/`, and `runtime/licenses/` metadata. It does not download the extra LuaSkills FFI SDK.\n\n'
     printf 'Use `all` only when you also need database helper binaries. The Lua setup path stays metadata-complete so packaged-runtime manifest validation remains consistent.\n\n'
     printf '## 中文说明\n\n'
-    printf '这个包是独立的 skill 调试工作台。解压后先执行初始化脚本拉取 Lua runtime packages，然后把一个 skill 目录放到 `skills/` 下，就可以通过 `debug` 启动脚本执行 `inspect`、`list-tools` 或 `call`。包内也包含 `luaskills-debug-skill/`，可作为 Codex skill 包装器使用。\n\n'
+    printf '这个包是独立的 skill 调试工作台。解压后先执行初始化脚本拉取 Lua runtime packages，然后把一个 skill 目录放到 `skills/` 下，就可以通过 `debug` 启动脚本执行 `inspect`、`list-tools` 或 `call`。\n\n'
     printf '```%s\n%s\n%s\n%s\n%s\n```\n\n' "$shell_name" "$setup_command" "$inspect_command" "$list_command" "$call_command"
-    printf '默认初始化会把 `runtime/lua_packages/`、`runtime/resources/` 与 `runtime/licenses/` 元数据放进调试工作区，不会额外下载 LuaSkills FFI SDK，也不会复制 runtime package 的 `libs/` 目录。只有需要数据库辅助进程时才建议执行 `all`。\n'
+    printf '默认初始化会把 `runtime/lua_packages/`、`runtime/libs/`、`runtime/resources/` 与 `runtime/licenses/` 元数据放进调试工作区，不会额外下载 LuaSkills FFI SDK。只有需要数据库辅助进程时才建议执行 `all`。\n'
   } > "$package_root/README.md"
 }
 
@@ -720,12 +754,13 @@ if [ -z "$PLATFORM" ]; then
 fi
 
 cd "$PROJECT_ROOT"
+RELEASE_TAG="$(resolve_release_tag "$RELEASE_TAG")"
 PACKAGE_ROOT="target/debug-tool-package/luaskills-debug-tool"
 rm -rf "$PACKAGE_ROOT"
 ensure_dir "$PACKAGE_ROOT/bin"
 ensure_dir "$PACKAGE_ROOT/runtime"
 ensure_dir "$PACKAGE_ROOT/skills"
-ensure_dir "$PACKAGE_ROOT/scripts"
+ensure_dir "$PACKAGE_ROOT/scripts/deps"
 ensure_dir "$PACKAGE_ROOT/licenses"
 ensure_dir "$OUTPUT_DIR"
 
@@ -752,15 +787,12 @@ cp -f "$DEBUG_BINARY_PATH" "$PACKAGE_ROOT/bin/$DEBUG_BINARY_NAME"
 if ! platform_is_windows; then
   chmod +x "$PACKAGE_ROOT/bin/$DEBUG_BINARY_NAME"
 fi
-cp -a luaskills-debug-skill "$PACKAGE_ROOT/luaskills-debug-skill"
-find "$PACKAGE_ROOT/luaskills-debug-skill" -type d -name '__pycache__' -prune -exec rm -rf {} +
-find "$PACKAGE_ROOT/luaskills-debug-skill" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 cp -f LICENSE "$PACKAGE_ROOT/licenses/LICENSE"
 if platform_is_windows; then
-  cp -f scripts/fetch_runtime_deps.ps1 "$PACKAGE_ROOT/scripts/fetch_runtime_deps.ps1"
+  cp -f scripts/deps/fetch_deps.ps1 "$PACKAGE_ROOT/scripts/deps/fetch_deps.ps1"
 else
-  cp -f scripts/fetch_runtime_deps.sh "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh"
-  chmod +x "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh"
+  cp -f scripts/deps/fetch_deps.sh "$PACKAGE_ROOT/scripts/deps/fetch_deps.sh"
+  chmod +x "$PACKAGE_ROOT/scripts/deps/fetch_deps.sh"
 fi
 
 write_debug_runtime_setup_scripts "$PACKAGE_ROOT"
@@ -775,7 +807,6 @@ cat > "$PACKAGE_ROOT/debug-tool-manifest.json" <<JSON
   "binary": "bin/${DEBUG_BINARY_NAME}",
   "runtime_root": "runtime",
   "skills_dir": "skills",
-  "debug_skill": "luaskills-debug-skill",
   "release_tag": "${RELEASE_TAG}",
   "default_fetch_target": "lua",
   "fetch_targets": ["lua", "all", "vldb", "vldb-controller", "vldb-direct"]

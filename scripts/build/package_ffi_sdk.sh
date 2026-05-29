@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ProjectRoot points at the repository root regardless of the caller location.
 # ProjectRoot 指向仓库根目录，避免调用方当前位置影响路径解析。
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Platform stores the release asset platform key.
 # Platform 保存发布资产使用的平台标识。
@@ -11,7 +11,28 @@ PLATFORM="${1:-}"
 
 # OutputDir stores final release archives.
 # OutputDir 保存最终发布压缩包。
-OUTPUT_DIR="${OUTPUT_DIR:-target/release-packages}"
+OUTPUT_DIR="${2:-${OUTPUT_DIR:-target/release-packages}}"
+
+normalize_output_dir() {
+  # Convert Windows drive paths into shell-native paths before tar sees a colon.
+  # 在 tar 看到冒号前，将 Windows 盘符路径转换为 shell 原生路径。
+  local raw_path="$1"
+  case "$raw_path" in
+    [A-Za-z]:/*)
+      local drive_lower rest
+      drive_lower="$(printf '%s' "${raw_path:0:1}" | tr '[:upper:]' '[:lower:]')"
+      rest="${raw_path:3}"
+      if [ -d "/mnt/$drive_lower" ]; then
+        printf '/mnt/%s/%s\n' "$drive_lower" "$rest"
+      else
+        printf '/%s/%s\n' "$drive_lower" "$rest"
+      fi
+      ;;
+    *) printf '%s\n' "$raw_path" ;;
+  esac
+}
+
+OUTPUT_DIR="$(normalize_output_dir "$OUTPUT_DIR")"
 
 ensure_dir() {
   # Create one directory when it does not exist.

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ProjectRoot points at the repository root regardless of the caller location.
 # ProjectRoot 指向仓库根目录，避免调用方当前位置影响路径解析。
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Platform stores the release asset platform key.
 # Platform 保存发布资产使用的平台标识。
@@ -19,7 +19,28 @@ STAGING_DIR="${STAGING_DIR:-target/lua-runtime-package}"
 
 # OutputDir stores final release archives.
 # OutputDir 保存最终发布压缩包。
-OUTPUT_DIR="${OUTPUT_DIR:-target/release-packages}"
+OUTPUT_DIR="${2:-${OUTPUT_DIR:-target/release-packages}}"
+
+normalize_output_dir() {
+  # Convert Windows drive paths into shell-native paths before tar sees a colon.
+  # 在 tar 看到冒号前，将 Windows 盘符路径转换为 shell 原生路径。
+  local raw_path="$1"
+  case "$raw_path" in
+    [A-Za-z]:/*)
+      local drive_lower rest
+      drive_lower="$(printf '%s' "${raw_path:0:1}" | tr '[:upper:]' '[:lower:]')"
+      rest="${raw_path:3}"
+      if [ -d "/mnt/$drive_lower" ]; then
+        printf '/mnt/%s/%s\n' "$drive_lower" "$rest"
+      else
+        printf '/%s/%s\n' "$drive_lower" "$rest"
+      fi
+      ;;
+    *) printf '%s\n' "$raw_path" ;;
+  esac
+}
+
+OUTPUT_DIR="$(normalize_output_dir "$OUTPUT_DIR")"
 
 ensure_dir() {
   # Create one directory when it does not exist.
@@ -79,9 +100,9 @@ copy_tree_if_exists() {
   fi
 }
 
-copy_luarocks_runtime_dir() {
-  # Flatten LuaRocks' Lua 5.1 ABI directory into the runtime default layout.
-  # 将 LuaRocks 的 Lua 5.1 ABI 目录扁平化到 runtime 默认布局。
+copy_lua_package_runtime_dir() {
+  # Flatten Lua 5.1 ABI package directories into the runtime default layout.
+  # 将 Lua 5.1 ABI 包目录扁平化到 runtime 默认布局。
   local source="$1"
   local destination="$2"
   [ -d "$source" ] || return 0
@@ -219,66 +240,6 @@ download_official_native_licenses() {
   download_official_license "libyaml" "License.official" "https://raw.githubusercontent.com/yaml/libyaml/0.2.5/License"
 }
 
-rockspec_field() {
-  # Extract one common string field from a LuaRocks rockspec.
-  # 从 LuaRocks rockspec 中提取常见字符串字段。
-  local rockspec="$1"
-  local field="$2"
-  awk -v field="$field" '
-    $0 ~ field "[[:space:]]*=" {
-      if (match($0, /["'\''][^"'\'']+["'\'']/)) {
-        value = substr($0, RSTART + 1, RLENGTH - 2)
-        print value
-        exit
-      }
-    }
-  ' "$rockspec"
-}
-
-copy_luarocks_license_metadata() {
-  # Preserve license metadata for every installed LuaRocks package.
-  # 为每个已安装 LuaRocks 包保留授权元数据。
-  local rocks_root="$THIRD_PARTY_DIR/lua_packages/lib/luarocks/rocks-5.1"
-  [ -d "$rocks_root" ] || return 0
-  local manifest="$RUNTIME_ROOT/licenses/luarocks/manifest.tsv"
-  ensure_dir "$RUNTIME_ROOT/licenses/luarocks"
-  : > "$manifest"
-  for rock_dir in "$rocks_root"/*; do
-    [ -d "$rock_dir" ] || continue
-    local rock_name
-    rock_name="$(basename "$rock_dir")"
-    for version_dir in "$rock_dir"/*; do
-      [ -d "$version_dir" ] || continue
-      local version rockspec destination license source_url homepage
-      version="$(basename "$version_dir")"
-      rockspec="$(find "$version_dir" -maxdepth 1 -type f -name '*.rockspec' | head -1)"
-      destination="$RUNTIME_ROOT/licenses/luarocks/$rock_name"
-      ensure_dir "$destination"
-      copy_license_candidates "$version_dir" "$destination"
-      if [ -f "$rockspec" ]; then
-        cp -f "$rockspec" "$destination/$(basename "$rockspec")"
-        license="$(rockspec_field "$rockspec" "license")"
-        source_url="$(rockspec_field "$rockspec" "url")"
-        homepage="$(rockspec_field "$rockspec" "homepage")"
-      else
-        license=""
-        source_url=""
-        homepage=""
-      fi
-      [ -n "$license" ] || license="See rockspec or upstream package"
-      cat > "$destination/LICENSE.metadata.txt" <<EOF
-Package: $rock_name
-Version: $version
-License: $license
-Source: $source_url
-Homepage: $homepage
-Rockspec: $(basename "${rockspec:-}")
-EOF
-      printf '%s\t%s\t%s\t%s\t%s\n' "$rock_name" "$version" "$license" "$source_url" "$homepage" >> "$manifest"
-    done
-  done
-}
-
 write_license_reference_if_missing() {
   # Provide a license reference when a copied system library has no nearby license file.
   # 当复制的系统库没有随源目录提供授权文件时，写入授权引用。
@@ -355,8 +316,8 @@ ensure_dir "$RUNTIME_ROOT/resources"
 ensure_dir "$RUNTIME_ROOT/licenses"
 ensure_dir "$OUTPUT_DIR"
 
-copy_luarocks_runtime_dir "$THIRD_PARTY_DIR/lua_packages/lib/lua" "$RUNTIME_ROOT/lua_packages/lib/lua"
-copy_luarocks_runtime_dir "$THIRD_PARTY_DIR/lua_packages/share/lua" "$RUNTIME_ROOT/lua_packages/share/lua"
+copy_lua_package_runtime_dir "$THIRD_PARTY_DIR/lua_packages/lib/lua" "$RUNTIME_ROOT/lua_packages/lib/lua"
+copy_lua_package_runtime_dir "$THIRD_PARTY_DIR/lua_packages/share/lua" "$RUNTIME_ROOT/lua_packages/share/lua"
 copy_native_runtime_libraries "$THIRD_PARTY_DIR/deps" "$RUNTIME_ROOT"
 copy_linked_runtime_dependencies "$RUNTIME_ROOT" "$RUNTIME_ROOT/libs"
 copy_linked_runtime_dependencies "$PROJECT_ROOT/target/release" "$RUNTIME_ROOT/libs"
@@ -377,7 +338,6 @@ for component in openssl curl zlib pcre2 libyaml; do
 done
 
 download_official_native_licenses
-copy_luarocks_license_metadata
 
 if [ -f "$BUNDLED_LIBS_TSV" ]; then
   while IFS=$'\t' read -r lib_name component source_path; do
@@ -417,7 +377,7 @@ cat > "$RUNTIME_ROOT/resources/lua-runtime-manifest.json" <<JSON
     "macos": "DYLD_LIBRARY_PATH=<runtime>/libs",
     "windows": "PATH=<runtime>\\\\libs;%PATH%"
   },
-  "excludes": ["third_party/tools", "third_party/luarocks", "third_party/luajit", "lua51.dll", "luajit.exe", "build directories"]
+  "excludes": ["third_party/tools", "third_party/luajit", "lua51.dll", "luajit.exe", "build directories"]
 }
 JSON
 
@@ -432,14 +392,14 @@ cat > "$RUNTIME_ROOT/licenses/manifest.json" <<JSON
     { "name": "zlib", "type": "native-lib", "license": "Zlib", "license_files": ["licenses/native/zlib"] },
     { "name": "pcre2", "type": "native-lib", "license": "BSD-3-Clause", "license_files": ["licenses/native/pcre2"] },
     { "name": "libyaml", "type": "native-lib", "license": "MIT", "license_files": ["licenses/native/libyaml"] },
-    { "name": "luarocks-packages", "type": "lua-rocks", "license": "per-rockspec", "license_files": ["licenses/luarocks"] }
+    { "name": "luaskills-packages", "type": "lua-packages", "license": "per-bundle-metadata", "license_files": ["resources/luaskills-packages/THIRD_PARTY_LICENSES.json", "licenses/luaskills-packages"] }
   ]
 }
 JSON
 
 # Generate the runtime-facing luaskills-packages metadata tree after license manifests exist.
 # 在授权清单就绪后生成面向运行时的 luaskills-packages 元数据目录树。
-python3 "$PROJECT_ROOT/scripts/generate_runtime_packages_metadata.py" \
+python3 "$PROJECT_ROOT/scripts/build/generate_runtime_packages_metadata.py" \
   --project-root "$PROJECT_ROOT" \
   --runtime-root "$RUNTIME_ROOT" \
   --platform "$PLATFORM"

@@ -1,4 +1,4 @@
-param(
+﻿param(
     # Target platform key used in archive and manifest names.
     # 用于归档文件与清单文件命名的目标平台标识。
     [string]$Platform = "",
@@ -94,7 +94,7 @@ $BundledNativeDependencyPatterns = @(
     "libyaml*.dylib"
 )
 
-$script:BundledLibraries = [System.Collections.Generic.List[object]]::new()
+$script:BundledLibraries = New-Object 'System.Collections.Generic.List[object]'
 
 function Ensure-Dir {
     <#
@@ -143,12 +143,12 @@ function Copy-DirectoryContent {
 function Copy-LuaPackagesRuntimeTree {
     <#
     .SYNOPSIS
-    Copy only LuaRocks runtime directories into the package.
-    仅将 LuaRocks 运行期目录复制到产物包。
+    Copy only Lua package runtime directories into the package.
+    仅将 Lua package 运行期目录复制到产物包。
 
     .PARAMETER LuaPackagesDir
-    Source LuaRocks tree under third_party.
-    third_party 下的 LuaRocks 源目录。
+    Source Lua package tree under third_party.
+    third_party 下的 Lua package 源目录。
 
     .PARAMETER RuntimeRoot
     Runtime package root directory.
@@ -160,15 +160,15 @@ function Copy-LuaPackagesRuntimeTree {
     )
 
     $RuntimeLuaPackages = Join-Path $RuntimeRoot "lua_packages"
-    Copy-LuaRocksRuntimeDirectory -Source (Join-Path $LuaPackagesDir "lib\lua") -Destination (Join-Path $RuntimeLuaPackages "lib\lua")
-    Copy-LuaRocksRuntimeDirectory -Source (Join-Path $LuaPackagesDir "share\lua") -Destination (Join-Path $RuntimeLuaPackages "share\lua")
+    Copy-LuaPackageRuntimeDirectory -Source (Join-Path $LuaPackagesDir "lib\lua") -Destination (Join-Path $RuntimeLuaPackages "lib\lua")
+    Copy-LuaPackageRuntimeDirectory -Source (Join-Path $LuaPackagesDir "share\lua") -Destination (Join-Path $RuntimeLuaPackages "share\lua")
 }
 
-function Copy-LuaRocksRuntimeDirectory {
+function Copy-LuaPackageRuntimeDirectory {
     <#
     .SYNOPSIS
-    Flatten LuaRocks' Lua 5.1 ABI directory into the runtime default layout.
-    将 LuaRocks 的 Lua 5.1 ABI 目录扁平化到 runtime 默认布局。
+    Flatten Lua 5.1 ABI package directory into the runtime default layout.
+    将 Lua 5.1 ABI package 目录扁平化到 runtime 默认布局。
     #>
     param(
         [string]$Source,
@@ -355,7 +355,7 @@ function Copy-LinkedRuntimeDependencies {
     }
 
     Ensure-Dir $LibsDir
-    $Queue = [System.Collections.Generic.Queue[string]]::new()
+    $Queue = New-Object 'System.Collections.Generic.Queue[string]'
     $Seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
     foreach ($Root in @($ScanRoot, $LibsDir)) {
@@ -479,88 +479,6 @@ function Save-OfficialNativeLicenses {
     Save-OfficialLicense -ComponentName "zlib" -FileName "LICENSE.official.txt" -Url "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE" -LicenseRoot $LicenseRoot
     Save-OfficialLicense -ComponentName "pcre2" -FileName "LICENCE.official.md" -Url "https://raw.githubusercontent.com/PCRE2Project/pcre2/pcre2-10.45/LICENCE.md" -LicenseRoot $LicenseRoot
     Save-OfficialLicense -ComponentName "libyaml" -FileName "License.official" -Url "https://raw.githubusercontent.com/yaml/libyaml/0.2.5/License" -LicenseRoot $LicenseRoot
-}
-
-function Get-RockspecField {
-    <#
-    .SYNOPSIS
-    Extract one common string field from a LuaRocks rockspec.
-    从 LuaRocks rockspec 中提取常见字符串字段。
-    #>
-    param(
-        [string]$RockspecPath,
-        [string]$FieldName
-    )
-
-    if (-not (Test-Path -LiteralPath $RockspecPath)) {
-        return ""
-    }
-
-    $Text = Get-Content -Raw -Path $RockspecPath
-    $Pattern = "\b$([regex]::Escape($FieldName))\s*=\s*['""]([^'""]+)['""]"
-    $Match = [regex]::Match($Text, $Pattern)
-    if ($Match.Success) {
-        return $Match.Groups[1].Value
-    }
-    return ""
-}
-
-function Copy-LuaRocksLicenseMetadata {
-    <#
-    .SYNOPSIS
-    Preserve license metadata for every installed LuaRocks package.
-    为每个已安装 LuaRocks 包保留授权元数据。
-    #>
-    param(
-        [string]$LuaPackagesDir,
-        [string]$LicenseRoot
-    )
-
-    $RocksRoot = Join-Path $LuaPackagesDir "lib\luarocks\rocks-5.1"
-    if (-not (Test-Path -LiteralPath $RocksRoot)) {
-        return
-    }
-
-    $LuaRocksLicenseRoot = Join-Path $LicenseRoot "luarocks"
-    Ensure-Dir $LuaRocksLicenseRoot
-    $ManifestRows = [System.Collections.Generic.List[string]]::new()
-
-    Get-ChildItem -Directory -LiteralPath $RocksRoot -ErrorAction SilentlyContinue | ForEach-Object {
-        $RockName = $_.Name
-        Get-ChildItem -Directory -LiteralPath $_.FullName -ErrorAction SilentlyContinue | ForEach-Object {
-            $Version = $_.Name
-            $VersionDir = $_.FullName
-            $Destination = Join-Path $LuaRocksLicenseRoot $RockName
-            Ensure-Dir $Destination
-            Copy-LicenseCandidates -ComponentName ("luarocks\" + $RockName) -SearchRoots @($VersionDir) -LicenseRoot $LicenseRoot
-            $Rockspec = Get-ChildItem -File -LiteralPath $VersionDir -Filter "*.rockspec" -ErrorAction SilentlyContinue | Select-Object -First 1
-            $License = ""
-            $SourceUrl = ""
-            $Homepage = ""
-            $RockspecName = ""
-            if ($Rockspec) {
-                Copy-Item -Force -LiteralPath $Rockspec.FullName -Destination (Join-Path $Destination $Rockspec.Name)
-                $License = Get-RockspecField -RockspecPath $Rockspec.FullName -FieldName "license"
-                $SourceUrl = Get-RockspecField -RockspecPath $Rockspec.FullName -FieldName "url"
-                $Homepage = Get-RockspecField -RockspecPath $Rockspec.FullName -FieldName "homepage"
-                $RockspecName = $Rockspec.Name
-            }
-            if (-not $License) {
-                $License = "See rockspec or upstream package"
-            }
-            @"
-Package: $RockName
-Version: $Version
-License: $License
-Source: $SourceUrl
-Homepage: $Homepage
-Rockspec: $RockspecName
-"@ | Set-Content -Path (Join-Path $Destination "LICENSE.metadata.txt") -Encoding UTF8
-            $ManifestRows.Add("$RockName`t$Version`t$License`t$SourceUrl`t$Homepage") | Out-Null
-        }
-    }
-
-    $ManifestRows | Set-Content -Path (Join-Path $LuaRocksLicenseRoot "manifest.tsv") -Encoding UTF8
 }
 
 function Write-LicenseReferenceIfMissing {
@@ -779,7 +697,6 @@ foreach ($Component in $NativeLicenseRoots) {
 }
 
 Save-OfficialNativeLicenses -LicenseRoot (Join-Path $RuntimeRoot "licenses")
-Copy-LuaRocksLicenseMetadata -LuaPackagesDir (Join-Path $ThirdPartyPath "lua_packages") -LicenseRoot (Join-Path $RuntimeRoot "licenses")
 
 foreach ($Library in ($script:BundledLibraries | Sort-Object name, component, source_path -Unique)) {
     Write-LicenseReferenceIfMissing -ComponentName $Library.component -SourcePath $Library.source_path -LicenseRoot (Join-Path $RuntimeRoot "licenses")
@@ -797,7 +714,7 @@ $RuntimeManifest = [ordered]@{
         macos = "DYLD_LIBRARY_PATH=<runtime>/libs"
         windows = "PATH=<runtime>\libs;%PATH%"
     }
-    excludes = @("third_party/tools", "third_party/luarocks", "third_party/luajit", "lua51.dll", "luajit.exe", "build directories")
+    excludes = @("third_party/tools", "third_party/luajit", "lua51.dll", "luajit.exe", "build directories")
 }
 
 $LicenseManifest = [ordered]@{
@@ -810,7 +727,7 @@ $LicenseManifest = [ordered]@{
         @{ name = "zlib"; type = "native-lib"; license = "Zlib"; license_files = @("licenses/native/zlib") },
         @{ name = "pcre2"; type = "native-lib"; license = "BSD-3-Clause"; license_files = @("licenses/native/pcre2") },
         @{ name = "libyaml"; type = "native-lib"; license = "MIT"; license_files = @("licenses/native/libyaml") },
-        @{ name = "luarocks-packages"; type = "lua-rocks"; license = "per-rockspec"; license_files = @("licenses/luarocks") }
+        @{ name = "luaskills-packages"; type = "lua-packages"; license = "per-bundle-metadata"; license_files = @("resources/luaskills-packages/THIRD_PARTY_LICENSES.json", "licenses/luaskills-packages") }
     )
 }
 
@@ -820,7 +737,7 @@ Write-JsonFile -Path (Join-Path $RuntimeRoot "licenses\manifest.json") -Value $L
 
 # Generate the runtime-facing luaskills-packages metadata tree after license manifests exist.
 # 在授权清单就绪后生成面向运行时的 luaskills-packages 元数据目录树。
-python (Join-Path $ProjectRoot "scripts\generate_runtime_packages_metadata.py") `
+& python (Join-Path $ProjectRoot "scripts\build\generate_runtime_packages_metadata.py") `
     --project-root $ProjectRoot `
     --runtime-root $RuntimeRoot `
     --platform $Platform

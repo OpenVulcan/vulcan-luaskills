@@ -1,4 +1,4 @@
-param(
+﻿param(
     # Target platform key used in archive and manifest names.
     # 用于归档文件与清单文件命名的目标平台标识。
     [string]$Platform = "",
@@ -7,7 +7,7 @@ param(
     [string]$OutputDir = "target\release-packages",
     # LuaSkills release tag used by dependency bootstrap scripts.
     # 依赖初始化脚本使用的 LuaSkills 发布标签。
-    [string]$ReleaseTag = "v0.4.1"
+    [string]$ReleaseTag = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -188,7 +188,7 @@ $PackageRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $RuntimeRoot = Join-Path $PackageRoot "runtime"
 
 New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
-powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1") -Target $Target -Database $Database -RuntimeRoot $RuntimeRoot -LuaSkillsVersion "__LUASKILLS_RELEASE_TAG__" -SkipLuaSkillsFfi -SkipLuaRuntimeLibs
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PackageRoot "scripts\deps\fetch_deps.ps1") -Target $Target -Database $Database -RuntimeRoot $RuntimeRoot
 $FetchExitCode = $LASTEXITCODE
 if ($FetchExitCode -ne 0) {
     exit $FetchExitCode
@@ -285,7 +285,7 @@ resolve_powershell_host() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PACKAGE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PACKAGE_ROOT_WIN="$(to_windows_path "$PACKAGE_ROOT")"
 TARGET="${1:-all}"
 DATABASE="${2:-vldb-controller}"
@@ -297,7 +297,7 @@ FORWARDED_ARGS=(
   -ExecutionPolicy
   Bypass
   -File
-  "${PACKAGE_ROOT_WIN}\scripts\fetch_runtime_deps.ps1"
+  "${PACKAGE_ROOT_WIN}\scripts\deps\fetch_deps.ps1"
   -Target
   "$TARGET"
   -Database
@@ -306,14 +306,8 @@ FORWARDED_ARGS=(
   "$RUNTIME_ROOT_WIN"
 )
 
-if [ -n "${LUASKILLS_VERSION:-}" ]; then
-  FORWARDED_ARGS+=(-LuaSkillsVersion "$LUASKILLS_VERSION")
-fi
 if [ "${LUA_PACKAGES_ONLY:-0}" = "1" ]; then
   FORWARDED_ARGS+=(-LuaPackagesOnly)
-fi
-if [ "${SKIP_LUASKILLS_FFI:-0}" = "1" ]; then
-  FORWARDED_ARGS+=(-SkipLuaSkillsFfi)
 fi
 if [ "${SKIP_LUA_RUNTIME_LIBS:-0}" = "1" ]; then
   FORWARDED_ARGS+=(-SkipLuaRuntimeLibs)
@@ -321,7 +315,7 @@ fi
 
 exec "$POWERSHELL_HOST" "${FORWARDED_ARGS[@]}"
 '@
-        [System.IO.File]::WriteAllText((Join-Path $PackageRoot "scripts\fetch_runtime_deps.sh"), $FetchShellWrapper, [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText((Join-Path $PackageRoot "scripts\deps\fetch_deps.sh"), $FetchShellWrapper, [System.Text.UTF8Encoding]::new($false))
 
         $SetupShellWrapper = @'
 #!/usr/bin/env bash
@@ -333,7 +327,7 @@ DATABASE="${2:-none}"
 RUNTIME_ROOT="${RUNTIME_ROOT:-$PACKAGE_ROOT/runtime}"
 
 mkdir -p "$RUNTIME_ROOT"
-SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="__LUASKILLS_RELEASE_TAG__" RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET" "$DATABASE"
+RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/deps/fetch_deps.sh" "$TARGET" "$DATABASE"
 echo "Debug runtime dependencies are ready under $RUNTIME_ROOT"
 '@
         $SetupShellWrapper = $SetupShellWrapper.Replace("__LUASKILLS_RELEASE_TAG__", $ReleaseTag)
@@ -374,7 +368,7 @@ DATABASE="${2:-none}"
 RUNTIME_ROOT="${RUNTIME_ROOT:-$PACKAGE_ROOT/runtime}"
 
 mkdir -p "$RUNTIME_ROOT"
-LUASKILLS_VERSION="__LUASKILLS_RELEASE_TAG__" RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET" "$DATABASE"
+RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/deps/fetch_deps.sh" "$TARGET" "$DATABASE"
 echo "Debug runtime dependencies are ready under $RUNTIME_ROOT"
 '@
     $SetupScript = $SetupScript.Replace("__LUASKILLS_RELEASE_TAG__", $ReleaseTag)
@@ -859,7 +853,6 @@ function Write-DebugPackageReadme {
         ('- {0}: standalone debug executable.' -f $BinaryPath),
         '- runtime/: package-local runtime root used by debug commands.',
         '- skills/: place exactly one skill package directory here for quick debugging.',
-        '- luaskills-debug-skill/: Codex skill wrapper for invoking the packaged debug binary.',
         '- scripts/: platform-matching dependency fetch script.',
         '- setup_runtime.* / upgrade_deps.*: fetch Lua runtime packages into runtime/.',
         '- debug.*: convenience launcher that auto-detects one skill under skills/.',
@@ -873,11 +866,10 @@ function Write-DebugPackageReadme {
         $CallCommand,
         $FenceEnd,
         '',
-        'The default setup command fetches the lua target and stages runtime/lua_packages/, runtime/resources/, and runtime/licenses/ metadata. It does not download the LuaSkills FFI SDK and does not copy the runtime package libs/ directory.',
+        'The default setup command fetches the lua target and stages runtime/lua_packages/, runtime/libs/, runtime/resources/, and runtime/licenses/ metadata. It does not download the extra LuaSkills FFI SDK.',
         '',
         'Use all only when you also need database helper binaries. The Lua setup path stays metadata-complete so packaged-runtime manifest validation remains consistent.',
-        '',
-        'The package also includes luaskills-debug-skill/ as a Codex skill wrapper. It detects the packaged bin/luaskills-debug executable and uses the package-local runtime/ directory by default.'
+        ''
     )
 
     ($ReadmeLines -join [Environment]::NewLine) | Set-Content -Path (Join-Path $PackageRoot "README.md") -Encoding UTF8
@@ -918,7 +910,7 @@ if (Test-Path -LiteralPath $PackageRoot) {
 Ensure-Dir (Join-Path $PackageRoot "bin")
 Ensure-Dir (Join-Path $PackageRoot "runtime")
 Ensure-Dir (Join-Path $PackageRoot "skills")
-Ensure-Dir (Join-Path $PackageRoot "scripts")
+Ensure-Dir (Join-Path $PackageRoot "scripts\deps")
 Ensure-Dir (Join-Path $PackageRoot "licenses")
 Ensure-Dir $OutputDir
 
@@ -941,14 +933,11 @@ if (-not (Test-Path -LiteralPath $DebugBinaryPath)) {
 }
 
 Copy-Item -Force -LiteralPath $DebugBinaryPath -Destination (Join-Path $PackageRoot "bin\$DebugBinaryName")
-Copy-Item -Recurse -Force -LiteralPath "luaskills-debug-skill" -Destination (Join-Path $PackageRoot "luaskills-debug-skill")
-Get-ChildItem -Recurse -Directory -Path (Join-Path $PackageRoot "luaskills-debug-skill") -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-Get-ChildItem -Recurse -File -Path (Join-Path $PackageRoot "luaskills-debug-skill") -Include "*.pyc","*.pyo" -ErrorAction SilentlyContinue | Remove-Item -Force
 Copy-Item -Force -LiteralPath "LICENSE" -Destination (Join-Path $PackageRoot "licenses\LICENSE")
 if (Test-WindowsPackagePlatform -PlatformKey $Platform) {
-    Copy-Item -Force -LiteralPath "scripts\fetch_runtime_deps.ps1" -Destination (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1")
+    Copy-Item -Force -LiteralPath "scripts\deps\fetch_deps.ps1" -Destination (Join-Path $PackageRoot "scripts\deps\fetch_deps.ps1")
 } else {
-    Copy-Item -Force -LiteralPath "scripts\fetch_runtime_deps.sh" -Destination (Join-Path $PackageRoot "scripts\fetch_runtime_deps.sh")
+    Copy-Item -Force -LiteralPath "scripts\deps\fetch_deps.sh" -Destination (Join-Path $PackageRoot "scripts\deps\fetch_deps.sh")
 }
 
 Write-DebugRuntimeSetupScripts -PackageRoot $PackageRoot -PlatformKey $Platform -ReleaseTag $ReleaseTag
@@ -962,7 +951,6 @@ Write-DebugPackageReadme -PackageRoot $PackageRoot -PlatformKey $Platform
     binary = "bin/$DebugBinaryName"
     runtime_root = "runtime"
     skills_dir = "skills"
-    debug_skill = "luaskills-debug-skill"
     release_tag = $ReleaseTag
     default_fetch_target = "lua"
     fetch_targets = @("lua", "all", "vldb", "vldb-controller", "vldb-direct")

@@ -3,11 +3,11 @@ set -euo pipefail
 
 # ProjectRoot points at the repository root regardless of the caller location.
 # ProjectRoot 指向仓库根目录，避免调用方当前位置影响路径解析。
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Mode stores the demo integration mode.
 # Mode 保存 demo 集成模式。
-MODE="${1:?Usage: package_demo.sh ffi|rust [platform]}"
+MODE="${1:?Usage: package_demo.sh ffi|rust [platform] [release_tag] [output_dir]}"
 
 # Platform stores the release asset platform key.
 # Platform 保存发布资产使用的平台标识。
@@ -15,16 +15,57 @@ PLATFORM="${2:-}"
 
 # OutputDir stores final release archives.
 # OutputDir 保存最终发布压缩包。
-OUTPUT_DIR="${OUTPUT_DIR:-target/release-packages}"
+OUTPUT_DIR="${4:-${OUTPUT_DIR:-target/release-packages}}"
 
-# ReleaseTag stores the Git tag used by packaged Rust demos.
-# ReleaseTag 保存发布 Rust demo 使用的 Git 标签。
-RELEASE_TAG="${3:-${RELEASE_TAG:-v0.4.1}}"
+# ReleaseTag stores the Git tag used by packaged Rust and FFI demo assets.
+# ReleaseTag 保存发布 Rust 与 FFI demo 资产使用的 Git 标签。
+RELEASE_TAG="${3:-${RELEASE_TAG:-}}"
+
+normalize_output_dir() {
+  # Convert Windows drive paths into shell-native paths before tar sees a colon.
+  # 在 tar 看到冒号前，将 Windows 盘符路径转换为 shell 原生路径。
+  local raw_path="$1"
+  case "$raw_path" in
+    [A-Za-z]:/*)
+      local drive_lower rest
+      drive_lower="$(printf '%s' "${raw_path:0:1}" | tr '[:upper:]' '[:lower:]')"
+      rest="${raw_path:3}"
+      if [ -d "/mnt/$drive_lower" ]; then
+        printf '/mnt/%s/%s\n' "$drive_lower" "$rest"
+      else
+        printf '/%s/%s\n' "$drive_lower" "$rest"
+      fi
+      ;;
+    *) printf '%s\n' "$raw_path" ;;
+  esac
+}
+
+OUTPUT_DIR="$(normalize_output_dir "$OUTPUT_DIR")"
 
 ensure_dir() {
   # Create one directory when it does not exist.
   # 在目录不存在时创建该目录。
   mkdir -p "$1"
+}
+
+resolve_release_tag() {
+  # Resolve the LuaSkills release tag from input or Cargo.toml.
+  # 从输入参数或 Cargo.toml 解析 LuaSkills 发布标签。
+  local explicit_tag="$1"
+  if [ -n "$explicit_tag" ]; then
+    printf '%s\n' "$explicit_tag"
+    return 0
+  fi
+  python3 - "$PROJECT_ROOT/Cargo.toml" <<'PY'
+from pathlib import Path
+import re
+import sys
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', text)
+if not match:
+    raise SystemExit("Unable to resolve fallback release tag from Cargo.toml.")
+print(f"v{match.group(1)}")
+PY
 }
 
 create_tar_from_dir() {
@@ -207,7 +248,7 @@ write_packaged_dependency_upgrade_scripts() {
   # 写入发布 demo 包专用的独立依赖升级入口。
   local package_root="$1"
 
-  cat > "$package_root/upgrade_deps.bat" <<'BAT'
+  cat > "$package_root/upgrade_deps.bat" <<BAT
 @echo off
 chcp 65001 >nul
 setlocal
@@ -221,9 +262,20 @@ REM PackageRoot 指向解压后的 demo 包根目录。
 set "PACKAGE_ROOT=%~dp0"
 set "RUNTIME_ROOT=%PACKAGE_ROOT%runtime"
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\fetch_runtime_deps.ps1" -Target "%TARGET%" -RuntimeRoot "%RUNTIME_ROOT%"
+if /I not "%TARGET%"=="ffi" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\deps\fetch_deps.ps1" -Target "%TARGET%" -RuntimeRoot "%RUNTIME_ROOT%"
+)
 if errorlevel 1 (
   echo Failed to upgrade dependencies.
+  pause
+  exit /b 1
+)
+if exist "%PACKAGE_ROOT%scripts\ffi\fetch_ffi.ps1" (
+  if /I "%TARGET%"=="all" powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\ffi\fetch_ffi.ps1" -RuntimeRoot "%RUNTIME_ROOT%" -LuaSkillsVersion "$RELEASE_TAG"
+  if /I "%TARGET%"=="ffi" powershell -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_ROOT%scripts\ffi\fetch_ffi.ps1" -RuntimeRoot "%RUNTIME_ROOT%" -LuaSkillsVersion "$RELEASE_TAG"
+)
+if errorlevel 1 (
+  echo Failed to upgrade FFI dependencies.
   pause
   exit /b 1
 )
@@ -231,23 +283,28 @@ echo Dependencies are ready.
 pause
 BAT
 
-  cat > "$package_root/upgrade_deps.sh" <<'SH'
+  cat > "$package_root/upgrade_deps.sh" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
 
 # PackageRoot points at the extracted demo package root.
 # PackageRoot 指向解压后的 demo 包根目录。
-PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PACKAGE_ROOT="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 
 # Target selects which dependency group to download.
 # Target 选择要下载的依赖分组。
-TARGET="${1:-all}"
+TARGET="\${1:-all}"
 
 # RuntimeRoot is the packaged runtime root that receives dependencies.
 # RuntimeRoot 是接收依赖的包内运行根目录。
-RUNTIME_ROOT="${RUNTIME_ROOT:-$PACKAGE_ROOT/runtime}"
+RUNTIME_ROOT="\${RUNTIME_ROOT:-\$PACKAGE_ROOT/runtime}"
 
-RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET"
+if [ "\$TARGET" != "ffi" ]; then
+  RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/deps/fetch_deps.sh" "\$TARGET"
+fi
+if [ -f "\$PACKAGE_ROOT/scripts/ffi/fetch_ffi.sh" ] && { [ "\$TARGET" = "all" ] || [ "\$TARGET" = "ffi" ]; }; then
+  LUASKILLS_VERSION="\${LUASKILLS_VERSION:-$RELEASE_TAG}" RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/ffi/fetch_ffi.sh"
+fi
 SH
   chmod +x "$package_root/upgrade_deps.sh"
 }
@@ -286,7 +343,7 @@ write_packaged_demo_readme() {
     printf '这是 `luaskills-demo-%s-%s.tar.gz` 解压后的发布包说明，路径与命令均按包根目录设计，不依赖仓库源码布局。\n\n' "$mode" "$PLATFORM"
     printf 'This README describes the extracted `luaskills-demo-%s-%s.tar.gz` package. Paths and commands are package-root based and do not require the source repository layout.\n\n' "$mode" "$PLATFORM"
     printf '## 包内容 / Package Contents\n\n'
-    printf -- '- `runtime/`：demo 默认 runtime 根目录，可由拉取脚本安装 `lua-runtime-packages-%s.tar.gz` 与 `luaskills-ffi-sdk-%s.tar.gz`。\n' "$PLATFORM" "$PLATFORM"
+    printf -- '- `runtime/`：demo 默认 runtime 根目录，可由分类拉取脚本安装 runtime packages，FFI 模式额外支持 `luaskills-ffi-sdk-%s.tar.gz`。\n' "$PLATFORM"
     printf -- '- `scripts/`：仅包含当前平台可用的依赖拉取脚本。\n'
     printf -- '- `licenses/`：项目与随包组件授权材料。\n'
     printf -- '- `demo-manifest.json`：包模式、平台、runtime 根和可拉取目标清单。\n'
@@ -301,8 +358,8 @@ write_packaged_demo_readme() {
     printf '```%s\n%s\n```\n\n' "$shell_name" "$fetch_all_command"
     printf '也可以按需单独拉取：\n\n'
     printf '```%s\n%s\n%s\n```\n\n' "$shell_name" "$fetch_lua_command" "$fetch_vldb_command"
-    printf 'Windows 包包含 `run.ps1`、`upgrade_deps.bat` 与 `scripts/fetch_runtime_deps.ps1`；Linux/macOS 包包含 `run.sh`、`upgrade_deps.sh` 与 `scripts/fetch_runtime_deps.sh`。\n\n'
-    printf 'Windows packages include `run.ps1`, `upgrade_deps.bat`, and `scripts/fetch_runtime_deps.ps1`; Linux/macOS packages include `run.sh`, `upgrade_deps.sh`, and `scripts/fetch_runtime_deps.sh`.\n'
+    printf 'Windows 包包含 `run.ps1`、`upgrade_deps.bat` 与 `scripts/deps/fetch_deps.ps1`；FFI 包额外包含 `scripts/ffi/fetch_ffi.ps1`。Linux/macOS 包使用对应 `.sh` 脚本。\n\n'
+    printf 'Windows packages include `run.ps1`, `upgrade_deps.bat`, and `scripts/deps/fetch_deps.ps1`; FFI packages also include `scripts/ffi/fetch_ffi.ps1`. Linux and macOS packages use the matching `.sh` scripts.\n'
   } > "$package_root/README.md"
 }
 
@@ -321,9 +378,10 @@ if [ -z "$PLATFORM" ]; then
 fi
 
 cd "$PROJECT_ROOT"
+RELEASE_TAG="$(resolve_release_tag "$RELEASE_TAG")"
 PACKAGE_ROOT="target/demo-package/luaskills-demo-$MODE"
 rm -rf "$PACKAGE_ROOT"
-ensure_dir "$PACKAGE_ROOT/scripts"
+ensure_dir "$PACKAGE_ROOT/scripts/deps"
 ensure_dir "$PACKAGE_ROOT/runtime"
 ensure_dir "$PACKAGE_ROOT/licenses"
 ensure_dir "$OUTPUT_DIR"
@@ -336,14 +394,21 @@ rm -rf "$PACKAGE_ROOT/target"
 
 cp -a "examples/ffi/standard_runtime/runtime_root"/. "$PACKAGE_ROOT/runtime"/
 if platform_is_windows; then
-  cp -f scripts/fetch_runtime_deps.ps1 "$PACKAGE_ROOT/scripts/fetch_runtime_deps.ps1"
+  cp -f scripts/deps/fetch_deps.ps1 "$PACKAGE_ROOT/scripts/deps/fetch_deps.ps1"
 else
-  cp -f scripts/fetch_runtime_deps.sh "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh"
-  chmod +x "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh"
+  cp -f scripts/deps/fetch_deps.sh "$PACKAGE_ROOT/scripts/deps/fetch_deps.sh"
+  chmod +x "$PACKAGE_ROOT/scripts/deps/fetch_deps.sh"
 fi
 cp -f LICENSE "$PACKAGE_ROOT/licenses/LICENSE"
 
 if [ "$MODE" = "ffi" ]; then
+  ensure_dir "$PACKAGE_ROOT/scripts/ffi"
+  if platform_is_windows; then
+    cp -f scripts/ffi/fetch_ffi.ps1 "$PACKAGE_ROOT/scripts/ffi/fetch_ffi.ps1"
+  else
+    cp -f scripts/ffi/fetch_ffi.sh "$PACKAGE_ROOT/scripts/ffi/fetch_ffi.sh"
+    chmod +x "$PACKAGE_ROOT/scripts/ffi/fetch_ffi.sh"
+  fi
   ensure_dir "$PACKAGE_ROOT/include"
   ensure_dir "$PACKAGE_ROOT/lib"
   cp -f include/*.h "$PACKAGE_ROOT/include/"

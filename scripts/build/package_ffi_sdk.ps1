@@ -1,4 +1,4 @@
-param(
+﻿param(
     # Target platform key used in archive and manifest names.
     # 用于归档文件与清单文件命名的目标平台标识。
     [string]$Platform = "",
@@ -35,7 +35,8 @@ function Resolve-ProjectRoot {
         $Current = $Candidate
         while ($Current) {
             if ((Test-Path -LiteralPath (Join-Path $Current "Cargo.toml")) -and (Test-Path -LiteralPath (Join-Path $Current "scripts"))) {
-                return $Current
+                Write-Output $Current
+                return
             }
             $Parent = Split-Path -Parent $Current
             if (-not $Parent -or $Parent -eq $Current) {
@@ -55,7 +56,28 @@ $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Spli
 # ProjectRoot points at the repository root regardless of the caller location.
 # ProjectRoot 指向仓库根目录，避免调用方当前位置影响路径解析。
 $ProjectRoot = Resolve-ProjectRoot -ScriptDirectory $ScriptDir
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    $Current = (Get-Location).Path
+    while ($Current) {
+        if ((Test-Path -LiteralPath (Join-Path $Current "Cargo.toml")) -and (Test-Path -LiteralPath (Join-Path $Current "scripts"))) {
+            $ProjectRoot = $Current
+            break
+        }
+        $Parent = Split-Path -Parent $Current
+        if (-not $Parent -or $Parent -eq $Current) {
+            break
+        }
+        $Current = $Parent
+    }
+}
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    throw "Unable to resolve project root from script directory '$ScriptDir' or current directory '$((Get-Location).Path)'."
+}
 Set-Location $ProjectRoot
+
+if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+    $OutputDir = "target\release-packages"
+}
 
 function Ensure-Dir {
     <#

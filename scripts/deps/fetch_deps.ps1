@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("all", "lua", "vldb", "vldb-controller", "vldb-direct")]
     [string]$Target = "all",
     [ValidateSet("none", "vldb-controller", "vldb-direct", "host-callback")]
@@ -7,8 +7,6 @@ param(
     [string]$LuaRuntimeRepo = "LuaSkills/luaskills-packages",
     [string]$LuaRuntimeSeries = "0.1",
     [string]$LuaRuntimeVersion = "",
-    [string]$LuaSkillsRepo = "LuaSkills/luaskills",
-    [string]$LuaSkillsVersion = "v0.4.1",
     [string]$VldbControllerRepo = "OpenVulcan/vldb-controller",
     [string]$VldbControllerVersion = "v0.2.1",
     [string]$VldbSQLiteRepo = "OpenVulcan/vldb-sqlite",
@@ -16,7 +14,6 @@ param(
     [string]$VldbLanceDBRepo = "OpenVulcan/vldb-lancedb",
     [string]$VldbLanceDBVersion = "v0.1.5",
     [switch]$LuaPackagesOnly,
-    [switch]$SkipLuaSkillsFfi,
     [switch]$SkipLuaRuntimeLibs,
     [switch]$DevCache
 )
@@ -51,7 +48,7 @@ function Resolve-ProjectRoot {
             if ((Test-Path -LiteralPath (Join-Path $Current "Cargo.toml")) -and (Test-Path -LiteralPath (Join-Path $Current "scripts"))) {
                 return $Current
             }
-            $PackagedFetchScript = Join-Path $Current "scripts\fetch_runtime_deps.ps1"
+            $PackagedFetchScript = Join-Path $Current "scripts\deps\fetch_deps.ps1"
             $PackagedManifest = Join-Path $Current "demo-manifest.json"
             $PackagedRuntime = Join-Path $Current "runtime"
             if ((Test-Path -LiteralPath $PackagedFetchScript) -and ((Test-Path -LiteralPath $PackagedManifest) -or (Test-Path -LiteralPath $PackagedRuntime))) {
@@ -161,11 +158,11 @@ function Get-VldbAssetInfo {
     throw "Unsupported operating system for vldb-controller."
 }
 
-function Get-ReleaseAssetUrl {
+function Get-ReleaseAssetInfo {
     <#
     .SYNOPSIS
-    Find one exact GitHub Release asset download URL.
-    查找一个精确 GitHub Release 资产下载地址。
+    Find one exact GitHub Release asset download URL and API digest.
+    查找一个精确 GitHub Release 资产下载地址与 API 摘要。
 
     .PARAMETER Repo
     GitHub repository in owner/name form.
@@ -192,7 +189,10 @@ function Get-ReleaseAssetUrl {
         $Available = ($Release.assets | ForEach-Object { $_.name }) -join ", "
         throw "Asset '$AssetName' not found in $Repo@$Tag. Available: $Available"
     }
-    return $Asset.browser_download_url
+    return [PSCustomObject]@{
+        Url = $Asset.browser_download_url
+        Digest = [string]$Asset.digest
+    }
 }
 
 function Convert-TagToSemVer {
@@ -267,11 +267,11 @@ function Resolve-ReleaseTagForSeries {
     return ($Matches | Sort-Object Version -Descending | Select-Object -First 1).Tag
 }
 
-function Save-ReleaseAssetWithSha256 {
+function Save-ReleaseAssetWithDigest {
     <#
     .SYNOPSIS
-    Download one GitHub Release asset and verify its .sha256 sidecar.
-    下载单个 GitHub Release 资产并校验其 .sha256 旁路文件。
+    Download one GitHub Release asset and verify its GitHub API digest.
+    下载单个 GitHub Release 资产并校验其 GitHub API 摘要。
 
     .PARAMETER Repo
     GitHub repository in owner/name form.
@@ -296,12 +296,12 @@ function Save-ReleaseAssetWithSha256 {
         [string]$Destination
     )
 
-    $Url = Get-ReleaseAssetUrl -Repo $Repo -Tag $Tag -AssetName $AssetName
-    $ShaUrl = Get-ReleaseAssetUrl -Repo $Repo -Tag $Tag -AssetName "$AssetName.sha256"
-    $ShaPath = "$Destination.sha256"
-    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
-    Invoke-WebRequest -Uri $ShaUrl -OutFile $ShaPath -UseBasicParsing
-    $Expected = ((Get-Content -LiteralPath $ShaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+    $AssetInfo = Get-ReleaseAssetInfo -Repo $Repo -Tag $Tag -AssetName $AssetName
+    if ($AssetInfo.Digest -notlike "sha256:*") {
+        throw "GitHub API digest for $AssetName is missing or unsupported: $($AssetInfo.Digest)"
+    }
+    Invoke-WebRequest -Uri $AssetInfo.Url -OutFile $Destination -UseBasicParsing
+    $Expected = $AssetInfo.Digest.Substring("sha256:".Length).ToLowerInvariant()
     $Actual = Get-FileSha256Hex -Path $Destination
     if ($Expected -ne $Actual) {
         throw "SHA-256 mismatch for $AssetName. Expected $Expected, got $Actual"
@@ -396,52 +396,6 @@ function Test-ExistingRuntimeContent {
     return (Test-Path -LiteralPath $SkillsDir) -or (Test-Path -LiteralPath $LuaPackagesDir)
 }
 
-function Get-LuaSkillsLibraryCandidates {
-    <#
-    .SYNOPSIS
-    Resolve the candidate LuaSkills dynamic library names for the current platform.
-    解析当前平台对应的 LuaSkills 动态库候选名称。
-
-    .OUTPUTS
-    Ordered string array of candidate dynamic library file names.
-    按顺序返回候选动态库文件名字符串数组。
-    #>
-    $Platform = Get-PlatformKey
-    switch ($Platform) {
-        "windows-x64" { return @("luaskills.dll", "libluaskills.dll") }
-        "linux-x64" { return @("libluaskills.so", "luaskills.so") }
-        "linux-arm64" { return @("libluaskills.so", "luaskills.so") }
-        "macos-x64" { return @("libluaskills.dylib", "luaskills.dylib") }
-        "macos-arm64" { return @("libluaskills.dylib", "luaskills.dylib") }
-        default { throw "Unsupported LuaSkills runtime platform: $Platform" }
-    }
-}
-
-function Test-ExistingLuaSkillsFfiContent {
-    <#
-    .SYNOPSIS
-    Check whether the runtime root already contains one LuaSkills core dynamic library.
-    检查运行根目录是否已经包含一个 LuaSkills core 动态库。
-
-    .PARAMETER RuntimeRootPath
-    Runtime root to inspect for installed LuaSkills libraries.
-    需要检查已安装 LuaSkills 动态库的运行根目录。
-
-    .OUTPUTS
-    Boolean value that indicates whether one candidate library already exists.
-    表示候选动态库是否已存在的布尔值。
-    #>
-    param([string]$RuntimeRootPath)
-
-    $LibsDir = Join-Path $RuntimeRootPath "libs"
-    foreach ($Candidate in Get-LuaSkillsLibraryCandidates) {
-        if (Test-Path -LiteralPath (Join-Path $LibsDir $Candidate)) {
-            return $true
-        }
-    }
-    return $false
-}
-
 function Install-LuaRuntime {
     <#
     .SYNOPSIS
@@ -480,7 +434,7 @@ function Install-LuaRuntime {
 
     try {
         try {
-            Save-ReleaseAssetWithSha256 -Repo $LuaRuntimeRepo -Tag $ResolvedLuaRuntimeTag -AssetName $AssetName -Destination $ArchivePath
+            Save-ReleaseAssetWithDigest -Repo $LuaRuntimeRepo -Tag $ResolvedLuaRuntimeTag -AssetName $AssetName -Destination $ArchivePath
         } catch {
             if (Test-ExistingRuntimeContent -RuntimeRootPath $RuntimeRootPath) {
                 Write-Warning "Lua runtime packages asset '$AssetName' was not found in $LuaRuntimeRepo@$ResolvedLuaRuntimeTag. Existing packaged runtime content will be used."
@@ -528,70 +482,6 @@ function Install-LuaRuntime {
     }
 }
 
-function Install-LuaSkillsFfi {
-    <#
-    .SYNOPSIS
-    Download and install one luaskills FFI SDK archive into the runtime root.
-    下载并安装一个 luaskills FFI SDK 归档到运行根目录。
-
-    .PARAMETER RuntimeRootPath
-    Runtime root that receives include, libs, and luaskills-ffi license material.
-    接收 include、libs 与 luaskills-ffi 授权材料的运行根目录。
-    #>
-    param([string]$RuntimeRootPath)
-
-    $Platform = Get-PlatformKey
-    $AssetName = "luaskills-ffi-sdk-$Platform.tar.gz"
-    $TempDir = Join-Path $env:TEMP "luaskills_ffi_sdk_$PID"
-    $ArchivePath = Join-Path $TempDir $AssetName
-    $ExtractDir = Join-Path $TempDir "extract"
-
-    if (Test-Path -LiteralPath $TempDir) {
-        Remove-Item -LiteralPath $TempDir -Recurse -Force
-    }
-    Ensure-Dir $TempDir
-
-    try {
-        try {
-            Save-ReleaseAssetWithSha256 -Repo $LuaSkillsRepo -Tag $LuaSkillsVersion -AssetName $AssetName -Destination $ArchivePath
-        } catch {
-            if (Test-ExistingLuaSkillsFfiContent -RuntimeRootPath $RuntimeRootPath) {
-                Write-Warning "LuaSkills FFI SDK asset '$AssetName' was not found in $LuaSkillsRepo@$LuaSkillsVersion. Existing packaged LuaSkills core content will be used."
-                return
-            }
-            throw
-        }
-        Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
-
-        $IncludeSource = Join-Path $ExtractDir "include"
-        if (Test-Path -LiteralPath $IncludeSource) {
-            $IncludeDest = Join-Path $RuntimeRootPath "include"
-            Ensure-Dir $IncludeDest
-            Copy-Item -Recurse -Force -Path (Join-Path $IncludeSource "*") -Destination $IncludeDest -ErrorAction SilentlyContinue
-        }
-
-        $LibrarySource = Join-Path $ExtractDir "lib"
-        if (Test-Path -LiteralPath $LibrarySource) {
-            $LibraryDest = Join-Path $RuntimeRootPath "libs"
-            Ensure-Dir $LibraryDest
-            Copy-Item -Recurse -Force -Path (Join-Path $LibrarySource "*") -Destination $LibraryDest -ErrorAction SilentlyContinue
-        }
-
-        $LicenseSource = Join-Path $ExtractDir "licenses"
-        if (Test-Path -LiteralPath $LicenseSource) {
-            $LicenseDest = Join-Path $RuntimeRootPath "licenses\luaskills-ffi"
-            Ensure-Dir $LicenseDest
-            Copy-Item -Recurse -Force -Path (Join-Path $LicenseSource "*") -Destination $LicenseDest -ErrorAction SilentlyContinue
-        }
-
-        if (-not (Test-ExistingLuaSkillsFfiContent -RuntimeRootPath $RuntimeRootPath)) {
-            throw "LuaSkills dynamic library was not found after installing $AssetName"
-        }
-    } finally {
-        Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
 function Install-VldbController {
     <#
     .SYNOPSIS
@@ -616,7 +506,7 @@ function Install-VldbController {
     Ensure-Dir $TempDir
 
     try {
-        Save-ReleaseAssetWithSha256 -Repo $VldbControllerRepo -Tag $VldbControllerVersion -AssetName $AssetName -Destination $ArchivePath
+        Save-ReleaseAssetWithDigest -Repo $VldbControllerRepo -Tag $VldbControllerVersion -AssetName $AssetName -Destination $ArchivePath
         Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
 
         $Binary = Get-ChildItem -Recurse -File -Path $ExtractDir -Filter $AssetInfo.binary_name | Select-Object -First 1
@@ -694,7 +584,7 @@ function Install-VldbLibraryAsset {
     Ensure-Dir $TempDir
 
     try {
-        Save-ReleaseAssetWithSha256 -Repo $Repo -Tag $Version -AssetName $AssetName -Destination $ArchivePath
+        Save-ReleaseAssetWithDigest -Repo $Repo -Tag $Version -AssetName $AssetName -Destination $ArchivePath
         Expand-ArchiveSmart -ArchivePath $ArchivePath -Destination $ExtractDir
 
         $Library = Get-ChildItem -Recurse -File -Path $ExtractDir | Where-Object {
@@ -743,9 +633,6 @@ Ensure-Dir (Join-Path $RuntimeRoot "resources")
 
 if ($Target -eq "all" -or $Target -eq "lua") {
     Install-LuaRuntime -RuntimeRootPath $RuntimeRoot -SkipRuntimeLibraries:$SkipLuaRuntimeLibs -LuaPackagesOnly:$LuaPackagesOnly
-    if (-not $SkipLuaSkillsFfi -and -not $LuaPackagesOnly) {
-        Install-LuaSkillsFfi -RuntimeRootPath $RuntimeRoot
-    }
 }
 
 if (($Target -eq "all" -and $Database -eq "vldb-controller") -or ($Target -eq "vldb" -and $Database -eq "vldb-controller") -or $Target -eq "vldb-controller") {

@@ -186,10 +186,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts/package_ffi_sdk.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR"
-          powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode ffi -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
-          powershell -ExecutionPolicy Bypass -File scripts/package_demo.ps1 -Mode rust -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
-          powershell -ExecutionPolicy Bypass -File scripts/package_debug_tool.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
+          powershell -ExecutionPolicy Bypass -File scripts/build/package_ffi_sdk.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR"
+          powershell -ExecutionPolicy Bypass -File scripts/build/package_demo.ps1 -Mode ffi -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
+          powershell -ExecutionPolicy Bypass -File scripts/build/package_demo.ps1 -Mode rust -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
+          powershell -ExecutionPolicy Bypass -File scripts/build/package_debug_tool.ps1 -Platform "${{ matrix.platform }}" -OutputDir "$env:RELEASE_PACKAGE_DIR" -ReleaseTag "${{ needs.prepare-matrix.outputs.release_tag }}"
           # ExpectedAssets prevents the release step from silently publishing an incomplete platform set.
           # ExpectedAssets 防止发布步骤静默上传缺少关键文件的平台产物集合。
           $expectedAssets = @(
@@ -204,11 +204,6 @@ jobs:
             if (-not (Test-Path -LiteralPath $assetPath)) {
               throw "Missing expected release asset: $assetPath"
             }
-            # SidecarHash keeps SDK installers able to verify every release archive before extraction.
-            # SidecarHash 确保 SDK 安装器在解压前可校验每个发布归档。
-            $sidecarPath = "$assetPath.sha256"
-            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $assetPath).Hash.ToLowerInvariant()
-            "$hash  $asset" | Set-Content -Path $sidecarPath -Encoding ascii
           }
 
       - name: Package release assets (Unix)
@@ -216,10 +211,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/package_ffi_sdk.sh "${{ matrix.platform }}"
-          bash scripts/package_demo.sh ffi "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}"
-          bash scripts/package_demo.sh rust "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}"
-          bash scripts/package_debug_tool.sh "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}"
+          bash scripts/build/package_ffi_sdk.sh "${{ matrix.platform }}" "$RELEASE_PACKAGE_DIR"
+          bash scripts/build/package_demo.sh ffi "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}" "$RELEASE_PACKAGE_DIR"
+          bash scripts/build/package_demo.sh rust "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}" "$RELEASE_PACKAGE_DIR"
+          bash scripts/build/package_debug_tool.sh "${{ matrix.platform }}" "${{ needs.prepare-matrix.outputs.release_tag }}" "$RELEASE_PACKAGE_DIR"
           # ExpectedAssets prevents the release step from silently publishing an incomplete platform set.
           # ExpectedAssets 防止发布步骤静默上传缺少关键文件的平台产物集合。
           for asset in \
@@ -231,9 +226,6 @@ jobs:
               echo "Missing expected release asset: $GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR/$asset" >&2
               exit 1
             }
-            # SidecarHash keeps SDK installers able to verify every release archive before extraction.
-            # SidecarHash 确保 SDK 安装器在解压前可校验每个发布归档。
-            (cd "$GITHUB_WORKSPACE/$RELEASE_PACKAGE_DIR" && sha256sum "$asset" > "$asset.sha256")
           done
 
       - name: Write release description (Windows)
@@ -241,7 +233,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path $env:RELEASE_PACKAGE_DIR | Out-Null
-          Copy-Item -Force -LiteralPath "scripts\lua_runtime_release_notes.md" -Destination (Join-Path $env:RELEASE_PACKAGE_DIR "RELEASE_NOTES.md")
+          Copy-Item -Force -LiteralPath "docs\lua-runtime-release-notes.md" -Destination (Join-Path $env:RELEASE_PACKAGE_DIR "RELEASE_NOTES.md")
 
       - name: Write release description (Unix)
         if: runner.os != 'Windows'
@@ -249,14 +241,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RELEASE_PACKAGE_DIR"
-          cp scripts/lua_runtime_release_notes.md "$RELEASE_PACKAGE_DIR/RELEASE_NOTES.md"
+          cp docs/lua-runtime-release-notes.md "$RELEASE_PACKAGE_DIR/RELEASE_NOTES.md"
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ env.RELEASE_PACKAGE_DIR }}/*.tar.gz
-            ${{ env.RELEASE_PACKAGE_DIR }}/*.sha256
           tag_name: ${{ needs.prepare-matrix.outputs.release_tag }}
           body_path: ${{ env.RELEASE_PACKAGE_DIR }}/RELEASE_NOTES.md
           fail_on_unmatched_files: true

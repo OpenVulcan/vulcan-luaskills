@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ProjectRoot points at the repository root regardless of the caller location.
 # ProjectRoot 指向仓库根目录，避免调用方当前位置影响路径解析。
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Target selects which dependency group to install.
 # Target 选择需要安装的依赖分组。
@@ -29,14 +29,6 @@ LUA_RUNTIME_SERIES="${LUA_RUNTIME_SERIES:-0.1}"
 # LuaRuntimeVersion 保存 Lua runtime packages 资产的可选精确 GitHub Release 标签覆盖值。
 LUA_RUNTIME_VERSION="${LUA_RUNTIME_VERSION:-}"
 
-# LuaSkillsRepo stores the GitHub repository for LuaSkills FFI SDK assets.
-# LuaSkillsRepo 保存 LuaSkills FFI SDK 资产所在的 GitHub 仓库。
-LUASKILLS_REPO="${LUASKILLS_REPO:-LuaSkills/luaskills}"
-
-# LuaSkillsVersion stores the GitHub Release tag for LuaSkills FFI SDK assets.
-# LuaSkillsVersion 保存 LuaSkills FFI SDK 资产的 GitHub Release 标签。
-LUASKILLS_VERSION="${LUASKILLS_VERSION:-v0.4.1}"
-
 # VldbControllerRepo stores the GitHub repository for vldb-controller assets.
 # VldbControllerRepo 保存 vldb-controller 资产所在的 GitHub 仓库。
 VLDB_CONTROLLER_REPO="${VLDB_CONTROLLER_REPO:-OpenVulcan/vldb-controller}"
@@ -61,16 +53,12 @@ VLDB_LANCEDB_REPO="${VLDB_LANCEDB_REPO:-OpenVulcan/vldb-lancedb}"
 # VldbLanceDBVersion 保存 vldb-lancedb 资产的 GitHub Release 标签。
 VLDB_LANCEDB_VERSION="${VLDB_LANCEDB_VERSION:-v0.1.5}"
 
-# SkipLuaSkillsFfi disables the extra LuaSkills FFI SDK download during lua/all setup.
-# SkipLuaSkillsFfi 用于在 lua/all 初始化期间禁用额外的 LuaSkills FFI SDK 下载。
-SKIP_LUASKILLS_FFI="${SKIP_LUASKILLS_FFI:-0}"
-
 # SkipLuaRuntimeLibs disables copying the runtime package libs/ directory into the runtime root.
 # SkipLuaRuntimeLibs 用于禁用把 runtime package 的 libs/ 目录复制到 runtime root。
 SKIP_LUA_RUNTIME_LIBS="${SKIP_LUA_RUNTIME_LIBS:-0}"
 
-# LuaPackagesOnly narrows runtime setup to lua_packages/ only and skips runtime metadata plus FFI SDK staging.
-# LuaPackagesOnly 将 runtime 初始化收窄为只放 lua_packages/，并跳过 runtime 元数据与 FFI SDK 暂存。
+# LuaPackagesOnly narrows runtime setup to lua_packages/ only and skips runtime metadata.
+# LuaPackagesOnly 将 runtime 初始化收窄为只放 lua_packages/，并跳过 runtime 元数据。
 LUA_PACKAGES_ONLY="${LUA_PACKAGES_ONLY:-0}"
 
 ensure_dir() {
@@ -110,9 +98,9 @@ vldb_asset_info() {
   esac
 }
 
-release_asset_url() {
-  # Find one exact GitHub Release asset download URL.
-  # 查找一个精确 GitHub Release 资产下载地址。
+release_asset_info() {
+  # Find one exact GitHub Release asset download URL and API digest.
+  # 查找一个精确 GitHub Release 资产下载地址与 API 摘要。
   local repo="$1"
   local tag="$2"
   local asset_name="$3"
@@ -125,6 +113,7 @@ data = json.load(sys.stdin)
 for asset in data.get("assets", []):
     if asset.get("name") == asset_name:
         print(asset.get("browser_download_url", ""))
+        print(asset.get("digest", ""))
         raise SystemExit(0)
 raise SystemExit(f"asset not found: {asset_name}")
 ' "$asset_name"
@@ -166,17 +155,23 @@ print(matches[0][1])
 ' "$series" "$repo"
 }
 
-save_release_asset_with_sha256() {
-  # Download one GitHub Release asset and verify its .sha256 sidecar.
-  # 下载单个 GitHub Release 资产并校验其 .sha256 旁路文件。
+save_release_asset_with_digest() {
+  # Download one GitHub Release asset and verify its GitHub API digest.
+  # 下载单个 GitHub Release 资产并校验其 GitHub API 摘要。
   local repo="$1"
   local tag="$2"
   local asset_name="$3"
   local destination="$4"
-  curl -fSL "$(release_asset_url "$repo" "$tag" "$asset_name")" -o "$destination"
-  curl -fSL "$(release_asset_url "$repo" "$tag" "$asset_name.sha256")" -o "$destination.sha256"
-  local expected actual
-  expected="$(awk '{print tolower($1)}' "$destination.sha256")"
+  local asset_url asset_digest expected actual
+  mapfile -t asset_info < <(release_asset_info "$repo" "$tag" "$asset_name")
+  asset_url="${asset_info[0]:-}"
+  asset_digest="${asset_info[1]:-}"
+  if [[ "$asset_digest" != sha256:* ]]; then
+    echo "GitHub API digest for $asset_name is missing or unsupported: $asset_digest" >&2
+    return 1
+  fi
+  expected="${asset_digest#sha256:}"
+  curl -fSL "$asset_url" -o "$destination"
   actual="$(python3 - "$destination" <<'PY'
 import hashlib
 import sys
@@ -209,7 +204,7 @@ install_lua_runtime() {
   local archive="$temp_dir/$asset_name"
   local extract_dir="$temp_dir/extract"
   ensure_dir "$extract_dir"
-  if ! save_release_asset_with_sha256 "$LUA_RUNTIME_REPO" "$resolved_lua_runtime_tag" "$asset_name" "$archive"; then
+  if ! save_release_asset_with_digest "$LUA_RUNTIME_REPO" "$resolved_lua_runtime_tag" "$asset_name" "$archive"; then
     if [ -d "$RUNTIME_ROOT/skills" ] || [ -d "$RUNTIME_ROOT/lua_packages" ]; then
       echo "WARNING: Lua runtime packages asset '$asset_name' was not found in $LUA_RUNTIME_REPO@$resolved_lua_runtime_tag. Existing packaged runtime content will be used." >&2
       return 0
@@ -248,70 +243,6 @@ install_lua_runtime() {
   fi
 }
 
-luaskills_library_candidates() {
-  # Return candidate LuaSkills dynamic library names for the current platform.
-  # 返回当前平台对应的 LuaSkills 动态库候选名称。
-  local platform
-  platform="$(platform_key)"
-  case "$platform" in
-    windows-x64) printf '%s\n' "luaskills.dll" "libluaskills.dll" ;;
-    linux-x64|linux-arm64) printf '%s\n' "libluaskills.so" "luaskills.so" ;;
-    macos-x64|macos-arm64) printf '%s\n' "libluaskills.dylib" "luaskills.dylib" ;;
-    *) echo "Unsupported LuaSkills runtime platform: $platform" >&2; return 1 ;;
-  esac
-}
-
-has_existing_luaskills_ffi_content() {
-  # Check whether the runtime root already contains one LuaSkills core dynamic library.
-  # 检查运行根目录是否已经包含一个 LuaSkills core 动态库。
-  local candidate=""
-  while IFS= read -r candidate; do
-    [ -n "$candidate" ] || continue
-    if [ -f "$RUNTIME_ROOT/libs/$candidate" ]; then
-      return 0
-    fi
-  done < <(luaskills_library_candidates)
-  return 1
-}
-
-install_luaskills_ffi() {
-  # Download and install one luaskills FFI SDK archive into the runtime root.
-  # 下载并安装一个 luaskills FFI SDK 归档到运行根目录。
-  local platform
-  platform="$(platform_key)"
-  local asset_name="luaskills-ffi-sdk-${platform}.tar.gz"
-  local temp_dir
-  temp_dir="$(mktemp -d)"
-  trap 'rm -rf "$temp_dir"' RETURN
-  local archive="$temp_dir/$asset_name"
-  local extract_dir="$temp_dir/extract"
-  ensure_dir "$extract_dir"
-  if ! save_release_asset_with_sha256 "$LUASKILLS_REPO" "$LUASKILLS_VERSION" "$asset_name" "$archive"; then
-    if has_existing_luaskills_ffi_content; then
-      echo "WARNING: LuaSkills FFI SDK asset '$asset_name' was not found in $LUASKILLS_REPO@$LUASKILLS_VERSION. Existing packaged LuaSkills core content will be used." >&2
-      return 0
-    fi
-    return 1
-  fi
-  tar -xzf "$archive" -C "$extract_dir"
-  if [ -d "$extract_dir/include" ]; then
-    ensure_dir "$RUNTIME_ROOT/include"
-    cp -a "$extract_dir/include"/. "$RUNTIME_ROOT/include"/
-  fi
-  if [ -d "$extract_dir/lib" ]; then
-    ensure_dir "$RUNTIME_ROOT/libs"
-    cp -a "$extract_dir/lib"/. "$RUNTIME_ROOT/libs"/
-  fi
-  if [ -d "$extract_dir/licenses" ]; then
-    ensure_dir "$RUNTIME_ROOT/licenses/luaskills-ffi"
-    cp -a "$extract_dir/licenses"/. "$RUNTIME_ROOT/licenses/luaskills-ffi"/
-  fi
-  has_existing_luaskills_ffi_content || {
-    echo "LuaSkills dynamic library was not found after installing $asset_name" >&2
-    return 1
-  }
-}
-
 install_vldb_controller() {
   # Download and install vldb-controller into runtime bin.
   # 下载 vldb-controller 并安装到运行期 bin 目录。
@@ -325,7 +256,7 @@ install_vldb_controller() {
   local archive="$temp_dir/$asset_name"
   local extract_dir="$temp_dir/extract"
   ensure_dir "$extract_dir"
-  save_release_asset_with_sha256 "$VLDB_CONTROLLER_REPO" "$VLDB_CONTROLLER_VERSION" "$asset_name" "$archive"
+  save_release_asset_with_digest "$VLDB_CONTROLLER_REPO" "$VLDB_CONTROLLER_VERSION" "$asset_name" "$archive"
   tar -xzf "$archive" -C "$extract_dir"
   local binary
   binary="$(find "$extract_dir" -type f -name "$binary_name" | head -1)"
@@ -362,7 +293,7 @@ install_vldb_library_asset() {
   local archive="$temp_dir/$asset_name"
   local extract_dir="$temp_dir/extract"
   ensure_dir "$extract_dir"
-  save_release_asset_with_sha256 "$repo" "$version" "$asset_name" "$archive"
+  save_release_asset_with_digest "$repo" "$version" "$asset_name" "$archive"
   tar -xzf "$archive" -C "$extract_dir"
   local library
   library="$(find "$extract_dir" -type f -name "*${dynamic_ext}" | grep -i "$name_hint" | head -1 || true)"
@@ -411,9 +342,6 @@ esac
 case "$TARGET" in
   all)
     install_lua_runtime
-    if [ "$SKIP_LUASKILLS_FFI" != "1" ] && [ "$LUA_PACKAGES_ONLY" != "1" ]; then
-      install_luaskills_ffi
-    fi
     if [ "$DATABASE" = "vldb-controller" ]; then
       install_vldb_controller
     elif [ "$DATABASE" = "vldb-direct" ]; then
@@ -422,9 +350,6 @@ case "$TARGET" in
     ;;
   lua)
     install_lua_runtime
-    if [ "$SKIP_LUASKILLS_FFI" != "1" ] && [ "$LUA_PACKAGES_ONLY" != "1" ]; then
-      install_luaskills_ffi
-    fi
     ;;
   vldb)
     if [ "$DATABASE" = "vldb-controller" ]; then

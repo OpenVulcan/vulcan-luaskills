@@ -98,7 +98,7 @@
   - 被忽略 skill 不会准备依赖、不会绑定数据库，也不会注册 entry
 - 如果宿主复用了旧版 demo 或安装脚本：
   - 不要再假设主仓库 release 自带完整 `lua-runtime-*`
-  - 应确认 `fetch_runtime_deps` / `install_lua_deps` 已经切到 `luaskills-packages` 的 packages 与 deps 资产
+  - 应确认 `scripts/deps/fetch_deps` 已经切到 `luaskills-packages` 的 packages 与 deps 资产，FFI SDK 拉取由 `scripts/ffi/fetch_ffi` 单独负责
 
 ## 4. 标准创建顺序
 

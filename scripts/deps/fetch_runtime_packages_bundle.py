@@ -116,7 +116,7 @@ def load_binding_config(project_root: Path) -> dict[str, Any]:
     加载已提交的 runtime-packages 绑定配置。
     """
 
-    binding_path = project_root / "scripts" / "runtime_packages_binding.json"
+    binding_path = project_root / "scripts" / "deps" / "runtime_packages_binding.json"
     binding = read_json(binding_path)
     if binding.get("schema_version") != 1:
         raise RuntimeError(f"unsupported runtime packages binding schema: {binding}")
@@ -136,7 +136,6 @@ def resolve_binding(binding: dict[str, Any]) -> dict[str, str]:
         "series": series,
         "explicit_tag": explicit_tag,
         "bundle_asset_template": binding["bundle_asset_template"],
-        "bundle_sha256_template": binding["bundle_sha256_template"],
     }
 
 
@@ -144,7 +143,6 @@ def find_release_for_series(
     repository: str,
     series: str,
     bundle_asset_template: str,
-    bundle_sha256_template: str,
 ) -> dict[str, Any]:
     """Resolve the latest usable GitHub release inside one compatible major.minor series.
     解析一个兼容 major.minor 协议线中最新且可用的 GitHub release。
@@ -173,17 +171,14 @@ def find_release_for_series(
 
     for _, release in matches:
         tag_name = str(release.get("tag_name", ""))
-        required_asset_names = (
-            bundle_asset_template.format(tag=tag_name),
-            bundle_sha256_template.format(tag=tag_name),
-        )
+        required_asset_name = bundle_asset_template.format(tag=tag_name)
         release_asset_names = {str(asset.get("name", "")) for asset in release.get("assets", [])}
-        if all(asset_name in release_asset_names for asset_name in required_asset_names):
+        if required_asset_name in release_asset_names:
             return release
 
     raise RuntimeError(
         "no luaskills-packages release in series "
-        f"{series} provides both {bundle_asset_template} and {bundle_sha256_template}"
+        f"{series} provides {bundle_asset_template}"
     )
 
 
@@ -214,29 +209,23 @@ def tag_exists(repository: str, tag: str) -> bool:
     return request_json_or_none(ref_url) is not None
 
 
-def asset_download_url(release: dict[str, Any], asset_name: str) -> str:
-    """Find one release asset download URL by exact asset name.
-    按精确资产名查找一个 release 资产下载地址。
+def asset_download_info(release: dict[str, Any], asset_name: str) -> tuple[str, str]:
+    """Find one release asset download URL and API digest by exact asset name.
+    按精确资产名查找一个 release 资产下载地址与 API 摘要。
     """
 
     for asset in release.get("assets", []):
         if asset.get("name") == asset_name:
-            return asset["browser_download_url"]
+            digest = str(asset.get("digest", ""))
+            if not digest.startswith("sha256:"):
+                raise RuntimeError(
+                    f"GitHub API digest for {asset_name} is missing or unsupported: {digest}"
+                )
+            return asset["browser_download_url"], digest.removeprefix("sha256:").lower()
     raise RuntimeError(
         "luaskills-packages release "
         f"{release.get('tag_name')} is published but required asset {asset_name} is not available yet"
     )
-
-
-def sha256_text_for_asset(url: str) -> str:
-    """Download one sha256 sidecar file and extract the expected hash value.
-    下载一个 sha256 辅助文件并提取期望哈希值。
-    """
-
-    text = download_bytes(url).decode("utf-8").strip()
-    if not text:
-        raise RuntimeError("empty sha256 asset payload")
-    return text.split()[0].strip().lower()
 
 
 def verify_sha256(data: bytes, expected_hash: str, asset_name: str) -> None:
@@ -300,7 +289,6 @@ def stage_release_bundle(project_root: Path, binding: dict[str, str], refresh: b
             binding["repository"],
             binding["series"],
             binding["bundle_asset_template"],
-            binding["bundle_sha256_template"],
         )
 
     resolved_tag = release["tag_name"]
@@ -323,12 +311,8 @@ def stage_release_bundle(project_root: Path, binding: dict[str, str], refresh: b
         }
 
     bundle_asset_name = binding["bundle_asset_template"].format(tag=resolved_tag)
-    sha256_asset_name = binding["bundle_sha256_template"].format(tag=resolved_tag)
-    bundle_url = asset_download_url(release, bundle_asset_name)
-    sha256_url = asset_download_url(release, sha256_asset_name)
-
+    bundle_url, expected_hash = asset_download_info(release, bundle_asset_name)
     bundle_bytes = download_bytes(bundle_url)
-    expected_hash = sha256_text_for_asset(sha256_url)
     verify_sha256(bundle_bytes, expected_hash, bundle_asset_name)
 
     if bundle_root.exists():
