@@ -14,6 +14,7 @@
 | 第一次了解项目 | [中文首页](../../README.zh-CN.md) |
 | 想了解产品定位与能力边界 | [为什么是 LuaSkills](product/why-luaskills.md) |
 | Skill 作者 | [Lua Skill 开发手册](skill-development.md) |
+| 从 0.4.4 升级到 0.4.5 | [LuaSkills 0.4.5 升级说明](../upgrade-0.4.5.md) |
 | 第一次做 FFI 联调 | [FFI 宿主接入检查清单](ffi/host-checklist.md) |
 | 需要完整 FFI 参数、内存和生命周期规则 | [FFI 对接文档](ffi/integration-guide.md) |
 | 需要参考历史 beta 发布边界 | [FFI Beta 发布说明](ffi/beta-release-notes.md) |
@@ -49,6 +50,7 @@ Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和
 ## 宿主与 FFI 接入
 
 - [FFI Beta 发布说明](ffi/beta-release-notes.md)
+- [LuaSkills 0.4.5 升级说明](../upgrade-0.4.5.md)
 - [FFI 宿主接入检查清单](ffi/host-checklist.md)
 - [FFI 对接文档](ffi/integration-guide.md)
 - [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md)
@@ -76,4 +78,5 @@ Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和
 - [Host Callback Demo](../../examples/ffi/host_provider_demo/README.md)
 - [LuaSkills Rust Demo](../../examples/demo-rust/README.md)：Rust crate 直连宿主示例，覆盖 `call_skill` 与 `vulcan.host.*`。
 - `cargo run --bin luaskills-debug -- inspect --runtime-root <目录> --skill-path <目录>`：仓库内单 skill 调试 bin，会先把 skill 同步进真实 `runtime_root` 再完成加载。
+- 新宿主集成应只传 `runtime_root` 作为 LuaSkills 运行时布局入口。LuaSkills 会从该根目录推导 `bin`、`libs`、`lua_packages`、`resources`、`skills`、`temp`、`dependencies`、`state`、`databases`、`config` 与 `system_lua_lib`。
 - [LuaSkills FFI Demo](../../examples/demo-ffi/README.md)

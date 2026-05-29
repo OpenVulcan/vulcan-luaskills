@@ -285,6 +285,7 @@ pub(crate) fn exported_ffi_function_names() -> Vec<String> {
         "luaskills_ffi_version",
         "luaskills_ffi_describe",
         "luaskills_ffi_engine_new",
+        "luaskills_ffi_engine_new_v2",
         "luaskills_ffi_engine_free",
         "luaskills_ffi_load_from_roots",
         "luaskills_ffi_reload_from_roots",

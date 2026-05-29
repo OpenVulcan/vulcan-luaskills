@@ -42,13 +42,24 @@
 - 已明确当前稳定运行时资产来自两个仓库：
   - `LuaSkills/luaskills` 提供 `luaskills-ffi-sdk-*`
   - `LuaSkills/luaskills-packages` 提供 `lua-runtime-packages-*` 与 `lua-deps-*`
-- 已经准备好宿主运行时目录：
-  - `temp`
-  - `resources`
+- 已经准备好独立的 LuaSkills `runtime_root`，不要复用宿主程序安装目录
+- JSON FFI 宿主直接在 host options 里传 `runtime_root`
+- 标准 C ABI 宿主如果要传 `runtime_root`，使用 `FfiLuaRuntimeHostOptionsV2` 与 `luaskills_ffi_engine_new_v2`
+- `runtime_root` 固定包含或允许运行时创建这些目录：
+  - `bin`
+  - `libs`
   - `lua_packages`
+  - `resources`
+  - `skills`
+  - `temp`
+  - `temp/downloads`
   - `dependencies`
   - `state`
   - `databases`
+  - `config`
+  - `system_lua_lib`
+- 宿主工具直接放在 `runtime_root/bin`，不要再放到 `runtime_root/bin/tools`
+- FFI / 原生库和上级 DLL 依赖放在 `runtime_root/libs`
 - 如果使用 packaged runtime：
   - `resources/lua-runtime-manifest.json` 必须存在
   - `resources/luaskills-packages-manifest.json` 必须存在
@@ -74,8 +85,8 @@
 - 如果连接远端 controller：
   - 必须关闭 `auto_spawn`
 - 如果宿主准备接 `system_runtime_lease`：
-  - 已决定统一的 `system_lua_lib_dir`
-  - 若宿主不显式提供，已接受默认回落到运行时 `skills` 目录
+  - 已接受固定的 `runtime_root/system_lua_lib` 作为默认 system Lua 库目录
+  - 只有维护旧版兼容路径时才继续显式传入 `system_lua_lib_dir`
 - 如果宿主准备消费结构化结果：
   - 已决定 `request_context.client_capabilities.host_result` 的注入策略
   - 已明确默认关闭，只有显式开启时才允许 skill 第四返回值进入宿主结果

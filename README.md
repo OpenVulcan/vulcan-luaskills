@@ -154,7 +154,7 @@ cargo run --bin luaskills-debug -- call \
   --args-json "{\"note\":\"hello\"}"
 ```
 
-`luaskills-debug` is a repository-side developer tool only. It does not add any SDK API or FFI API. The bin first synchronizes the target skill into `runtime_root/skills/<skill_id>`, then reuses the normal `load_from_roots -> call_skill` path so dependency roots, state directories, databases, and runtime context remain aligned with real host execution.
+`luaskills-debug` is a repository-side developer tool only. It does not add any SDK API or FFI API. The bin first synchronizes the target skill into `runtime_root/skills/<skill_id>`, then reuses the normal `load_from_roots -> call_skill` path so dependency roots, state directories, databases, and runtime context remain aligned with real host execution. The runtime root is now the single directory input; LuaSkills derives `bin`, `libs`, `lua_packages`, `resources`, `skills`, `temp`, `dependencies`, `state`, `databases`, `config`, and `system_lua_lib` from it. Host tools live directly under `runtime_root/bin`, and native/FFI libraries live under `runtime_root/libs`.
 
 To learn the skill package shape before writing a host integration, start with:
 
@@ -235,13 +235,13 @@ examples/
 
 ## Ecosystem Release Order
 
-For one unified ecosystem release such as `0.4.4`, publish in this order:
+For one unified ecosystem release such as `0.4.5`, publish in this order:
 
 1. Release `LuaSkills/luaskills-packages` first so `lua-runtime-packages-*` and `lua-deps-*` already exist for the new compatible series.
-2. Release `LuaSkills/luaskills` next, including the crate version plus the main-repo `luaskills-ffi-sdk-*` and demo assets under tag `v0.4.4`.
-3. Publish the TypeScript SDK `@luaskills/sdk@0.4.4`.
-4. Publish the Python SDK `luaskills-sdk==0.4.4`.
-5. Publish the Go SDK module tag `v0.4.4`.
+2. Release `LuaSkills/luaskills` next, including the crate version plus the main-repo `luaskills-ffi-sdk-*` and demo assets under tag `v0.4.5`.
+3. Publish the TypeScript SDK `@luaskills/sdk@0.4.5`.
+4. Publish the Python SDK `luaskills-sdk==0.4.5`.
+5. Publish the Go SDK module tag `v0.4.5`.
 6. Run the **Examples Release** workflow for each SDK only after its package or module tag is already visible upstream.
 
 This order keeps every installer and examples workflow pointed at already-published packages assets, core assets, and SDK packages.

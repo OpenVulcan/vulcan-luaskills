@@ -22,6 +22,16 @@ python luaskills-debug-skill/scripts/run_debug.py call --skill-id your-skill --t
 In a source checkout, the wrapper defaults `runtime_root` to `output/luaskills-debug-runtime/<skill_id>`. In a standalone debug-tool package, it defaults to the package-local `runtime/` directory.
 在源码仓库中，包装脚本默认把 `runtime_root` 设为 `output/luaskills-debug-runtime/<skill_id>`；在独立 debug-tool 包中，它默认使用包内 `runtime/` 目录。
 
+LuaSkills derives all runtime directories from `runtime_root`.
+LuaSkills 会从 `runtime_root` 推导所有运行时目录。
+
+- Tools are searched directly under `runtime_root/bin`, not `runtime_root/bin/tools`.
+- 工具直接在 `runtime_root/bin` 下查找，不再使用 `runtime_root/bin/tools`。
+- Lua packages are loaded from `runtime_root/lua_packages`, and native / FFI libraries are loaded from `runtime_root/libs`.
+- Lua 包从 `runtime_root/lua_packages` 加载，原生库 / FFI 库从 `runtime_root/libs` 加载。
+- Runtime state uses `runtime_root/skills`, `runtime_root/dependencies`, `runtime_root/state`, `runtime_root/databases`, `runtime_root/config`, and `runtime_root/system_lua_lib`.
+- 运行时状态使用 `runtime_root/skills`、`runtime_root/dependencies`、`runtime_root/state`、`runtime_root/databases`、`runtime_root/config` 与 `runtime_root/system_lua_lib`。
+
 ## Workflow
 
 Start with `sync`.

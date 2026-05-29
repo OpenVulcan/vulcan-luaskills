@@ -73,6 +73,7 @@ typedef struct FfiLuaRuntimeHostOptions {
     const char *host_provided_tool_root;
     const char *host_provided_lua_root;
     const char *host_provided_ffi_root;
+    /*
     Optional fixed host-owned `system_lua_lib` directory path.
     可选固定宿主自有 `system_lua_lib` 目录路径。
     */
@@ -186,10 +187,28 @@ typedef struct FfiLuaRuntimeHostOptions {
     uint8_t disable_managed_io_compat;
 } FfiLuaRuntimeHostOptions;
 
+typedef struct FfiLuaRuntimeHostOptionsV2 {
+    /*
+    Stable v1 host options kept byte-for-byte compatible with the original standard ABI.
+    与原始标准 ABI 保持逐字节兼容的稳定 v1 宿主选项。
+    */
+    FfiLuaRuntimeHostOptions base;
+    /*
+    Optional canonical runtime root used to derive the fixed LuaSkills layout.
+    可选规范运行时根目录，用于推导固定 LuaSkills 布局。
+    */
+    const char *runtime_root;
+} FfiLuaRuntimeHostOptionsV2;
+
 typedef struct FfiLuaEngineOptions {
     FfiLuaVmPoolConfig pool;
     FfiLuaRuntimeHostOptions host;
 } FfiLuaEngineOptions;
+
+typedef struct FfiLuaEngineOptionsV2 {
+    FfiLuaVmPoolConfig pool;
+    FfiLuaRuntimeHostOptionsV2 host;
+} FfiLuaEngineOptionsV2;
 
 typedef struct FfiRuntimeSkillRoot {
     const char *name;
@@ -531,6 +550,16 @@ Create one LuaSkills engine through the standard C ABI surface.
 */
 int32_t luaskills_ffi_engine_new(
     const FfiLuaEngineOptions *options,
+    uint64_t *engine_id_out,
+    FfiOwnedBuffer *error_out
+);
+
+/*
+Create one LuaSkills engine through the standard C ABI v2 surface.
+通过标准 C ABI v2 接口创建一个 LuaSkills 引擎。
+*/
+int32_t luaskills_ffi_engine_new_v2(
+    const FfiLuaEngineOptionsV2 *options,
     uint64_t *engine_id_out,
     FfiOwnedBuffer *error_out
 );

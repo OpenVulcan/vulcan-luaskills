@@ -237,6 +237,22 @@ fn parse_optional_string(value: *const c_char, field_name: &str) -> Result<Optio
     Ok(Some(text.to_string()))
 }
 
+/// Parse one legacy directory-name field with a runtime-root default fallback.
+/// 解析单个旧目录名字段，并在使用 runtime-root 时回落到默认值。
+fn parse_runtime_layout_name(
+    value: *const c_char,
+    field_name: &str,
+    default_value: &str,
+    has_runtime_root: bool,
+) -> Result<String, String> {
+    if has_runtime_root {
+        return Ok(
+            parse_optional_string(value, field_name)?.unwrap_or_else(|| default_value.to_string())
+        );
+    }
+    parse_required_string(value, field_name)
+}
+
 /// Parse one array of UTF-8 string pointers.
 /// 解析一组 UTF-8 字符串指针数组。
 fn parse_string_array(
@@ -379,7 +395,18 @@ fn parse_runlua_pool_config(
 /// Convert one C ABI host options struct into one Rust host options value.
 /// 将单个 C ABI 宿主选项结构转换为一个 Rust 宿主选项值。
 fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHostOptions, String> {
+    parse_host_options_with_runtime_root(value, None)
+}
+
+/// Convert one C ABI host options struct plus optional v2 runtime_root into Rust host options.
+/// 将单个 C ABI 宿主选项结构和可选 v2 runtime_root 转换为 Rust 宿主选项值。
+fn parse_host_options_with_runtime_root(
+    value: &FfiLuaRuntimeHostOptions,
+    runtime_root: Option<PathBuf>,
+) -> Result<LuaRuntimeHostOptions, String> {
+    let has_runtime_root = runtime_root.is_some();
     Ok(LuaRuntimeHostOptions {
+        runtime_root,
         temp_dir: parse_optional_string(value.temp_dir, "temp_dir")?.map(PathBuf::from),
         resources_dir: parse_optional_string(value.resources_dir, "resources_dir")?
             .map(PathBuf::from),
@@ -407,12 +434,24 @@ fn parse_host_options(value: &FfiLuaRuntimeHostOptions) -> Result<LuaRuntimeHost
             "download_cache_root",
         )?
         .map(PathBuf::from),
-        dependency_dir_name: parse_required_string(
+        dependency_dir_name: parse_runtime_layout_name(
             value.dependency_dir_name,
             "dependency_dir_name",
+            "dependencies",
+            has_runtime_root,
         )?,
-        state_dir_name: parse_required_string(value.state_dir_name, "state_dir_name")?,
-        database_dir_name: parse_required_string(value.database_dir_name, "database_dir_name")?,
+        state_dir_name: parse_runtime_layout_name(
+            value.state_dir_name,
+            "state_dir_name",
+            "state",
+            has_runtime_root,
+        )?,
+        database_dir_name: parse_runtime_layout_name(
+            value.database_dir_name,
+            "database_dir_name",
+            "databases",
+            has_runtime_root,
+        )?,
         skill_config_file_path: parse_optional_string(
             value.skill_config_file_path,
             "skill_config_file_path",
@@ -570,6 +609,21 @@ fn parse_engine_options(value: &FfiLuaEngineOptions) -> Result<LuaEngineOptions,
             idle_ttl_secs: value.pool.idle_ttl_secs,
         },
         parse_host_options(&value.host)?,
+    ))
+}
+
+/// Convert one C ABI v2 engine options struct into one Rust engine options value.
+/// 将单个 C ABI v2 引擎选项结构转换为一个 Rust 引擎选项值。
+fn parse_engine_options_v2(value: &FfiLuaEngineOptionsV2) -> Result<LuaEngineOptions, String> {
+    let runtime_root =
+        parse_optional_string(value.host.runtime_root, "runtime_root")?.map(PathBuf::from);
+    Ok(LuaEngineOptions::new(
+        LuaVmPoolConfig {
+            min_size: value.pool.min_size,
+            max_size: value.pool.max_size,
+            idle_ttl_secs: value.pool.idle_ttl_secs,
+        },
+        parse_host_options_with_runtime_root(&value.host.base, runtime_root)?,
     ))
 }
 
@@ -1908,6 +1962,42 @@ pub unsafe extern "C" fn luaskills_ffi_engine_new(
         return ffi_error_status(error_out, "engine_id_out must not be null");
     }
     let options = match parse_engine_options(unsafe { &*options }) {
+        Ok(options) => options,
+        Err(error) => return ffi_error_status(error_out, error),
+    };
+    match LuaEngine::new(options) {
+        Ok(engine) => {
+            let engine_id = FFI_ENGINE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            match ffi_engine_registry().lock() {
+                Ok(mut registry) => {
+                    registry.insert(engine_id, crate::ffi::FfiEngineSlot::new(engine));
+                    unsafe { *engine_id_out = engine_id };
+                    ffi_ok_status(error_out)
+                }
+                Err(_) => ffi_error_status(error_out, "FFI engine registry lock poisoned"),
+            }
+        }
+        Err(error) => ffi_error_status(error_out, error.to_string()),
+    }
+}
+
+/// Create one runtime engine through the standard C ABI v2 surface.
+/// 通过标准 C ABI v2 接口创建单个运行时引擎。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luaskills_ffi_engine_new_v2(
+    options: *const FfiLuaEngineOptionsV2,
+    engine_id_out: *mut u64,
+    error_out: *mut FfiOwnedBuffer,
+) -> i32 {
+    clear_error_out(error_out);
+    clear_out_u64(engine_id_out);
+    if options.is_null() {
+        return ffi_error_status(error_out, "options must not be null");
+    }
+    if engine_id_out.is_null() {
+        return ffi_error_status(error_out, "engine_id_out must not be null");
+    }
+    let options = match parse_engine_options_v2(unsafe { &*options }) {
         Ok(options) => options,
         Err(error) => return ffi_error_status(error_out, error),
     };

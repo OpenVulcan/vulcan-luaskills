@@ -872,6 +872,7 @@ fn ffi_list_entries_json_exposes_resolved_input_schema() {
             idle_ttl_secs: 30,
         },
         crate::LuaRuntimeHostOptions {
+            runtime_root: None,
             temp_dir: Some(temp_root.join("temp")),
             resources_dir: Some(temp_root.join("resources")),
             lua_packages_dir: Some(temp_root.join("lua_packages")),
@@ -947,6 +948,7 @@ fn ffi_engine_new_and_free_roundtrip() {
                 idle_ttl_secs: 30,
             },
             crate::LuaRuntimeHostOptions {
+                runtime_root: None,
                 temp_dir: Some(temp_root.join("temp")),
                 resources_dir: Some(temp_root.join("resources")),
                 lua_packages_dir: Some(temp_root.join("lua_packages")),
@@ -1022,6 +1024,7 @@ fn ffi_skill_config_json_roundtrip() {
                 idle_ttl_secs: 30,
             },
             crate::LuaRuntimeHostOptions {
+                runtime_root: None,
                 temp_dir: Some(temp_root.join("temp")),
                 resources_dir: Some(temp_root.join("resources")),
                 lua_packages_dir: Some(temp_root.join("lua_packages")),

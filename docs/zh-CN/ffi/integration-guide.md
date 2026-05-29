@@ -513,19 +513,24 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 依赖 sibling 目录名配置
 - 受保护 skill 配置
 
-其中宿主选项里和运行时目录最直接相关的关键字段包括：
+其中宿主选项里和运行时目录最直接相关的关键字段是：
 
-- `temp_dir`
-- `resources_dir`
-- `lua_packages_dir`
-- `host_provided_tool_root`
-- `host_provided_lua_root`
-- `host_provided_ffi_root`
-- `download_cache_root`
-- `dependency_dir_name`
-- `state_dir_name`
-- `database_dir_name`
+- `runtime_root`
 - `allow_network_download`
+
+`runtime_root` 是新的规范入口。传入后，LuaSkills 会固定推导下面的运行时布局：
+
+- `bin`：宿主提供的工具根目录，工具直接放在这里，不再使用 `bin/tools`
+- `libs`：宿主提供的 FFI / 原生库根目录，Lua C module 与 DLL 依赖默认从这里补充搜索
+- `lua_packages`：Lua 包根目录，同时作为 Lua package 探测根
+- `resources`：打包运行时元数据与资源目录
+- `skills`：已安装或已同步的 LuaSkills 包目录
+- `temp` 与 `temp/downloads`：临时文件与下载缓存目录
+- `dependencies`、`state`、`databases`：依赖、状态与数据库目录
+- `config/skill_config.json`：统一 skill 配置文件
+- `system_lua_lib`：宿主自有 system Lua 库目录
+
+旧字段 `temp_dir`、`resources_dir`、`lua_packages_dir`、`host_provided_tool_root`、`host_provided_lua_root`、`host_provided_ffi_root`、`download_cache_root`、`dependency_dir_name`、`state_dir_name`、`database_dir_name` 与 `skill_config_file_path` 仍保留为兼容字段，但不再建议作为新宿主集成的配置入口。JSON FFI 直接在 host options 里传 `runtime_root`；标准 C ABI 为保持 `FfiLuaRuntimeHostOptions` 的 v1 布局兼容，需使用 `FfiLuaRuntimeHostOptionsV2` 与 `luaskills_ffi_engine_new_v2` 传入 `runtime_root`。若同时传入 `runtime_root`，运行时会按固定布局重写这些派生字段。
 
 ### 7.1.1 Space Controller 额外前置要求
 
@@ -662,11 +667,12 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - 释放必须走 `luaskills_ffi_buffer_free`
 - 如果 `len > 0`，则 `ptr` 不得为 null
 
-### 8.3 `FfiLuaRuntimeHostOptions`
+### 8.3 `FfiLuaRuntimeHostOptions` / `FfiLuaRuntimeHostOptionsV2`
 
 作用：
 
-- 描述宿主运行时路径、依赖目录名、下载策略、基础库路径等
+- `FfiLuaRuntimeHostOptions` 描述旧版宿主运行时路径、依赖目录名、下载策略、基础库路径等，并保持 v1 标准 C ABI 布局兼容
+- `FfiLuaRuntimeHostOptionsV2` 在 `base` 中嵌入 `FfiLuaRuntimeHostOptions`，并新增 `runtime_root` 作为新宿主集成的规范目录入口
 
 关键字段：
 
@@ -685,6 +691,7 @@ FFI 不直接暴露 `LuaEngine` 指针，而是通过内部注册表分配一个
 - `enable_skill_management_bridge`
 - `default_text_encoding`
 - `disable_managed_io_compat`
+- `FfiLuaRuntimeHostOptionsV2.runtime_root`
 
 已取消字段：
 
@@ -886,6 +893,7 @@ runtime-config(action, skill_id?, key?, value?)
 - `luaskills_ffi_version`
 - `luaskills_ffi_describe`
 - `luaskills_ffi_engine_new`
+- `luaskills_ffi_engine_new_v2`
 - `luaskills_ffi_engine_free`
 
 公共 `_json` FFI 接口：

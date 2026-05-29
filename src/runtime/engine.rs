@@ -2143,10 +2143,14 @@ impl LuaEngine {
 
     /// Create a new LuaEngine with LuaJIT VM and registered globals.
     pub fn new(options: LuaEngineOptions) -> Result<Self, Box<dyn std::error::Error>> {
-        let _default_text_encoding = resolve_host_default_text_encoding(&options.host_options)
-            .map_err(std::io::Error::other)?;
-        let runlua_pool_config = options
-            .host_options
+        let LuaEngineOptions {
+            pool_config,
+            host_options,
+        } = options;
+        let host_options = host_options.normalized();
+        let _default_text_encoding =
+            resolve_host_default_text_encoding(&host_options).map_err(std::io::Error::other)?;
+        let runlua_pool_config = host_options
             .runlua_pool_config
             .map(|config| LuaVmPoolConfig {
                 min_size: config.min_size,
@@ -2155,14 +2159,13 @@ impl LuaEngine {
             })
             .unwrap_or_else(default_runlua_vm_pool_config);
         configure_global_tool_cache(
-            options
-                .host_options
+            host_options
                 .cache_config
                 .clone()
                 .unwrap_or_else(ToolCacheConfig::default),
         );
         let native_library_search_guard =
-            NativeLibrarySearchGuard::new(&options.host_options).map_err(std::io::Error::other)?;
+            NativeLibrarySearchGuard::new(&host_options).map_err(std::io::Error::other)?;
         let database_provider_callbacks = Arc::new(
             RuntimeDatabaseProviderCallbacks::capture_process_defaults()
                 .map_err(std::io::Error::other)?,
@@ -2171,18 +2174,18 @@ impl LuaEngine {
             skills: HashMap::new(),
             entry_registry: BTreeMap::new(),
             runtime_skill_roots: Vec::new(),
-            pool: Arc::new(LuaVmPool::new(options.pool_config)),
+            pool: Arc::new(LuaVmPool::new(pool_config)),
             runlua_pool: Arc::new(LuaVmPool::new(runlua_pool_config)),
             runtime_sessions: Arc::new(RuntimeSessionManager::new()),
             skill_config_store: Arc::new(
-                SkillConfigStore::new(options.host_options.skill_config_file_path.clone())
+                SkillConfigStore::new(host_options.skill_config_file_path.clone())
                     .map_err(std::io::Error::other)?,
             ),
             lancedb_host: None,
             sqlite_host: None,
             database_provider_callbacks,
             native_library_search_guard,
-            host_options: Arc::new(options.host_options),
+            host_options: Arc::new(host_options),
         })
     }
 
@@ -2334,7 +2337,7 @@ impl LuaEngine {
             .host_options
             .host_provided_tool_root
             .clone()
-            .unwrap_or_else(|| runtime_root.join("bin").join("tools"));
+            .unwrap_or_else(|| runtime_root.join("bin"));
         let lua_root = dependency_root.join("lua");
         let host_lua_root = self
             .host_options

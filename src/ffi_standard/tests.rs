@@ -743,6 +743,98 @@ fn standard_ffi_load_and_list_entries_round_trip() {
     let _ = std::fs::remove_dir_all(&temp_root);
 }
 
+/// Verify the standard C ABI can create one engine from only the canonical runtime root.
+/// 验证标准 C ABI 可以只通过规范 runtime_root 创建一个引擎。
+#[test]
+fn standard_ffi_runtime_root_only_host_options_round_trip() {
+    let temp_root = std::env::temp_dir().join(format!(
+        "luaskills_standard_ffi_runtime_root_only_test_{}",
+        std::process::id()
+    ));
+    if temp_root.exists() {
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+    std::fs::create_dir_all(&temp_root).expect("create runtime root");
+    let runtime_root_text =
+        CString::new(temp_root.display().to_string()).expect("runtime_root cstring");
+
+    let host_options = FfiLuaRuntimeHostOptionsV2 {
+        base: FfiLuaRuntimeHostOptions {
+            temp_dir: ptr::null(),
+            resources_dir: ptr::null(),
+            lua_packages_dir: ptr::null(),
+            host_provided_tool_root: ptr::null(),
+            host_provided_lua_root: ptr::null(),
+            host_provided_ffi_root: ptr::null(),
+            system_lua_lib_dir: ptr::null(),
+            download_cache_root: ptr::null(),
+            dependency_dir_name: ptr::null(),
+            state_dir_name: ptr::null(),
+            database_dir_name: ptr::null(),
+            skill_config_file_path: ptr::null(),
+            allow_network_download: 0,
+            github_base_url: ptr::null(),
+            github_api_base_url: ptr::null(),
+            official_skill_hub_base_url: ptr::null(),
+            enable_private_url_skill_install: 0,
+            private_skill_source_allowlist: ptr::null(),
+            private_skill_source_allowlist_len: 0,
+            sqlite_library_path: ptr::null(),
+            sqlite_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            sqlite_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            lancedb_library_path: ptr::null(),
+            lancedb_provider_mode: FFI_PROVIDER_MODE_DYNAMIC_LIBRARY,
+            lancedb_callback_mode: FFI_CALLBACK_MODE_STANDARD,
+            space_controller_endpoint: ptr::null(),
+            space_controller_auto_spawn: 0,
+            space_controller_executable_path: ptr::null(),
+            space_controller_process_mode: FFI_SPACE_CONTROLLER_PROCESS_MODE_SERVICE,
+            cache_config: ptr::null(),
+            runlua_pool_config: ptr::null(),
+            reserved_entry_names: ptr::null(),
+            reserved_entry_names_len: 0,
+            ignored_skill_ids: ptr::null(),
+            ignored_skill_ids_len: 0,
+            enable_skill_management_bridge: 0,
+            default_text_encoding: ptr::null(),
+            disable_managed_io_compat: 0,
+        },
+        runtime_root: runtime_root_text.as_ptr(),
+    };
+    let engine_options = FfiLuaEngineOptionsV2 {
+        pool: FfiLuaVmPoolConfig {
+            min_size: 1,
+            max_size: 1,
+            idle_ttl_secs: 30,
+        },
+        host: host_options,
+    };
+
+    let mut engine_id = 0_u64;
+    let mut error_out = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
+    let engine_status =
+        unsafe { luaskills_ffi_engine_new_v2(&engine_options, &mut engine_id, &mut error_out) };
+    assert_eq!(
+        engine_status,
+        FFI_STATUS_OK,
+        "engine_new failed: {}",
+        read_owned_buffer_text(&error_out)
+    );
+    assert!(error_out.ptr.is_null());
+
+    let mut free_error = FfiOwnedBuffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+    };
+    let free_status = unsafe { luaskills_ffi_engine_free(engine_id, &mut free_error) };
+    assert_eq!(free_status, FFI_STATUS_OK);
+    assert!(free_error.ptr.is_null());
+    let _ = std::fs::remove_dir_all(&temp_root);
+}
+
 /// Verify standard call_skill accepts borrowed JSON buffers for args and invocation context.
 /// 验证标准 call_skill 会接受作为 args 与调用上下文输入的借用 JSON 缓冲。
 #[test]

@@ -5,6 +5,103 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
 
+/// Fixed directory layout derived from one LuaSkills runtime root.
+/// 从单个 LuaSkills 运行时根目录推导出的固定目录布局。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LuaRuntimeLayout {
+    /// Canonical root directory owned by the LuaSkills runtime.
+    /// LuaSkills 运行时拥有的规范根目录。
+    pub runtime_root: PathBuf,
+}
+
+impl LuaRuntimeLayout {
+    /// Construct one fixed runtime layout from one root directory.
+    /// 基于单个根目录构造固定运行时布局。
+    pub fn new(runtime_root: impl Into<PathBuf>) -> Self {
+        Self {
+            runtime_root: runtime_root.into(),
+        }
+    }
+
+    /// Return the runtime bin directory used for host-provided tools.
+    /// 返回用于宿主提供工具的运行时 bin 目录。
+    pub fn bin_dir(&self) -> PathBuf {
+        self.runtime_root.join("bin")
+    }
+
+    /// Return the runtime native library directory used for FFI and DLL dependencies.
+    /// 返回用于 FFI 与 DLL 依赖的运行时原生库目录。
+    pub fn libs_dir(&self) -> PathBuf {
+        self.runtime_root.join("libs")
+    }
+
+    /// Return the runtime Lua packages directory used by `package.path` and `package.cpath`.
+    /// 返回供 `package.path` 与 `package.cpath` 使用的运行时 Lua 包目录。
+    pub fn lua_packages_dir(&self) -> PathBuf {
+        self.runtime_root.join("lua_packages")
+    }
+
+    /// Return the runtime resources directory used for packaged metadata and assets.
+    /// 返回用于打包元数据与资源的运行时 resources 目录。
+    pub fn resources_dir(&self) -> PathBuf {
+        self.runtime_root.join("resources")
+    }
+
+    /// Return the runtime skills directory containing installed LuaSkills packages.
+    /// 返回包含已安装 LuaSkills 包的运行时 skills 目录。
+    pub fn skills_dir(&self) -> PathBuf {
+        self.runtime_root.join("skills")
+    }
+
+    /// Return the runtime temporary directory.
+    /// 返回运行时临时目录。
+    pub fn temp_dir(&self) -> PathBuf {
+        self.runtime_root.join("temp")
+    }
+
+    /// Return the runtime download-cache directory.
+    /// 返回运行时下载缓存目录。
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.temp_dir().join("downloads")
+    }
+
+    /// Return the runtime dependency directory.
+    /// 返回运行时依赖目录。
+    pub fn dependencies_dir(&self) -> PathBuf {
+        self.runtime_root.join("dependencies")
+    }
+
+    /// Return the runtime state directory.
+    /// 返回运行时状态目录。
+    pub fn state_dir(&self) -> PathBuf {
+        self.runtime_root.join("state")
+    }
+
+    /// Return the runtime database directory.
+    /// 返回运行时数据库目录。
+    pub fn databases_dir(&self) -> PathBuf {
+        self.runtime_root.join("databases")
+    }
+
+    /// Return the runtime config directory.
+    /// 返回运行时配置目录。
+    pub fn config_dir(&self) -> PathBuf {
+        self.runtime_root.join("config")
+    }
+
+    /// Return the unified runtime skill-config file path.
+    /// 返回统一运行时技能配置文件路径。
+    pub fn skill_config_file_path(&self) -> PathBuf {
+        self.config_dir().join("skill_config.json")
+    }
+
+    /// Return the host-owned system Lua library directory.
+    /// 返回宿主自有系统 Lua 库目录。
+    pub fn system_lua_lib_dir(&self) -> PathBuf {
+        self.runtime_root.join("system_lua_lib")
+    }
+}
+
 /// Process mode used when the runtime auto-spawns one local space controller process.
 /// 运行时自动拉起本地空间控制器进程时使用的进程模式。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -133,6 +230,10 @@ pub struct LuaRuntimeRunLuaPoolConfig {
 /// 宿主提供给 LuaSkills 库消费的文件系统与运行时路径集合。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LuaRuntimeHostOptions {
+    /// Optional canonical LuaSkills runtime root used to derive the fixed runtime layout.
+    /// 用于推导固定运行时布局的可选规范 LuaSkills 运行时根目录。
+    #[serde(default)]
+    pub runtime_root: Option<PathBuf>,
     /// Host-managed temporary directory used by luaexec spill files and similar transient artifacts.
     /// 宿主管理的临时目录，供 luaexec 请求文件等短生命周期产物使用。
     pub temp_dir: Option<PathBuf>,
@@ -159,12 +260,15 @@ pub struct LuaRuntimeHostOptions {
     pub download_cache_root: Option<PathBuf>,
     /// Fixed sibling directory name used under one skill-root parent to store dependencies.
     /// 在单个技能根父目录下存放依赖时使用的固定兄弟目录名称。
+    #[serde(default)]
     pub dependency_dir_name: String,
     /// Fixed sibling directory name used under one skill-root parent to store skill state.
     /// 在单个技能根父目录下存放技能状态时使用的固定兄弟目录名称。
+    #[serde(default)]
     pub state_dir_name: String,
     /// Fixed sibling directory name used under one skill-root parent to store skill databases.
     /// 在单个技能根父目录下存放技能数据库时使用的固定兄弟目录名称。
+    #[serde(default)]
     pub database_dir_name: String,
     /// Optional unified skill config file path owned by the host.
     /// 由宿主拥有的可选统一技能配置文件路径。
@@ -240,6 +344,53 @@ pub struct LuaRuntimeHostOptions {
     pub capabilities: LuaRuntimeCapabilityOptions,
 }
 
+impl LuaRuntimeHostOptions {
+    /// Build host options from one canonical runtime root and its fixed derived layout.
+    /// 基于单个规范运行时根目录及其固定派生布局构造宿主选项。
+    pub fn with_runtime_root(runtime_root: impl Into<PathBuf>) -> Self {
+        let mut options = Self {
+            runtime_root: Some(runtime_root.into()),
+            ..Self::default()
+        };
+        options.apply_runtime_root_layout();
+        options
+    }
+
+    /// Return the fixed layout when a canonical runtime root has been configured.
+    /// 当已配置规范运行时根目录时返回固定布局。
+    pub fn runtime_layout(&self) -> Option<LuaRuntimeLayout> {
+        self.runtime_root.clone().map(LuaRuntimeLayout::new)
+    }
+
+    /// Apply the fixed runtime-root layout to all legacy directory fields.
+    /// 将固定 runtime-root 布局应用到所有兼容目录字段。
+    pub fn apply_runtime_root_layout(&mut self) {
+        let Some(layout) = self.runtime_layout() else {
+            return;
+        };
+
+        self.temp_dir = Some(layout.temp_dir());
+        self.resources_dir = Some(layout.resources_dir());
+        self.lua_packages_dir = Some(layout.lua_packages_dir());
+        self.host_provided_tool_root = Some(layout.bin_dir());
+        self.host_provided_lua_root = Some(layout.lua_packages_dir());
+        self.host_provided_ffi_root = Some(layout.libs_dir());
+        self.system_lua_lib_dir = Some(layout.system_lua_lib_dir());
+        self.download_cache_root = Some(layout.downloads_dir());
+        self.dependency_dir_name = "dependencies".to_string();
+        self.state_dir_name = "state".to_string();
+        self.database_dir_name = "databases".to_string();
+        self.skill_config_file_path = Some(layout.skill_config_file_path());
+    }
+
+    /// Return a normalized copy where `runtime_root` owns every derived runtime directory.
+    /// 返回一份规范化副本，其中 `runtime_root` 统一拥有所有派生运行时目录。
+    pub fn normalized(mut self) -> Self {
+        self.apply_runtime_root_layout();
+        self
+    }
+}
+
 /// Host-injected invocation context delivered alongside one skill or runlua call.
 /// 宿主在单次 skill 或 runlua 调用时一并注入的调用上下文。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -296,8 +447,9 @@ pub struct ClientBudgetSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::LuaRuntimeCapabilityOptions;
+    use super::{LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions};
     use serde_json::json;
+    use std::path::PathBuf;
 
     /// Verify capability payloads now require an explicit managed io compatibility flag.
     /// 验证 capability 载荷现在必须显式提供 managed io 兼容标记。
@@ -311,6 +463,48 @@ mod tests {
             error.to_string().contains("enable_managed_io_compat"),
             "missing-field error should mention enable_managed_io_compat, got: {error}"
         );
+    }
+
+    /// Verify one runtime root expands into the fixed LuaSkills directory layout.
+    /// 验证单个运行时根目录会展开为固定 LuaSkills 目录布局。
+    #[test]
+    fn runtime_root_expands_fixed_layout() {
+        let runtime_root = PathBuf::from("D:/runtime");
+        let options = LuaRuntimeHostOptions::with_runtime_root(runtime_root.clone());
+
+        assert_eq!(options.temp_dir, Some(runtime_root.join("temp")));
+        assert_eq!(options.resources_dir, Some(runtime_root.join("resources")));
+        assert_eq!(
+            options.lua_packages_dir,
+            Some(runtime_root.join("lua_packages"))
+        );
+        assert_eq!(
+            options.host_provided_tool_root,
+            Some(runtime_root.join("bin"))
+        );
+        assert_eq!(
+            options.host_provided_lua_root,
+            Some(runtime_root.join("lua_packages"))
+        );
+        assert_eq!(
+            options.host_provided_ffi_root,
+            Some(runtime_root.join("libs"))
+        );
+        assert_eq!(
+            options.system_lua_lib_dir,
+            Some(runtime_root.join("system_lua_lib"))
+        );
+        assert_eq!(
+            options.download_cache_root,
+            Some(runtime_root.join("temp").join("downloads"))
+        );
+        assert_eq!(
+            options.skill_config_file_path,
+            Some(runtime_root.join("config").join("skill_config.json"))
+        );
+        assert_eq!(options.dependency_dir_name, "dependencies");
+        assert_eq!(options.state_dir_name, "state");
+        assert_eq!(options.database_dir_name, "databases");
     }
 }
 

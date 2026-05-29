@@ -323,8 +323,9 @@ fn create_runtime_test_layout(runtime_root: &Path) {
         "temp",
         "resources",
         "lua_packages",
-        "bin/tools",
+        "bin",
         "libs",
+        "system_lua_lib",
     ] {
         fs::create_dir_all(runtime_root.join(relative_path))
             .expect("create runtime test layout path");
@@ -530,6 +531,7 @@ fn list_entries_exposes_resolved_entry_input_schema() {
             idle_ttl_secs: 30,
         },
         LuaRuntimeHostOptions {
+            runtime_root: None,
             temp_dir: Some(runtime_root.join("temp")),
             resources_dir: Some(runtime_root.join("resources")),
             lua_packages_dir: Some(runtime_root.join("lua_packages")),

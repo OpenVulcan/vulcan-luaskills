@@ -557,11 +557,11 @@ fn ensure_debug_runtime_layout(runtime_root: &Path) -> Result<(), String> {
         runtime_root.join("lua_packages"),
         runtime_root.join("libs"),
         runtime_root.join("bin"),
-        runtime_root.join("bin").join("tools"),
         runtime_root.join("dependencies"),
         runtime_root.join("state"),
         runtime_root.join("databases"),
         runtime_root.join("config"),
+        runtime_root.join("system_lua_lib"),
     ];
 
     for directory in required_directories {
@@ -732,19 +732,7 @@ fn build_debug_host_options(
     runtime_root: &Path,
     ignored_skill_ids: Vec<String>,
 ) -> LuaRuntimeHostOptions {
-    let mut host_options = LuaRuntimeHostOptions::default();
-    host_options.temp_dir = Some(runtime_root.join("temp"));
-    host_options.resources_dir = Some(runtime_root.join("resources"));
-    host_options.lua_packages_dir = Some(runtime_root.join("lua_packages"));
-    host_options.host_provided_lua_root = Some(runtime_root.join("lua_packages"));
-    host_options.host_provided_ffi_root = Some(runtime_root.join("libs"));
-    host_options.host_provided_tool_root = Some(runtime_root.join("bin").join("tools"));
-    host_options.download_cache_root = Some(runtime_root.join("temp").join("downloads"));
-    host_options.dependency_dir_name = "dependencies".to_string();
-    host_options.state_dir_name = "state".to_string();
-    host_options.database_dir_name = "databases".to_string();
-    host_options.skill_config_file_path =
-        Some(runtime_root.join("config").join("skill_config.json"));
+    let mut host_options = LuaRuntimeHostOptions::with_runtime_root(runtime_root.to_path_buf());
     host_options.allow_network_download = true;
     host_options.ignored_skill_ids = ignored_skill_ids;
     host_options

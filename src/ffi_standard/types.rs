@@ -174,6 +174,18 @@ pub struct FfiLuaRuntimeHostOptions {
     pub disable_managed_io_compat: u8,
 }
 
+/// Plain C ABI v2 host options used by standard non-JSON engine creation with runtime_root.
+/// 支持 runtime_root 的标准非 JSON 引擎创建使用的原生 C ABI v2 宿主选项。
+#[repr(C)]
+pub struct FfiLuaRuntimeHostOptionsV2 {
+    /// Stable v1 host options kept byte-for-byte compatible with the original standard ABI.
+    /// 与原始标准 ABI 保持逐字节兼容的稳定 v1 宿主选项。
+    pub base: FfiLuaRuntimeHostOptions,
+    /// Optional canonical runtime root used to derive the fixed LuaSkills layout.
+    /// 可选规范运行时根目录，用于推导固定 LuaSkills 布局。
+    pub runtime_root: *const c_char,
+}
+
 /// C ABI JSON provider callback used by non-Rust hosts to bridge database requests.
 /// 供非 Rust 宿主桥接数据库请求使用的 C ABI JSON provider 回调。
 pub type FfiJsonProviderCallback = unsafe extern "C" fn(
@@ -212,6 +224,18 @@ pub struct FfiLuaEngineOptions {
     /// Host options applied to the runtime engine.
     /// 应用于运行时引擎的宿主选项。
     pub host: FfiLuaRuntimeHostOptions,
+}
+
+/// Plain C ABI v2 engine options used by standard non-JSON engine creation with runtime_root.
+/// 支持 runtime_root 的标准非 JSON 引擎创建使用的原生 C ABI v2 引擎选项。
+#[repr(C)]
+pub struct FfiLuaEngineOptionsV2 {
+    /// Pool config applied to the runtime engine.
+    /// 应用于运行时引擎的池配置。
+    pub pool: FfiLuaVmPoolConfig,
+    /// V2 host options applied to the runtime engine.
+    /// 应用于运行时引擎的 v2 宿主选项。
+    pub host: FfiLuaRuntimeHostOptionsV2,
 }
 
 /// Plain C ABI skill root used by standard non-JSON lifecycle and load calls.

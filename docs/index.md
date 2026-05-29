@@ -17,6 +17,7 @@ Read:
 - [Why LuaSkills](product/why-luaskills.md)
 - [Skill development manual](skill-development.md)
 - [FFI and SDK overview](ffi/overview.md)
+- [LuaSkills 0.4.5 upgrade guide](upgrade-0.4.5.md)
 - [Database provider overview](providers/database-providers.md)
 - [Runtime architecture overview](architecture/runtime-model.md)
 - [Chinese product overview](../README.zh-CN.md)
@@ -56,6 +57,7 @@ Use `{skill_id}-v{version}-skill.zip`, `{skill_id}-v{version}-checksums.txt`, an
 Skill development is available in English. The deepest host, FFI, provider, and architecture references are still maintained in Chinese.
 
 - [Lua Skill developer manual](skill-development.md)
+- [LuaSkills 0.4.5 upgrade guide](upgrade-0.4.5.md)
 - [Chinese Lua Skill developer manual](zh-CN/skill-development.md)
 - [FFI beta release notes](zh-CN/ffi/beta-release-notes.md)
 - [FFI host checklist](zh-CN/ffi/host-checklist.md)
@@ -83,4 +85,5 @@ Skill development is available in English. The deepest host, FFI, provider, and 
 - [Host provider demo](../examples/ffi/host_provider_demo/README.md)
 - [Rust demo](../examples/demo-rust/README.md): direct crate host integration with `call_skill` and `vulcan.host.*`.
 - `cargo run --bin luaskills-debug -- inspect --runtime-root <dir> --skill-path <dir>`: repository-side single-skill debug bin that syncs one skill into a real `runtime_root` before loading it.
+- New hosts should pass only `runtime_root` for LuaSkills runtime layout. LuaSkills derives `bin`, `libs`, `lua_packages`, `resources`, `skills`, `temp`, `dependencies`, `state`, `databases`, `config`, and `system_lua_lib` from that root.
 - [FFI demo package entry](../examples/demo-ffi/README.md)
