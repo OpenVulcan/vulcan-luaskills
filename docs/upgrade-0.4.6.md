@@ -1,19 +1,19 @@
-# LuaSkills 0.4.5 升级说明
+# LuaSkills 0.4.6 升级说明
 
-本文面向从 `0.4.4` 升级到 `0.4.5` 的宿主、SDK 与调试工具维护者。
+本文面向从 `0.4.4` 升级到 `0.4.6` 的宿主、SDK 与调试工具维护者。
 
-`0.4.5` 的核心目标是收敛运行时目录配置：宿主只需要传入一个独立的 `runtime_root`，LuaSkills 负责从该根目录推导所有固定子目录。这样可以避免宿主程序目录、Lua 运行时目录、skill 目录、原生库目录互相混用。
+`0.4.6` 的核心目标是收敛运行时目录配置：宿主只需要传入一个独立的 `runtime_root`，LuaSkills 负责从该根目录推导所有固定子目录。这样可以避免宿主程序目录、Lua 运行时目录、skill 目录、原生库目录互相混用。
 
 ## 一、版本升级范围
 
 本次需要同步升级以下组件：
 
-- 主仓库 crate：`luaskills = 0.4.5`
-- 主仓库 Rust demo：`examples/demo-rust = 0.4.5`
-- TypeScript SDK：`@luaskills/sdk = 0.4.5`
-- Python SDK：`luaskills-sdk = 0.4.5`
-- Go SDK module tag：`v0.4.5`
-- runtime asset 默认 tag：`v0.4.5`
+- 主仓库 crate：`luaskills = 0.4.6`
+- 主仓库 Rust demo：`examples/demo-rust = 0.4.6`
+- TypeScript SDK：`@luaskills/sdk = 0.4.6`
+- Python SDK：`luaskills-sdk = 0.4.6`
+- Go SDK module tag：`v0.4.6`
+- runtime asset 默认 tag：`v0.4.6`
 
 升级时建议保持主仓库、SDK、demo 和运行时资产版本一致，避免新 SDK 向旧 FFI 传入旧版本无法理解的 host options。
 
@@ -171,7 +171,7 @@ luaskills_ffi_engine_new_v2(&options, &engine_id, &error_out);
 
 - 已将 LuaSkills 运行时目录从宿主程序目录中剥离出来。
 - 已准备独立 `runtime_root`。
-- SDK、demo、主仓库和 runtime asset tag 已统一到 `0.4.5` / `v0.4.5`。
+- SDK、demo、主仓库和 runtime asset tag 已统一到 `0.4.6` / `v0.4.6`。
 - JSON FFI / SDK host options 只传 `runtime_root` 和策略字段。
 - Standard C ABI 新宿主使用 `luaskills_ffi_engine_new_v2`。
 - `runtime_root/bin/tools` 已迁移为 `runtime_root/bin`。
@@ -189,11 +189,11 @@ luaskills_ffi_engine_new_v2(&options, &engine_id, &error_out);
 - `lcurl.dll` 或对应平台动态库是否在 `runtime_root/libs`。
 - Lua C module 是否在 `runtime_root/libs` 或 `runtime_root/lua_packages` 下能被当前 package path / cpath 探测到。
 - 宿主是否仍把依赖放在旧的程序目录或 `bin/tools` 下。
-- SDK 和 FFI 动态库是否同为 `0.4.5`。
+- SDK 和 FFI 动态库是否同为 `0.4.6`。
 
 ### runtime manifest 缺少文件
 
-如果出现类似缺少 `THIRD_PARTY_LICENSES.json` 的错误，说明当前 runtime assets 不完整或版本不匹配。应重新安装对应 `v0.4.5` 的 runtime assets，并确认 `runtime_root/resources/luaskills-packages/` 下包含完整 manifest、license、help 和 package 清单。
+如果出现类似缺少 `THIRD_PARTY_LICENSES.json` 的错误，说明当前 runtime assets 不完整或版本不匹配。应重新安装对应 `v0.4.6` 的 runtime assets，并确认 `runtime_root/resources/luaskills-packages/` 下包含完整 manifest、license、help 和 package 清单。
 
 ### 并发调试删除同步目录失败
 

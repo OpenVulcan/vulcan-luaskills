@@ -14,7 +14,7 @@
 | 第一次了解项目 | [中文首页](../../README.zh-CN.md) |
 | 想了解产品定位与能力边界 | [为什么是 LuaSkills](product/why-luaskills.md) |
 | Skill 作者 | [Lua Skill 开发手册](skill-development.md) |
-| 从 0.4.4 升级到 0.4.5 | [LuaSkills 0.4.5 升级说明](../upgrade-0.4.5.md) |
+| 从 0.4.4 升级到 0.4.6 | [LuaSkills 0.4.6 升级说明](../upgrade-0.4.6.md) |
 | 第一次做 FFI 联调 | [FFI 宿主接入检查清单](ffi/host-checklist.md) |
 | 需要完整 FFI 参数、内存和生命周期规则 | [FFI 对接文档](ffi/integration-guide.md) |
 | 需要参考历史 beta 发布边界 | [FFI Beta 发布说明](ffi/beta-release-notes.md) |
@@ -50,7 +50,7 @@ Skill 作者最应该记住的边界是：skill 应依赖 `vulcan.context.*` 和
 ## 宿主与 FFI 接入
 
 - [FFI Beta 发布说明](ffi/beta-release-notes.md)
-- [LuaSkills 0.4.5 升级说明](../upgrade-0.4.5.md)
+- [LuaSkills 0.4.6 升级说明](../upgrade-0.4.6.md)
 - [FFI 宿主接入检查清单](ffi/host-checklist.md)
 - [FFI 对接文档](ffi/integration-guide.md)
 - [宿主数据库 Provider 对接说明](providers/host-database-provider-guide.md)

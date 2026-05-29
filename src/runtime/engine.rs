@@ -394,7 +394,10 @@ impl NativeLibraryDirectoryCookie {
     }
 }
 
+#[cfg(windows)]
 unsafe impl Send for NativeLibraryDirectoryCookie {}
+
+#[cfg(windows)]
 unsafe impl Sync for NativeLibraryDirectoryCookie {}
 
 #[cfg(windows)]
