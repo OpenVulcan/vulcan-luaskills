@@ -84,7 +84,7 @@ param(
 \$RuntimeRoot = Join-Path \$PackageRoot "runtime"
 
 New-Item -ItemType Directory -Force -Path \$RuntimeRoot | Out-Null
-powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$PackageRoot "scripts\\fetch_runtime_deps.ps1") -Target \$Target -Database \$Database -RuntimeRoot \$RuntimeRoot -LuaSkillsVersion "$RELEASE_TAG" -LuaPackagesOnly -SkipLuaSkillsFfi -SkipLuaRuntimeLibs
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$PackageRoot "scripts\\fetch_runtime_deps.ps1") -Target \$Target -Database \$Database -RuntimeRoot \$RuntimeRoot -LuaSkillsVersion "$RELEASE_TAG" -SkipLuaSkillsFfi -SkipLuaRuntimeLibs
 \$FetchExitCode = \$LASTEXITCODE
 if (\$FetchExitCode -ne 0) {
     exit \$FetchExitCode
@@ -228,7 +228,7 @@ DATABASE="\${2:-none}"
 RUNTIME_ROOT="\${RUNTIME_ROOT:-\$PACKAGE_ROOT/runtime}"
 
 mkdir -p "\$RUNTIME_ROOT"
-LUA_PACKAGES_ONLY=1 SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="$RELEASE_TAG" RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "\$TARGET" "\$DATABASE"
+SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="$RELEASE_TAG" RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "\$TARGET" "\$DATABASE"
 echo "Debug runtime dependencies are ready under \$RUNTIME_ROOT"
 SH
     chmod +x "$package_root/setup_runtime.sh"
@@ -268,7 +268,7 @@ DATABASE="\${2:-none}"
 RUNTIME_ROOT="\${RUNTIME_ROOT:-\$PACKAGE_ROOT/runtime}"
 
 mkdir -p "\$RUNTIME_ROOT"
-LUA_PACKAGES_ONLY=1 SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="$RELEASE_TAG" RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "\$TARGET" "\$DATABASE"
+SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="$RELEASE_TAG" RUNTIME_ROOT="\$RUNTIME_ROOT" bash "\$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "\$TARGET" "\$DATABASE"
 echo "Debug runtime dependencies are ready under \$RUNTIME_ROOT"
 SH
   chmod +x "$package_root/setup_runtime.sh"
@@ -304,11 +304,14 @@ write_debug_launcher_scripts() {
 param(
     # Debug command forwarded to luaskills-debug.
     # 转发给 luaskills-debug 的调试命令。
-    [ValidateSet("inspect", "list-tools", "call")]
+    [ValidateSet("sync", "inspect", "list-tools", "call")]
     [string]$Command = "inspect",
     # Optional explicit skill package directory.
     # 可选显式 skill 包目录。
     [string]$SkillPath = "",
+    # Optional synchronized skill id used by run-only commands.
+    # 运行命令使用的可选已同步 skill 标识符。
+    [string]$SkillId = "",
     # Tool name used by the call command.
     # call 命令使用的工具名称。
     [string]$Tool = "",
@@ -381,13 +384,21 @@ if (-not (Test-Path -LiteralPath (Join-Path $RuntimeRoot "resources\luaskills-pa
     Write-Warning "Lua runtime packages do not appear to be installed. Run '.\setup_runtime.ps1' first if the skill needs packaged Lua dependencies."
 }
 
-$EffectiveSkillPath = if ([string]::IsNullOrWhiteSpace($SkillPath)) {
+$EffectiveSkillPath = if ([string]::IsNullOrWhiteSpace($SkillPath) -and [string]::IsNullOrWhiteSpace($SkillId)) {
     Resolve-DefaultSkillPath -SkillsRoot $SkillsRoot
-} else {
+} elseif (-not [string]::IsNullOrWhiteSpace($SkillPath)) {
     (Resolve-Path -LiteralPath $SkillPath).Path
+} else {
+    ""
 }
 
-$ForwardedArgs = @($Command, "--runtime-root", $RuntimeRoot, "--skill-path", $EffectiveSkillPath)
+$ForwardedArgs = @($Command, "--runtime-root", $RuntimeRoot)
+if ($EffectiveSkillPath) {
+    $ForwardedArgs += @("--skill-path", $EffectiveSkillPath)
+}
+if ($SkillId) {
+    $ForwardedArgs += @("--skill-id", $SkillId)
+}
 if ($Tool) {
     $ForwardedArgs += @("--tool", $Tool)
 }
@@ -557,12 +568,13 @@ resolve_default_skill_path() {
 }
 
 COMMAND="inspect"
-if [ "${1:-}" = "inspect" ] || [ "${1:-}" = "list-tools" ] || [ "${1:-}" = "call" ]; then
+if [ "${1:-}" = "sync" ] || [ "${1:-}" = "inspect" ] || [ "${1:-}" = "list-tools" ] || [ "${1:-}" = "call" ]; then
   COMMAND="$1"
   shift
 fi
 
 SKILL_PATH=""
+SKILL_ID=""
 TOOL=""
 ARGS_JSON=""
 ARGS_FILE=""
@@ -573,6 +585,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --skill-path)
       SKILL_PATH="${2:?--skill-path requires a value}"
+      shift 2
+      ;;
+    --skill-id)
+      SKILL_ID="${2:?--skill-id requires a value}"
       shift 2
       ;;
     --tool)
@@ -607,17 +623,23 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -x "$BINARY_PATH" ] || { echo "luaskills-debug executable was not found or is not executable: $BINARY_PATH" >&2; exit 1; }
-if [ ! -d "$RUNTIME_ROOT/lua_packages" ]; then
+if [ ! -f "$RUNTIME_ROOT/resources/luaskills-packages-manifest.json" ]; then
   echo "WARNING: Lua packages do not appear to be installed. Run './setup_runtime.sh' first if the skill needs packaged Lua dependencies." >&2
 fi
 
-if [ -z "$SKILL_PATH" ]; then
+if [ -z "$SKILL_PATH" ] && [ -z "$SKILL_ID" ]; then
   SKILL_PATH="$(resolve_default_skill_path)"
-else
+elif [ -n "$SKILL_PATH" ]; then
   SKILL_PATH="$(cd "$SKILL_PATH" && pwd)"
 fi
 
-FORWARDED_ARGS=("$COMMAND" "--runtime-root" "$RUNTIME_ROOT" "--skill-path" "$SKILL_PATH")
+FORWARDED_ARGS=("$COMMAND" "--runtime-root" "$RUNTIME_ROOT")
+if [ -n "$SKILL_PATH" ]; then
+  FORWARDED_ARGS+=("--skill-path" "$SKILL_PATH")
+fi
+if [ -n "$SKILL_ID" ]; then
+  FORWARDED_ARGS+=("--skill-id" "$SKILL_ID")
+fi
 if [ -n "$TOOL" ]; then
   FORWARDED_ARGS+=("--tool" "$TOOL")
 fi
@@ -674,12 +696,12 @@ write_debug_package_readme() {
     printf -- '- `debug.*`: convenience launcher that auto-detects one skill under `skills/`.\n\n'
     printf '## Quick Start\n\n'
     printf '```%s\n%s\n%s\n%s\n%s\n```\n\n' "$shell_name" "$setup_command" "$inspect_command" "$list_command" "$call_command"
-    printf 'The default setup command fetches the `lua` target, but the debug package stages only `runtime/lua_packages/`. It does not download the LuaSkills FFI SDK, does not copy the runtime package `libs/` directory, and does not install packaged-runtime metadata under `runtime/resources/`.\n\n'
-    printf 'Use `all` only when you also need database helper binaries. Even in that mode, the debug package still keeps lua setup on the lua-packages-only path.\n\n'
+    printf 'The default setup command fetches the `lua` target and stages `runtime/lua_packages/`, `runtime/resources/`, and `runtime/licenses/` metadata. It does not download the LuaSkills FFI SDK and does not copy the runtime package `libs/` directory.\n\n'
+    printf 'Use `all` only when you also need database helper binaries. The Lua setup path stays metadata-complete so packaged-runtime manifest validation remains consistent.\n\n'
     printf '## 中文说明\n\n'
     printf '这个包是独立的 skill 调试工作台。解压后先执行初始化脚本拉取 Lua runtime packages，然后把一个 skill 目录放到 `skills/` 下，就可以通过 `debug` 启动脚本执行 `inspect`、`list-tools` 或 `call`。包内也包含 `luaskills-debug-skill/`，可作为 Codex skill 包装器使用。\n\n'
     printf '```%s\n%s\n%s\n%s\n%s\n```\n\n' "$shell_name" "$setup_command" "$inspect_command" "$list_command" "$call_command"
-    printf '默认初始化只会把 `runtime/lua_packages/` 放进调试工作区，不会额外下载 LuaSkills FFI SDK，也不会复制 runtime package 的 `libs/` 目录，更不会安装 packaged runtime 的 `resources` 元数据。只有需要数据库辅助进程时才建议执行 `all`。\n'
+    printf '默认初始化会把 `runtime/lua_packages/`、`runtime/resources/` 与 `runtime/licenses/` 元数据放进调试工作区，不会额外下载 LuaSkills FFI SDK，也不会复制 runtime package 的 `libs/` 目录。只有需要数据库辅助进程时才建议执行 `all`。\n'
   } > "$package_root/README.md"
 }
 

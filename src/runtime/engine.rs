@@ -14,6 +14,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(windows)]
+use windows_sys::Win32::System::LibraryLoader::{
+    AddDllDirectory, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_USER_DIRS,
+    RemoveDllDirectory, SetDefaultDllDirectories,
+};
 
 use crate::dependency::manager::{DependencyManager, DependencyManagerConfig, ensure_directory};
 use crate::entry_descriptor::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
@@ -364,6 +369,128 @@ struct LuaVmPool {
     condvar: Condvar,
 }
 
+/// Process-level native library search guard owned by one runtime engine.
+/// 由单个运行时引擎持有的进程级原生库搜索保护句柄。
+#[derive(Debug, Default)]
+struct NativeLibrarySearchGuard {
+    /// Registered native library directories kept alive for the lifetime of this engine.
+    /// 在该引擎生命周期内保持有效的已注册原生库目录集合。
+    #[cfg(windows)]
+    directories: Vec<NativeLibraryDirectoryCookie>,
+}
+
+/// Windows DLL directory cookie returned by `AddDllDirectory`.
+/// `AddDllDirectory` 返回的 Windows DLL 目录句柄。
+#[cfg(windows)]
+#[derive(Debug)]
+struct NativeLibraryDirectoryCookie(*mut core::ffi::c_void);
+
+#[cfg(windows)]
+impl NativeLibraryDirectoryCookie {
+    /// Return whether the cookie points at one registered DLL directory.
+    /// 返回该句柄是否指向一个已注册的 DLL 目录。
+    fn is_valid(&self) -> bool {
+        !self.0.is_null()
+    }
+}
+
+unsafe impl Send for NativeLibraryDirectoryCookie {}
+unsafe impl Sync for NativeLibraryDirectoryCookie {}
+
+#[cfg(windows)]
+impl Drop for NativeLibrarySearchGuard {
+    /// Drop registered DLL directory cookies before the guard is released.
+    /// 在保护句柄释放前丢弃已注册的 DLL 目录句柄。
+    fn drop(&mut self) {
+        self.directories.clear();
+    }
+}
+
+#[cfg(windows)]
+impl Drop for NativeLibraryDirectoryCookie {
+    /// Remove the registered Windows DLL directory when the owning engine is dropped.
+    /// 当所属引擎释放时移除已注册的 Windows DLL 目录。
+    fn drop(&mut self) {
+        if self.is_valid() {
+            unsafe {
+                RemoveDllDirectory(self.0);
+            }
+        }
+    }
+}
+
+impl NativeLibrarySearchGuard {
+    /// Register the host-provided FFI/native library root for this process.
+    /// 为当前进程注册宿主提供的 FFI/原生库根目录。
+    fn new(host_options: &LuaRuntimeHostOptions) -> Result<Self, String> {
+        #[cfg(windows)]
+        {
+            Self::new_windows(host_options)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = host_options;
+            Ok(Self::default())
+        }
+    }
+
+    /// Register Windows DLL search directories without mutating the global PATH variable.
+    /// 在不修改全局 PATH 变量的前提下注册 Windows DLL 搜索目录。
+    #[cfg(windows)]
+    fn new_windows(host_options: &LuaRuntimeHostOptions) -> Result<Self, String> {
+        let mut directories = Vec::new();
+        let Some(host_provided_ffi_root) = host_options.host_provided_ffi_root.as_ref() else {
+            return Ok(Self { directories });
+        };
+        if !host_provided_ffi_root.is_dir() {
+            return Ok(Self { directories });
+        }
+
+        // DefaultDllDirectories enables the USER_DIRS search bucket used by AddDllDirectory.
+        // DefaultDllDirectories 启用 AddDllDirectory 所依赖的 USER_DIRS 搜索桶。
+        let default_directory_result = unsafe {
+            SetDefaultDllDirectories(
+                LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS,
+            )
+        };
+        if default_directory_result == 0 {
+            return Err(format!(
+                "failed to enable Windows DLL directory search for host_provided_ffi_root: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let wide_path = windows_wide_null_path(host_provided_ffi_root)?;
+        let cookie = NativeLibraryDirectoryCookie(unsafe { AddDllDirectory(wide_path.as_ptr()) });
+        if !cookie.is_valid() {
+            return Err(format!(
+                "failed to add Windows DLL directory {}: {}",
+                host_provided_ffi_root.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        directories.push(cookie);
+        Ok(Self { directories })
+    }
+}
+
+/// Convert one Windows filesystem path into a null-terminated wide string.
+/// 将单个 Windows 文件系统路径转换为以空字符结尾的宽字符串。
+#[cfg(windows)]
+fn windows_wide_null_path(path: &Path) -> Result<Vec<u16>, String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut wide_path = path.as_os_str().encode_wide().collect::<Vec<u16>>();
+    if wide_path.iter().any(|value| *value == 0) {
+        return Err(format!(
+            "Windows DLL directory contains an embedded NUL: {}",
+            path.display()
+        ));
+    }
+    wide_path.push(0);
+    Ok(wide_path)
+}
+
 // ============================================================
 // LuaEngine — LuaJIT VM wrapper
 // ============================================================
@@ -379,6 +506,7 @@ pub struct LuaEngine {
     lancedb_host: Option<Arc<LanceDbSkillHost>>,
     sqlite_host: Option<Arc<SqliteSkillHost>>,
     database_provider_callbacks: Arc<RuntimeDatabaseProviderCallbacks>,
+    native_library_search_guard: NativeLibrarySearchGuard,
     host_options: Arc<LuaRuntimeHostOptions>,
 }
 
@@ -2033,6 +2161,8 @@ impl LuaEngine {
                 .clone()
                 .unwrap_or_else(ToolCacheConfig::default),
         );
+        let native_library_search_guard =
+            NativeLibrarySearchGuard::new(&options.host_options).map_err(std::io::Error::other)?;
         let database_provider_callbacks = Arc::new(
             RuntimeDatabaseProviderCallbacks::capture_process_defaults()
                 .map_err(std::io::Error::other)?,
@@ -2051,6 +2181,7 @@ impl LuaEngine {
             lancedb_host: None,
             sqlite_host: None,
             database_provider_callbacks,
+            native_library_search_guard,
             host_options: Arc::new(options.host_options),
         })
     }
@@ -2163,6 +2294,8 @@ impl LuaEngine {
             lancedb_host: None,
             sqlite_host: None,
             database_provider_callbacks: self.database_provider_callbacks.clone(),
+            native_library_search_guard: NativeLibrarySearchGuard::new(&self.host_options)
+                .map_err(std::io::Error::other)?,
             host_options: self.host_options.clone(),
         })
     }
@@ -2180,6 +2313,7 @@ impl LuaEngine {
         self.lancedb_host = next.lancedb_host;
         self.sqlite_host = next.sqlite_host;
         self.database_provider_callbacks = next.database_provider_callbacks;
+        self.native_library_search_guard = next.native_library_search_guard;
         self.host_options = next.host_options;
     }
 
@@ -5595,38 +5729,73 @@ impl LuaEngine {
             return Ok(());
         }
 
+        let host_provided_ffi_root = host_options
+            .host_provided_ffi_root
+            .as_ref()
+            .filter(|root| root.exists());
+
         // Build package.cpath entries for C modules (.dll on Windows)
-        // 统一使用宿主提供的 lua_packages/lib/lua 目录，不再自行推导可执行文件相对路径。
+        // 统一使用宿主提供的 lua_packages/lib/lua 目录，并补充宿主提供的 FFI/原生库根目录。
         #[cfg(windows)]
-        let cpath_pattern = format!(
-            "{}\\lib\\lua\\?.dll;{}\\lib\\lua\\?\\init.dll;{}\\lib\\lua\\loadall.dll;{}\\?\\?.dll;",
-            lua_packages.display(),
-            lua_packages.display(),
-            lua_packages.display(),
-            lua_packages.display()
-        );
+        let cpath_pattern = {
+            let mut pattern = format!(
+                "{}\\lib\\lua\\?.dll;{}\\lib\\lua\\?\\init.dll;{}\\lib\\lua\\loadall.dll;{}\\?\\?.dll;",
+                lua_packages.display(),
+                lua_packages.display(),
+                lua_packages.display(),
+                lua_packages.display()
+            );
+            if let Some(root) = host_provided_ffi_root {
+                pattern.push_str(&format!(
+                    "{}\\?.dll;{}\\?\\init.dll;",
+                    root.display(),
+                    root.display()
+                ));
+            }
+            pattern
+        };
 
         // Build package.cpath entries for C modules (.so on Linux)
-        // Linux 下同样严格依赖宿主传入的 lua_packages 根目录。
+        // Linux 下同样严格依赖宿主传入的 lua_packages 根目录，并补充宿主提供的 FFI/原生库根目录。
         #[cfg(target_os = "linux")]
-        let cpath_pattern = format!(
-            "{}/lib/lua/?.so;{}/lib/lua/?/init.so;{}/lib/lua/loadall.so;{}/?.so;",
-            lua_packages.display(),
-            lua_packages.display(),
-            lua_packages.display(),
-            lua_packages.display()
-        );
+        let cpath_pattern = {
+            let mut pattern = format!(
+                "{}/lib/lua/?.so;{}/lib/lua/?/init.so;{}/lib/lua/loadall.so;{}/?.so;",
+                lua_packages.display(),
+                lua_packages.display(),
+                lua_packages.display(),
+                lua_packages.display()
+            );
+            if let Some(root) = host_provided_ffi_root {
+                pattern.push_str(&format!(
+                    "{}/?.so;{}/?/init.so;",
+                    root.display(),
+                    root.display()
+                ));
+            }
+            pattern
+        };
 
         // Build package.cpath entries for C modules (.dylib on macOS)
-        // macOS 下同样严格依赖宿主传入的 lua_packages 根目录。
+        // macOS 下同样严格依赖宿主传入的 lua_packages 根目录，并补充宿主提供的 FFI/原生库根目录。
         #[cfg(target_os = "macos")]
-        let cpath_pattern = format!(
-            "{}/lib/lua/?.dylib;{}/lib/lua/?/init.dylib;{}/lib/lua/loadall.dylib;{}/?.dylib;",
-            lua_packages.display(),
-            lua_packages.display(),
-            lua_packages.display(),
-            lua_packages.display()
-        );
+        let cpath_pattern = {
+            let mut pattern = format!(
+                "{}/lib/lua/?.dylib;{}/lib/lua/?/init.dylib;{}/lib/lua/loadall.dylib;{}/?.dylib;",
+                lua_packages.display(),
+                lua_packages.display(),
+                lua_packages.display(),
+                lua_packages.display()
+            );
+            if let Some(root) = host_provided_ffi_root {
+                pattern.push_str(&format!(
+                    "{}/?.dylib;{}/?/init.dylib;",
+                    root.display(),
+                    root.display()
+                ));
+            }
+            pattern
+        };
 
         // Build package.path entries for Lua modules
         // 统一使用宿主提供的 lua_packages/share/lua 目录。

@@ -73,7 +73,6 @@ typedef struct FfiLuaRuntimeHostOptions {
     const char *host_provided_tool_root;
     const char *host_provided_lua_root;
     const char *host_provided_ffi_root;
-    /*
     Optional fixed host-owned `system_lua_lib` directory path.
     可选固定宿主自有 `system_lua_lib` 目录路径。
     */

@@ -3,11 +3,12 @@ use super::lease::RuntimeSessionManager;
 use super::runlua::{ExecShellLauncher, runlua_cwd_guard};
 use super::{
     LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState, LuaVmRequestScopeGuard,
-    SkillConfigStore, VulcanInternalExecutionContext, default_runlua_vm_pool_config,
-    get_vulcan_context_table, get_vulcan_deps_table, get_vulcan_runtime_internal_table,
-    get_vulcan_table, json_to_lua_table, normalize_host_visible_path_text,
-    populate_vulcan_dependency_context, populate_vulcan_file_context,
-    populate_vulcan_internal_execution_context, render_host_visible_path,
+    NativeLibrarySearchGuard, SkillConfigStore, VulcanInternalExecutionContext,
+    default_runlua_vm_pool_config, get_vulcan_context_table, get_vulcan_deps_table,
+    get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
+    normalize_host_visible_path_text, populate_vulcan_dependency_context,
+    populate_vulcan_file_context, populate_vulcan_internal_execution_context,
+    render_host_visible_path,
 };
 use crate::host::callbacks::runtime_model_callback_test_guard;
 use crate::host::database::RuntimeDatabaseProviderCallbacks;
@@ -263,6 +264,7 @@ fn make_test_engine(skills: HashMap<String, LoadedSkill>) -> LuaEngine {
         lancedb_host: None,
         sqlite_host: None,
         database_provider_callbacks: Arc::new(RuntimeDatabaseProviderCallbacks::default()),
+        native_library_search_guard: NativeLibrarySearchGuard::default(),
         host_options: Arc::new(LuaRuntimeHostOptions::default()),
     }
 }

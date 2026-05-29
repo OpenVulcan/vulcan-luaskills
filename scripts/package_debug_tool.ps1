@@ -188,7 +188,7 @@ $PackageRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $RuntimeRoot = Join-Path $PackageRoot "runtime"
 
 New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
-powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1") -Target $Target -Database $Database -RuntimeRoot $RuntimeRoot -LuaSkillsVersion "__LUASKILLS_RELEASE_TAG__" -LuaPackagesOnly -SkipLuaSkillsFfi -SkipLuaRuntimeLibs
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PackageRoot "scripts\fetch_runtime_deps.ps1") -Target $Target -Database $Database -RuntimeRoot $RuntimeRoot -LuaSkillsVersion "__LUASKILLS_RELEASE_TAG__" -SkipLuaSkillsFfi -SkipLuaRuntimeLibs
 $FetchExitCode = $LASTEXITCODE
 if ($FetchExitCode -ne 0) {
     exit $FetchExitCode
@@ -333,7 +333,7 @@ DATABASE="${2:-none}"
 RUNTIME_ROOT="${RUNTIME_ROOT:-$PACKAGE_ROOT/runtime}"
 
 mkdir -p "$RUNTIME_ROOT"
-LUA_PACKAGES_ONLY=1 SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="__LUASKILLS_RELEASE_TAG__" RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET" "$DATABASE"
+SKIP_LUASKILLS_FFI=1 SKIP_LUA_RUNTIME_LIBS=1 LUASKILLS_VERSION="__LUASKILLS_RELEASE_TAG__" RUNTIME_ROOT="$RUNTIME_ROOT" bash "$PACKAGE_ROOT/scripts/fetch_runtime_deps.sh" "$TARGET" "$DATABASE"
 echo "Debug runtime dependencies are ready under $RUNTIME_ROOT"
 '@
         $SetupShellWrapper = $SetupShellWrapper.Replace("__LUASKILLS_RELEASE_TAG__", $ReleaseTag)
@@ -424,10 +424,12 @@ function Write-DebugLauncherScripts {
         $LauncherScript = @'
 param(
     # Debug command forwarded to luaskills-debug.
-    [ValidateSet("inspect", "list-tools", "call")]
+    [ValidateSet("sync", "inspect", "list-tools", "call")]
     [string]$Command = "inspect",
     # Optional explicit skill package directory.
     [string]$SkillPath = "",
+    # Optional synchronized skill id used by run-only commands.
+    [string]$SkillId = "",
     # Tool name used by the call command.
     [string]$Tool = "",
     # Inline JSON payload used by the call command.
@@ -516,22 +518,30 @@ $BinaryPath = Join-Path $PackageRoot "bin\luaskills-debug.exe"
 if (-not (Test-Path -LiteralPath $BinaryPath)) {
     throw "luaskills-debug executable was not found: $BinaryPath"
 }
-if (-not (Test-Path -LiteralPath (Join-Path $RuntimeRoot "lua_packages"))) {
+if (-not (Test-Path -LiteralPath (Join-Path $RuntimeRoot "resources\luaskills-packages-manifest.json"))) {
     Write-Warning "Lua packages do not appear to be installed. Run '.\setup_runtime.ps1' first if the skill needs packaged Lua dependencies."
 }
 
-$EffectiveSkillPath = if ([string]::IsNullOrWhiteSpace($SkillPath)) {
+$EffectiveSkillPath = if ([string]::IsNullOrWhiteSpace($SkillPath) -and [string]::IsNullOrWhiteSpace($SkillId)) {
     try {
         Resolve-DefaultSkillPath -SkillsRoot $SkillsRoot
     } catch {
         Show-DebugSkillGuidance -SkillsRoot $SkillsRoot -Reason $_.Exception.Message
         exit 2
     }
-} else {
+} elseif (-not [string]::IsNullOrWhiteSpace($SkillPath)) {
     (Resolve-Path -LiteralPath $SkillPath).Path
+} else {
+    ""
 }
 
-$ForwardedArgs = @($Command, "--runtime-root", $RuntimeRoot, "--skill-path", $EffectiveSkillPath)
+$ForwardedArgs = @($Command, "--runtime-root", $RuntimeRoot)
+if ($EffectiveSkillPath) {
+    $ForwardedArgs += @("--skill-path", $EffectiveSkillPath)
+}
+if ($SkillId) {
+    $ForwardedArgs += @("--skill-id", $SkillId)
+}
 if ($Tool) {
     $ForwardedArgs += @("--tool", $Tool)
 }
@@ -629,7 +639,7 @@ DEBUG_PS1_WIN="$(to_windows_path "$PACKAGE_ROOT/debug.ps1")"
 POWERSHELL_HOST="$(resolve_powershell_host)"
 FORWARDED_ARGS=()
 
-if [ "${1:-}" = "inspect" ] || [ "${1:-}" = "list-tools" ] || [ "${1:-}" = "call" ]; then
+if [ "${1:-}" = "sync" ] || [ "${1:-}" = "inspect" ] || [ "${1:-}" = "list-tools" ] || [ "${1:-}" = "call" ]; then
   FORWARDED_ARGS+=("-Command" "$1")
   shift
 fi
@@ -638,6 +648,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     -SkillPath|--skill-path)
       FORWARDED_ARGS+=("-SkillPath" "$(to_windows_path "${2:?--skill-path requires a value}")")
+      shift 2
+      ;;
+    -SkillId|--skill-id)
+      FORWARDED_ARGS+=("-SkillId" "${2:?--skill-id requires a value}")
       shift 2
       ;;
     -ArgsFile|--args-file)
@@ -859,9 +873,9 @@ function Write-DebugPackageReadme {
         $CallCommand,
         $FenceEnd,
         '',
-        'The default setup command fetches the lua target, but the debug package stages only runtime/lua_packages/. It does not download the LuaSkills FFI SDK, does not copy the runtime package libs/ directory, and does not install packaged-runtime metadata under runtime/resources/.',
+        'The default setup command fetches the lua target and stages runtime/lua_packages/, runtime/resources/, and runtime/licenses/ metadata. It does not download the LuaSkills FFI SDK and does not copy the runtime package libs/ directory.',
         '',
-        'Use all only when you also need database helper binaries. Even in that mode, the debug package still keeps lua setup on the lua_packages-only path.',
+        'Use all only when you also need database helper binaries. The Lua setup path stays metadata-complete so packaged-runtime manifest validation remains consistent.',
         '',
         'The package also includes luaskills-debug-skill/ as a Codex skill wrapper. It detects the packaged bin/luaskills-debug executable and uses the package-local runtime/ directory by default.'
     )

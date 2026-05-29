@@ -62,13 +62,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "command",
-        choices=("inspect", "list-tools", "call"),
+        choices=("sync", "inspect", "list-tools", "call"),
         help="Debug command to forward to luaskills-debug.",
     )
     parser.add_argument(
         "--skill-path",
-        required=True,
         help="Source LuaSkills package directory that contains skill.yaml.",
+    )
+    parser.add_argument(
+        "--skill-id",
+        help="Previously synchronized LuaSkills skill id under runtime_root/skills.",
     )
     parser.add_argument(
         "--runtime-root",
@@ -105,6 +108,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     # Parse the arguments before applying command-specific validation.
     # 在应用命令专属校验之前，先完成基础参数解析。
     args = parser.parse_args(argv)
+    if args.skill_path and args.skill_id:
+        parser.error("--skill-path and --skill-id are mutually exclusive")
+    if args.command == "sync" and not args.skill_path:
+        parser.error("--skill-path is required for the sync command")
+    if args.command != "sync" and not args.skill_path and not args.skill_id:
+        parser.error("--skill-path or --skill-id is required")
     if args.command == "call" and not args.tool:
         parser.error("--tool is required for the call command")
     if args.args_json and args.args_file:
@@ -125,7 +134,7 @@ def resolve_path(raw_path: str) -> Path:
     return (Path.cwd() / candidate_path).resolve()
 
 
-def compute_default_runtime_root(skill_path: Path) -> Path:
+def compute_default_runtime_root(skill_key: str) -> Path:
     """Compute the default runtime_root used by this wrapper.
     计算本包装脚本使用的默认 runtime_root。
     """
@@ -134,7 +143,7 @@ def compute_default_runtime_root(skill_path: Path) -> Path:
     # 以物理 skill 目录名为单位复用稳定的输出子目录。
     if is_standalone_debug_package(DEBUG_WORKSPACE_ROOT):
         return DEBUG_WORKSPACE_ROOT / "runtime"
-    return DEBUG_WORKSPACE_ROOT / "output" / "luaskills-debug-runtime" / skill_path.name
+    return DEBUG_WORKSPACE_ROOT / "output" / "luaskills-debug-runtime" / skill_key
 
 
 def ensure_binary(rebuild: bool) -> Path:
@@ -189,17 +198,22 @@ def build_forwarded_command(args: argparse.Namespace, binary_path: Path) -> list
     构建本包装脚本转发给 luaskills-debug 的精确进程命令。
     """
 
-    # Resolve and validate the source skill directory first.
-    # 先解析并校验源 skill 目录。
-    skill_path = resolve_path(args.skill_path)
-    validate_skill_path(skill_path)
+    # Resolve and validate the optional source skill directory before forwarding it.
+    # 在转发可选源 skill 目录前先解析并校验它。
+    skill_path = resolve_path(args.skill_path) if args.skill_path else None
+    if skill_path is not None:
+        validate_skill_path(skill_path)
+
+    # SkillKey chooses the stable default runtime directory for repository-side runs.
+    # SkillKey 为仓库侧运行选择稳定的默认运行时目录。
+    skill_key = skill_path.name if skill_path is not None else args.skill_id
 
     # Resolve the runtime root, or create a stable default under the repository output directory.
     # 解析 runtime root，或在仓库 output 目录下创建稳定默认值。
     runtime_root = (
         resolve_path(args.runtime_root)
         if args.runtime_root
-        else compute_default_runtime_root(skill_path)
+        else compute_default_runtime_root(skill_key)
     )
 
     # Start from the fixed command prefix shared by all subcommands.
@@ -209,9 +223,11 @@ def build_forwarded_command(args: argparse.Namespace, binary_path: Path) -> list
         args.command,
         "--runtime-root",
         str(runtime_root),
-        "--skill-path",
-        str(skill_path),
     ]
+    if skill_path is not None:
+        forwarded_command.extend(["--skill-path", str(skill_path)])
+    if args.skill_id:
+        forwarded_command.extend(["--skill-id", args.skill_id])
 
     # Append command-specific invocation data only when it is relevant.
     # 仅在相关时追加命令专属的调用数据。

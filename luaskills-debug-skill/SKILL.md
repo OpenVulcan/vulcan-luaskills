@@ -14,9 +14,9 @@ Run the wrapper script instead of typing the full binary command by hand.
 优先运行包装脚本，不要手写完整的二进制调试命令。
 
 ```powershell
-python luaskills-debug-skill/scripts/run_debug.py inspect --skill-path D:\path\to\skill
-python luaskills-debug-skill/scripts/run_debug.py list-tools --skill-path D:\path\to\skill --output content
-python luaskills-debug-skill/scripts/run_debug.py call --skill-path D:\path\to\skill --tool ping --args-json "{\"note\":\"hello\"}" --output json
+python luaskills-debug-skill/scripts/run_debug.py sync --skill-path D:\path\to\skill
+python luaskills-debug-skill/scripts/run_debug.py list-tools --skill-id your-skill --output content
+python luaskills-debug-skill/scripts/run_debug.py call --skill-id your-skill --tool ping --args-json "{\"note\":\"hello\"}" --output json
 ```
 
 In a source checkout, the wrapper defaults `runtime_root` to `output/luaskills-debug-runtime/<skill_id>`. In a standalone debug-tool package, it defaults to the package-local `runtime/` directory.
@@ -24,23 +24,29 @@ In a source checkout, the wrapper defaults `runtime_root` to `output/luaskills-d
 
 ## Workflow
 
-Start with `inspect`.
-先从 `inspect` 开始。
+Start with `sync`.
+先从 `sync` 开始。
 
-- Use `inspect` to confirm the physical skill directory, effective `skill_id`, synchronized target path, and loaded entries.
-- 用 `inspect` 确认物理 skill 目录、生效 `skill_id`、同步后的目标路径和已加载入口。
+- Use `sync` to copy the physical source skill into `runtime_root/skills/<skill_id>` once.
+- 用 `sync` 将物理源 skill 复制到 `runtime_root/skills/<skill_id>`，只做一次同步。
+
+Then run `inspect`.
+然后运行 `inspect`。
+
+- Use `inspect --skill-id <id>` to confirm the effective `skill_id`, synchronized target path, and loaded entries without rewriting the skill directory.
+- 使用 `inspect --skill-id <id>` 确认生效 `skill_id`、同步后的目标路径和已加载入口，不再重写 skill 目录。
 
 Then run `list-tools`.
 然后运行 `list-tools`。
 
-- Use `list-tools` to see local tool names and canonical tool names before calling anything.
-- 用 `list-tools` 在真正调用之前查看 local tool name 和 canonical tool name。
+- Use `list-tools --skill-id <id>` to see local tool names and canonical tool names before calling anything.
+- 使用 `list-tools --skill-id <id>` 在真正调用之前查看 local tool name 和 canonical tool name。
 
 Finally run `call`.
 最后运行 `call`。
 
-- Use `call` with `--output json` when you need full `content / overflow_mode / template_hint / host_result`.
-- 当你需要完整的 `content / overflow_mode / template_hint / host_result` 时，用 `call --output json`。
+- Use `call --skill-id <id>` with `--output json` when you need full `content / overflow_mode / template_hint / host_result`.
+- 当你需要完整的 `content / overflow_mode / template_hint / host_result` 时，用 `call --skill-id <id> --output json`。
 - Use `call --output content` only when you only care about the primary text result.
 - 只有在你只关心主文本结果时，才使用 `call --output content`。
 
@@ -51,14 +57,14 @@ Pass the source package directory to `--skill-path`.
 
 - Point `--skill-path` at the actual skill package directory that contains `skill.yaml`.
 - `--skill-path` 必须指向真实 skill 包目录，也就是里面直接包含 `skill.yaml` 的目录。
-- Do not point `--skill-path` at `runtime_root/skills/...` unless that is the source package you really want to debug.
-- 不要把 `--skill-path` 指到 `runtime_root/skills/...`，除非那就是你真正要调试的源 skill 包。
+- Prefer `--skill-path` only for `sync`; use `--skill-id` for repeated `inspect`, `list-tools`, and `call`.
+- 优先只在 `sync` 时使用 `--skill-path`；重复执行 `inspect`、`list-tools` 和 `call` 时使用 `--skill-id`。
 
 Keep `runtime_root` real.
 保持 `runtime_root` 的真实语义。
 
-- This skill reuses the real `luaskills-debug` bin, which first syncs the target skill into `runtime_root/skills/<skill_id>` and then runs the normal `load_from_roots -> call_skill` path.
-- 这个 skill 复用了真实的 `luaskills-debug` bin，它会先把目标 skill 同步到 `runtime_root/skills/<skill_id>`，再走正式的 `load_from_roots -> call_skill` 链路。
+- This skill reuses the real `luaskills-debug` bin. `sync` writes `runtime_root/skills/<skill_id>`, while `inspect`, `list-tools`, and `call` can run read-only against `--skill-id`.
+- 这个 skill 复用了真实的 `luaskills-debug` bin。`sync` 会写入 `runtime_root/skills/<skill_id>`，而 `inspect`、`list-tools` 和 `call` 可以基于 `--skill-id` 只读运行。
 - Use an explicit `--runtime-root` when you need a fixed state/database/dependency layout across repeated runs.
 - 如果你需要在多次调试之间固定 state/database/dependency 目录布局，请显式传入 `--runtime-root`。
 
@@ -70,13 +76,13 @@ Use `--enable-host-result` only when needed.
 - Leave it off for ordinary content-only calls.
 - 普通纯文本调用时保持关闭即可。
 
-Avoid parallel runs against the same default runtime root.
-避免针对同一个默认 runtime root 并发运行。
+Avoid parallel syncs against the same runtime root.
+避免针对同一个 runtime root 并发同步。
 
-- Do not run `inspect`, `list-tools`, and `call` in parallel against the same skill when they share the same default `runtime_root`.
-- 当 `inspect`、`list-tools` 和 `call` 共享同一个默认 `runtime_root` 时，不要并发执行它们。
-- Run them serially, or pass different explicit `--runtime-root` values when you need isolated parallel checks.
-- 请串行执行，或者在需要隔离的并发检查时传入不同的显式 `--runtime-root`。
+- Run `sync` serially for one `(runtime_root, skill_id)` pair, then run parallel `inspect`, `list-tools`, or `call` commands with `--skill-id`.
+- 对同一个 `(runtime_root, skill_id)` 先串行执行 `sync`，之后再用 `--skill-id` 并发执行 `inspect`、`list-tools` 或 `call`。
+- Use different explicit `--runtime-root` values when you need isolated parallel syncs.
+- 需要隔离并发同步时，传入不同的显式 `--runtime-root`。
 
 ## Script
 
@@ -87,8 +93,8 @@ Use `scripts/run_debug.py` as the primary entrypoint.
 - 在源码仓库中，当本地调试二进制缺失时，脚本会自动执行 `cargo build --bin luaskills-debug` 进行构建。
 - In a standalone debug-tool package, the script uses the packaged `bin/luaskills-debug` executable and does not require Cargo.
 - 在独立 debug-tool 包中，脚本会使用包内 `bin/luaskills-debug` 可执行文件，不要求存在 Cargo。
-- The script forwards `inspect`, `list-tools`, and `call` to the real bin without introducing any SDK or FFI layer.
-- 这个脚本会把 `inspect`、`list-tools` 和 `call` 原样转发给真实 bin，不会额外引入 SDK 或 FFI 层。
+- The script forwards `sync`, `inspect`, `list-tools`, and `call` to the real bin without introducing any SDK or FFI layer.
+- 这个脚本会把 `sync`、`inspect`、`list-tools` 和 `call` 原样转发给真实 bin，不会额外引入 SDK 或 FFI 层。
 - Add `--rebuild` when you know the debug bin source changed and you want a fresh build first.
 - 当你知道调试 bin 源码已经变更并希望先重新构建时，追加 `--rebuild`。
 
@@ -97,12 +103,14 @@ Use `scripts/run_debug.py` as the primary entrypoint.
 Choose the command by the debugging goal.
 根据调试目标选择命令。
 
-- Need package identity, loaded entries, or synchronized path: use `inspect`.
-- 需要看包身份、已加载入口或同步路径：用 `inspect`。
-- Need local/canonical tool names: use `list-tools`.
-- 需要看 local/canonical tool name：用 `list-tools`。
-- Need actual execution output: use `call`.
-- 需要看真实执行结果：用 `call`。
+- Need to refresh the runtime copy from source: use `sync --skill-path <dir>`.
+- 需要从源目录刷新运行时副本：用 `sync --skill-path <dir>`。
+- Need package identity, loaded entries, or synchronized path after sync: use `inspect --skill-id <id>`.
+- 同步后需要看包身份、已加载入口或同步路径：用 `inspect --skill-id <id>`。
+- Need local/canonical tool names: use `list-tools --skill-id <id>`.
+- 需要看 local/canonical tool name：用 `list-tools --skill-id <id>`。
+- Need actual execution output: use `call --skill-id <id>`.
+- 需要看真实执行结果：用 `call --skill-id <id>`。
 
 If a call fails, rerun with `--output json`.
 如果调用失败，优先用 `--output json` 重新执行一次。

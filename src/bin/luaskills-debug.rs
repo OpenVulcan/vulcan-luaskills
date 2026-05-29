@@ -15,20 +15,29 @@ use std::path::{Path, PathBuf};
 const DEBUG_USAGE: &str = r#"luaskills-debug
 
 Usage:
+  luaskills-debug sync --runtime-root <dir> --skill-path <dir> [--output pretty|json]
   luaskills-debug inspect --runtime-root <dir> --skill-path <dir> [--output pretty|json]
+  luaskills-debug inspect --runtime-root <dir> --skill-id <id> [--output pretty|json]
   luaskills-debug list-tools --runtime-root <dir> --skill-path <dir> [--output pretty|json|content]
+  luaskills-debug list-tools --runtime-root <dir> --skill-id <id> [--output pretty|json|content]
   luaskills-debug call --runtime-root <dir> --skill-path <dir> --tool <name> [--args-json <json> | --args-file <path>] [--enable-host-result] [--output pretty|json|content]
+  luaskills-debug call --runtime-root <dir> --skill-id <id> --tool <name> [--args-json <json> | --args-file <path>] [--enable-host-result] [--output pretty|json|content]
 
 Examples:
+  luaskills-debug sync --runtime-root D:\runtime --skill-path D:\skills\vulcan-file
   luaskills-debug inspect --runtime-root D:\runtime --skill-path D:\skills\vulcan-file
+  luaskills-debug inspect --runtime-root D:\runtime --skill-id vulcan-file
   luaskills-debug list-tools --runtime-root D:\runtime --skill-path D:\skills\vulcan-file --output content
-  luaskills-debug call --runtime-root D:\runtime --skill-path D:\skills\vulcan-file --tool read --args-json "{\"path\":\"D:/demo.txt\"}"
+  luaskills-debug call --runtime-root D:\runtime --skill-id vulcan-file --tool read --args-json "{\"path\":\"D:/demo.txt\"}"
 "#;
 
 /// Supported top-level debug subcommands.
 /// 支持的顶层调试子命令集合。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DebugCommandKind {
+    /// Synchronize one source skill into the debug runtime without loading or calling it.
+    /// 仅将一个源 skill 同步到调试运行时，不执行加载或调用。
+    Sync,
     /// Inspect one skill manifest and its loaded runtime entry mapping.
     /// 检查单个 skill 清单及其加载后的运行时入口映射。
     Inspect,
@@ -45,6 +54,7 @@ impl DebugCommandKind {
     /// 从命令行文本解析单个命令名称。
     fn parse(value: &str) -> Result<Self, String> {
         match value.trim() {
+            "sync" => Ok(Self::Sync),
             "inspect" => Ok(Self::Inspect),
             "list-tools" => Ok(Self::ListTools),
             "call" => Ok(Self::Call),
@@ -93,7 +103,10 @@ struct DebugCliCommand {
     runtime_root: PathBuf,
     /// Source skill package directory supplied by the developer.
     /// 开发者传入的源 skill 包目录。
-    skill_path: PathBuf,
+    skill_path: Option<PathBuf>,
+    /// Effective skill identifier loaded from the runtime root when no source path is supplied.
+    /// 未提供源路径时从运行时根目录加载的生效 skill 标识符。
+    skill_id: Option<String>,
     /// Requested tool name for `call`.
     /// `call` 命令请求的工具名称。
     tool_name: Option<String>,
@@ -128,13 +141,34 @@ struct PreparedDebugRuntime {
     runtime_root: PathBuf,
     /// Absolute original source skill directory.
     /// 原始源 skill 目录的绝对路径。
-    source_skill_path: PathBuf,
+    source_skill_path: Option<PathBuf>,
     /// Absolute synchronized target skill directory under the runtime root.
     /// 运行时根目录下同步后的目标 skill 目录绝对路径。
     synced_skill_path: PathBuf,
     /// All loaded runtime entry descriptors belonging to the target skill.
     /// 属于目标 skill 的全部已加载运行时入口描述。
     entries: Vec<RuntimeEntryDescriptor>,
+}
+
+/// Result of synchronizing one source skill into a debug runtime root.
+/// 将单个源 skill 同步到调试运行时根目录后的结果。
+#[derive(Debug, Serialize)]
+struct DebugSyncOutput {
+    /// Debug command name.
+    /// 调试命令名称。
+    command: &'static str,
+    /// Effective bound skill identifier.
+    /// 绑定后的生效 skill 标识符。
+    skill_id: String,
+    /// Absolute runtime root used by the debug command.
+    /// 调试命令使用的绝对运行时根目录。
+    runtime_root: String,
+    /// Absolute source skill directory path.
+    /// 源 skill 目录绝对路径。
+    source_skill_path: String,
+    /// Absolute synchronized skill directory path under the runtime root.
+    /// runtime_root 下同步后的 skill 目录绝对路径。
+    synced_skill_path: String,
 }
 
 /// Structured inspect output returned by the debug binary.
@@ -161,7 +195,7 @@ struct DebugInspectOutput {
     runtime_root: String,
     /// Absolute source skill directory path.
     /// 源 skill 目录绝对路径。
-    source_skill_path: String,
+    source_skill_path: Option<String>,
     /// Absolute synchronized skill directory path under the runtime root.
     /// runtime_root 下同步后的 skill 目录绝对路径。
     synced_skill_path: String,
@@ -220,6 +254,10 @@ fn run_debug_binary() -> Result<(), String> {
 
     let command = parse_debug_cli(&args)?;
     match command.kind {
+        DebugCommandKind::Sync => {
+            let output = sync_debug_skill(&command)?;
+            render_sync_output(command.output_mode, &output)
+        }
         DebugCommandKind::Inspect => {
             let prepared = prepare_debug_runtime(&command)?;
             let output = build_inspect_output(&prepared);
@@ -268,6 +306,7 @@ fn parse_debug_cli(args: &[String]) -> Result<DebugCliCommand, String> {
 
     let mut runtime_root: Option<PathBuf> = None;
     let mut skill_path: Option<PathBuf> = None;
+    let mut skill_id: Option<String> = None;
     let mut tool_name: Option<String> = None;
     let mut args_json: Option<String> = None;
     let mut args_file: Option<PathBuf> = None;
@@ -283,6 +322,9 @@ fn parse_debug_cli(args: &[String]) -> Result<DebugCliCommand, String> {
             }
             "--skill-path" => {
                 skill_path = Some(PathBuf::from(read_cli_value(args, &mut index, flag)?));
+            }
+            "--skill-id" => {
+                skill_id = Some(read_cli_value(args, &mut index, flag)?.to_string());
             }
             "--tool" => {
                 tool_name = Some(read_cli_value(args, &mut index, flag)?.to_string());
@@ -307,9 +349,20 @@ fn parse_debug_cli(args: &[String]) -> Result<DebugCliCommand, String> {
     }
 
     let runtime_root = runtime_root.ok_or_else(|| "--runtime-root is required".to_string())?;
-    let skill_path = skill_path.ok_or_else(|| "--skill-path is required".to_string())?;
     if args_json.is_some() && args_file.is_some() {
         return Err("--args-json and --args-file are mutually exclusive".to_string());
+    }
+    if skill_path.is_some() && skill_id.is_some() {
+        return Err("--skill-path and --skill-id are mutually exclusive".to_string());
+    }
+    if kind == DebugCommandKind::Sync && skill_path.is_none() {
+        return Err("sync requires --skill-path".to_string());
+    }
+    if kind != DebugCommandKind::Sync && skill_path.is_none() && skill_id.is_none() {
+        return Err(format!("{} requires --skill-id or --skill-path", args[0]));
+    }
+    if let Some(skill_id) = skill_id.as_deref() {
+        validate_luaskills_identifier(skill_id, "skill_id")?;
     }
 
     if kind == DebugCommandKind::Call && tool_name.is_none() {
@@ -320,6 +373,7 @@ fn parse_debug_cli(args: &[String]) -> Result<DebugCliCommand, String> {
         kind,
         runtime_root,
         skill_path,
+        skill_id,
         tool_name,
         args_json,
         args_file,
@@ -341,11 +395,15 @@ fn read_cli_value<'a>(
         .ok_or_else(|| format!("{} requires a value", flag))
 }
 
-/// Prepare the debug runtime by syncing the target skill and loading it through the normal engine path.
-/// 通过同步目标 skill 并走正常引擎路径加载，准备调试运行时。
-fn prepare_debug_runtime(command: &DebugCliCommand) -> Result<PreparedDebugRuntime, String> {
+/// Synchronize the source skill into the debug runtime root and return its stable location.
+/// 将源 skill 同步到调试运行时根目录，并返回其稳定位置。
+fn sync_debug_skill(command: &DebugCliCommand) -> Result<DebugSyncOutput, String> {
     let runtime_root = absolutize_path(&command.runtime_root)?;
-    let source_skill_path = absolutize_path(&command.skill_path)?;
+    let source_skill_path = command
+        .skill_path
+        .as_ref()
+        .ok_or_else(|| "sync requires --skill-path".to_string())
+        .and_then(|path| absolutize_path(path))?;
     let mut manifest = load_bound_skill_manifest(&source_skill_path)?;
     let skill_id = manifest.effective_skill_id().to_string();
 
@@ -353,6 +411,49 @@ fn prepare_debug_runtime(command: &DebugCliCommand) -> Result<PreparedDebugRunti
     let synced_skill_path =
         synchronize_skill_into_runtime_root(&runtime_root, &source_skill_path, &skill_id)?;
     manifest.bind_directory_skill_id(skill_id.clone());
+
+    Ok(DebugSyncOutput {
+        command: "sync",
+        skill_id,
+        runtime_root: runtime_root.display().to_string(),
+        source_skill_path: source_skill_path.display().to_string(),
+        synced_skill_path: synced_skill_path.display().to_string(),
+    })
+}
+
+/// Resolve the debug command target skill and optionally synchronize a source path first.
+/// 解析调试命令的目标 skill，并在提供源路径时先执行同步。
+fn resolve_debug_target(command: &DebugCliCommand) -> Result<(String, Option<PathBuf>), String> {
+    if command.skill_path.is_some() {
+        let sync_output = sync_debug_skill(command)?;
+        return Ok((
+            sync_output.skill_id,
+            Some(PathBuf::from(sync_output.source_skill_path)),
+        ));
+    }
+    let skill_id = command
+        .skill_id
+        .clone()
+        .ok_or_else(|| "debug run requires --skill-id or --skill-path".to_string())?;
+    Ok((skill_id, None))
+}
+
+/// Prepare the debug runtime by loading a previously synchronized skill through the normal engine path.
+/// 通过正式引擎路径加载一个已经同步好的 skill，准备调试运行时。
+fn prepare_debug_runtime(command: &DebugCliCommand) -> Result<PreparedDebugRuntime, String> {
+    let runtime_root = absolutize_path(&command.runtime_root)?;
+    ensure_debug_runtime_layout(&runtime_root)?;
+    let (skill_id, source_skill_path) = resolve_debug_target(command)?;
+    let synced_skill_path = runtime_root.join("skills").join(&skill_id);
+    if !synced_skill_path.join("skill.yaml").exists() {
+        return Err(format!(
+            "Synchronized skill '{}' was not found under '{}'. Run 'luaskills-debug sync --runtime-root {} --skill-path <source-skill>' first.",
+            skill_id,
+            synced_skill_path.display(),
+            runtime_root.display()
+        ));
+    }
+    let manifest = load_bound_skill_manifest(&synced_skill_path)?;
 
     let ignored_skill_ids = collect_ignored_skill_ids(&runtime_root.join("skills"), &skill_id)?;
     let host_options = build_debug_host_options(&runtime_root, ignored_skill_ids);
@@ -759,9 +860,35 @@ fn build_inspect_output(prepared: &PreparedDebugRuntime) -> DebugInspectOutput {
         manifest_version: prepared.manifest.version().to_string(),
         debug: prepared.manifest.debug,
         runtime_root: prepared.runtime_root.display().to_string(),
-        source_skill_path: prepared.source_skill_path.display().to_string(),
+        source_skill_path: prepared
+            .source_skill_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
         synced_skill_path: prepared.synced_skill_path.display().to_string(),
         entries: prepared.entries.clone(),
+    }
+}
+
+/// Render the sync command output in the requested mode.
+/// 按指定模式渲染 sync 命令输出。
+fn render_sync_output(mode: DebugOutputMode, output: &DebugSyncOutput) -> Result<(), String> {
+    match mode {
+        DebugOutputMode::Pretty => {
+            println!("skill_id: {}", output.skill_id);
+            println!("runtime_root: {}", output.runtime_root);
+            println!("source_skill_path: {}", output.source_skill_path);
+            println!("synced_skill_path: {}", output.synced_skill_path);
+            Ok(())
+        }
+        DebugOutputMode::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(output)
+                    .map_err(|error| format!("Failed to serialize sync output: {}", error))?
+            );
+            Ok(())
+        }
+        DebugOutputMode::Content => Err("sync does not support --output content".to_string()),
     }
 }
 
@@ -775,7 +902,9 @@ fn render_inspect_output(mode: DebugOutputMode, output: &DebugInspectOutput) -> 
             println!("manifest_version: {}", output.manifest_version);
             println!("debug: {}", output.debug);
             println!("runtime_root: {}", output.runtime_root);
-            println!("source_skill_path: {}", output.source_skill_path);
+            if let Some(source_skill_path) = &output.source_skill_path {
+                println!("source_skill_path: {}", source_skill_path);
+            }
             println!("synced_skill_path: {}", output.synced_skill_path);
             println!("entries:");
             for entry in &output.entries {
@@ -871,7 +1000,7 @@ fn render_call_output(mode: DebugOutputMode, output: &DebugCallOutput) -> Result
 mod tests {
     use super::{
         DebugCliCommand, DebugCommandKind, DebugOutputMode, load_invocation_args, parse_debug_cli,
-        prepare_debug_runtime, resolve_debug_tool_name,
+        prepare_debug_runtime, resolve_debug_tool_name, sync_debug_skill,
     };
     use luaskills::{LuaInvocationContext, RuntimeEntryDescriptor};
     use std::env;
@@ -919,7 +1048,30 @@ mod tests {
         assert_eq!(command.kind, DebugCommandKind::Call);
         assert_eq!(command.output_mode, DebugOutputMode::Json);
         assert_eq!(command.tool_name.as_deref(), Some("ping"));
+        assert_eq!(
+            command.skill_path.as_deref(),
+            Some(Path::new("D:/skills/demo-skill"))
+        );
         assert!(command.enable_host_result);
+    }
+
+    /// Verify the parser accepts run commands against a previously synchronized skill id.
+    /// 验证解析器接受面向已同步 skill 标识符的运行命令。
+    #[test]
+    fn parse_debug_cli_accepts_run_with_skill_id() {
+        let args = vec![
+            "call".to_string(),
+            "--runtime-root".to_string(),
+            "D:/runtime".to_string(),
+            "--skill-id".to_string(),
+            "demo-skill".to_string(),
+            "--tool".to_string(),
+            "ping".to_string(),
+        ];
+        let command = parse_debug_cli(&args).expect("parse skill-id call command");
+        assert_eq!(command.kind, DebugCommandKind::Call);
+        assert_eq!(command.skill_id.as_deref(), Some("demo-skill"));
+        assert!(command.skill_path.is_none());
     }
 
     /// Verify the parser rejects providing both JSON arg sources at the same time.
@@ -994,7 +1146,8 @@ mod tests {
         let command = DebugCliCommand {
             kind: DebugCommandKind::Call,
             runtime_root: runtime_root.clone(),
-            skill_path,
+            skill_path: Some(skill_path),
+            skill_id: None,
             tool_name: Some("ping".to_string()),
             args_json: Some(r#"{"note":"from-debug-bin"}"#.to_string()),
             args_file: None,
@@ -1015,6 +1168,55 @@ mod tests {
         assert_eq!(resolved_name, "demo-standard-ffi-skill-ping");
         assert_eq!(result.content, "standard-ffi-demo:from-debug-bin");
         assert!(prepared.synced_skill_path.exists());
+
+        remove_temp_directory(&runtime_root);
+    }
+
+    /// Verify a synchronized runtime can be called by skill id without rewriting the skill directory.
+    /// 验证已同步的运行时可以通过 skill id 调用，并且不会重写 skill 目录。
+    #[test]
+    fn prepare_debug_runtime_can_run_pre_synced_skill_by_id() {
+        let runtime_root = make_temp_runtime_root();
+        let skill_path = PathBuf::from(
+            "examples/ffi/standard_runtime/runtime_root/skills/demo-standard-ffi-skill",
+        );
+        let sync_command = DebugCliCommand {
+            kind: DebugCommandKind::Sync,
+            runtime_root: runtime_root.clone(),
+            skill_path: Some(skill_path),
+            skill_id: None,
+            tool_name: None,
+            args_json: None,
+            args_file: None,
+            enable_host_result: false,
+            output_mode: DebugOutputMode::Pretty,
+        };
+        let sync_output = sync_debug_skill(&sync_command).expect("sync should succeed");
+
+        let run_command = DebugCliCommand {
+            kind: DebugCommandKind::Call,
+            runtime_root: runtime_root.clone(),
+            skill_path: None,
+            skill_id: Some(sync_output.skill_id.clone()),
+            tool_name: Some("ping".to_string()),
+            args_json: Some(r#"{"note":"from-synced-runtime"}"#.to_string()),
+            args_file: None,
+            enable_host_result: false,
+            output_mode: DebugOutputMode::Pretty,
+        };
+        let prepared =
+            prepare_debug_runtime(&run_command).expect("pre-synced runtime should prepare");
+        let resolved_name =
+            resolve_debug_tool_name(&prepared.entries, "ping").expect("tool should resolve");
+        let args = load_invocation_args(&run_command).expect("args should parse");
+        let result = prepared
+            .engine
+            .call_skill(&resolved_name, &args, Some(&LuaInvocationContext::empty()))
+            .expect("skill call should succeed");
+
+        assert_eq!(prepared.skill_id, "demo-standard-ffi-skill");
+        assert!(prepared.source_skill_path.is_none());
+        assert_eq!(result.content, "standard-ffi-demo:from-synced-runtime");
 
         remove_temp_directory(&runtime_root);
     }
