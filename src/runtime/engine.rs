@@ -5,13 +5,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, TryLockError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, TryLockError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(windows)]
@@ -1431,6 +1431,14 @@ fn managed_runtime_optional_timeout_ms(
     optional_u64_arg(value, api_name, "timeout_ms")
 }
 
+/// Default maximum number of warm workers kept for one managed runtime pool key.
+/// 单个受管运行时池键默认保留的最大热 worker 数量。
+const MANAGED_RUNTIME_WORKER_POOL_MAX_SIZE: usize = 4;
+
+/// Default idle time before one excess managed runtime worker can be retired.
+/// 多余受管运行时 worker 默认可回收的空闲时间。
+const MANAGED_RUNTIME_WORKER_IDLE_TTL_SECS: u64 = 60;
+
 /// Resolved invocation request for one managed child runtime.
 /// 单个受管子运行时的已解析调用请求。
 struct ManagedRuntimeInvokeRequest {
@@ -1448,45 +1456,444 @@ struct ManagedRuntimeInvokeRequest {
     timeout_ms: Option<u64>,
 }
 
-/// Captured result from one managed child runtime process.
-/// 单个受管子运行时进程的捕获结果。
-struct ManagedRuntimeProcessResult {
-    /// Process exit code, or `None` when the process timed out.
-    /// 进程退出码；超时时为 `None`。
-    status: Option<i32>,
-    /// Captured UTF-8 stdout text.
-    /// 捕获到的 UTF-8 标准输出文本。
-    stdout: String,
-    /// Captured UTF-8 stderr text.
-    /// 捕获到的 UTF-8 标准错误文本。
-    stderr: String,
+/// Stable key that partitions managed runtime workers by kind, environment, and skill.
+/// 按类型、环境和 skill 隔离受管运行时 worker 的稳定键。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ManagedRuntimeWorkerKey {
+    /// Runtime kind name such as `python` or `node`.
+    /// 运行时类型名称，例如 `python` 或 `node`。
+    runtime: String,
+    /// Environment identity hash produced from dependency inputs.
+    /// 基于依赖输入生成的环境身份哈希。
+    env_hash: String,
+    /// Skill directory used to isolate module globals across skills.
+    /// 用于隔离不同 skill 模块全局状态的 skill 目录。
+    skill_dir: PathBuf,
+}
+
+/// Result returned by one managed runtime worker invocation.
+/// 单个受管运行时 worker 调用返回的结果。
+struct ManagedRuntimeWorkerInvokeResult {
+    /// JSON envelope emitted by the worker.
+    /// worker 发出的 JSON 信封。
+    envelope: Value,
     /// Whether the process was killed because it exceeded the timeout.
     /// 进程是否因为超过超时限制而被终止。
     timed_out: bool,
+    /// Whether the worker process was reused from a previous invocation.
+    /// worker 进程是否复用了之前的调用实例。
+    worker_reused: bool,
+    /// Whether the worker should be discarded instead of returned to the pool.
+    /// worker 是否应被丢弃而不是归还给池。
+    discard_worker: bool,
 }
 
-/// Spawn a background reader for one managed child output pipe.
-/// 为一个受管子进程输出管道启动后台读取线程。
-fn spawn_managed_runtime_pipe_reader<R>(mut reader: R) -> thread::JoinHandle<Vec<u8>>
+/// Worker process kept warm for repeated managed runtime invocations.
+/// 为重复受管运行时调用保持热状态的 worker 进程。
+struct ManagedRuntimeWorker {
+    /// Child process backing this worker.
+    /// 支撑当前 worker 的子进程。
+    child: Child,
+    /// Writable stdin pipe used to send line-delimited JSON requests.
+    /// 用于发送按行分隔 JSON 请求的可写标准输入管道。
+    stdin: ChildStdin,
+    /// Receiver for line-delimited stdout envelopes.
+    /// 接收按行分隔 stdout 信封的通道。
+    stdout_rx: mpsc::Receiver<String>,
+    /// Receiver for line-delimited stderr messages.
+    /// 接收按行分隔 stderr 消息的通道。
+    stderr_rx: mpsc::Receiver<String>,
+    /// Background stdout reader handle.
+    /// stdout 后台读取线程句柄。
+    stdout_reader: Option<thread::JoinHandle<()>>,
+    /// Background stderr reader handle.
+    /// stderr 后台读取线程句柄。
+    stderr_reader: Option<thread::JoinHandle<()>>,
+    /// Last time this worker was used.
+    /// 当前 worker 最近一次被使用的时间。
+    last_used_at: Instant,
+    /// Whether this worker was freshly spawned and has not yet served an invocation.
+    /// 当前 worker 是否为新启动且尚未服务过调用。
+    fresh: bool,
+}
+
+/// Mutable bucket for one managed runtime worker pool key.
+/// 单个受管运行时 worker 池键对应的可变桶。
+struct ManagedRuntimeWorkerBucket {
+    /// Available workers that can be reused immediately.
+    /// 可立即复用的空闲 worker。
+    available: Vec<ManagedRuntimeWorker>,
+    /// Total workers currently assigned to this key.
+    /// 当前分配给该键的 worker 总数。
+    total_count: usize,
+}
+
+/// Process-wide managed runtime worker pool.
+/// 进程级受管运行时 worker 池。
+struct ManagedRuntimeWorkerPool {
+    /// Worker buckets partitioned by runtime kind, env hash, and skill directory.
+    /// 按运行时类型、环境哈希和 skill 目录分区的 worker 桶。
+    buckets: HashMap<ManagedRuntimeWorkerKey, ManagedRuntimeWorkerBucket>,
+}
+
+impl ManagedRuntimeWorkerPool {
+    /// Create an empty managed runtime worker pool.
+    /// 创建一个空的受管运行时 worker 池。
+    fn new() -> Self {
+        Self {
+            buckets: HashMap::new(),
+        }
+    }
+
+    /// Reap idle workers beyond the minimum warm count for one key.
+    /// 回收单个键下超过最小保温数量的空闲 worker。
+    fn reap_idle_locked(bucket: &mut ManagedRuntimeWorkerBucket) {
+        let idle_limit = Duration::from_secs(MANAGED_RUNTIME_WORKER_IDLE_TTL_SECS);
+        let now = Instant::now();
+        let mut index = 0usize;
+        while index < bucket.available.len() {
+            let should_remove = now
+                .checked_duration_since(bucket.available[index].last_used_at)
+                .map(|idle| idle >= idle_limit)
+                .unwrap_or(false);
+            if should_remove {
+                bucket.available.swap_remove(index);
+                bucket.total_count = bucket.total_count.saturating_sub(1);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    /// Acquire one worker, returning whether it was reused from the pool.
+    /// 获取一个 worker，并返回它是否来自池复用。
+    fn acquire<F>(
+        &mut self,
+        key: ManagedRuntimeWorkerKey,
+        mut factory: F,
+    ) -> Result<(ManagedRuntimeWorker, bool), String>
+    where
+        F: FnMut() -> Result<ManagedRuntimeWorker, String>,
+    {
+        let bucket = self
+            .buckets
+            .entry(key)
+            .or_insert_with(|| ManagedRuntimeWorkerBucket {
+                available: Vec::new(),
+                total_count: 0,
+            });
+        Self::reap_idle_locked(bucket);
+        if let Some(mut worker) = bucket.available.pop() {
+            worker.last_used_at = Instant::now();
+            return Ok((worker, true));
+        }
+        if bucket.total_count >= MANAGED_RUNTIME_WORKER_POOL_MAX_SIZE {
+            return Err(format!(
+                "managed runtime worker pool is exhausted for this environment; max_size={MANAGED_RUNTIME_WORKER_POOL_MAX_SIZE}"
+            ));
+        }
+        bucket.total_count += 1;
+        match factory() {
+            Ok(mut worker) => {
+                worker.last_used_at = Instant::now();
+                Ok((worker, false))
+            }
+            Err(error) => {
+                bucket.total_count = bucket.total_count.saturating_sub(1);
+                Err(error)
+            }
+        }
+    }
+
+    /// Return one healthy worker back into the pool.
+    /// 将一个健康 worker 归还到池中。
+    fn release(&mut self, key: ManagedRuntimeWorkerKey, mut worker: ManagedRuntimeWorker) {
+        worker.last_used_at = Instant::now();
+        worker.fresh = false;
+        let bucket = self
+            .buckets
+            .entry(key)
+            .or_insert_with(|| ManagedRuntimeWorkerBucket {
+                available: Vec::new(),
+                total_count: 0,
+            });
+        bucket.available.push(worker);
+        Self::reap_idle_locked(bucket);
+    }
+
+    /// Discard one worker slot for a key after the worker exits or becomes invalid.
+    /// 在 worker 退出或失效后丢弃单个键下的 worker 名额。
+    fn discard(&mut self, key: &ManagedRuntimeWorkerKey) {
+        if let Some(bucket) = self.buckets.get_mut(key) {
+            bucket.total_count = bucket.total_count.saturating_sub(1);
+            if bucket.total_count == 0 && bucket.available.is_empty() {
+                self.buckets.remove(key);
+            }
+        }
+    }
+}
+
+impl Drop for ManagedRuntimeWorker {
+    /// Terminate the worker child process when the Rust handle is dropped.
+    /// 当 Rust 句柄释放时终止 worker 子进程。
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(handle) = self.stdout_reader.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.stderr_reader.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Return the process-wide managed runtime worker pool.
+/// 返回进程级受管运行时 worker 池。
+fn managed_runtime_worker_pool() -> &'static Mutex<ManagedRuntimeWorkerPool> {
+    static POOL: OnceLock<Mutex<ManagedRuntimeWorkerPool>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(ManagedRuntimeWorkerPool::new()))
+}
+
+/// Spawn a line reader that forwards every line into a channel.
+/// 启动一个逐行读取器，并将每一行转发到通道。
+fn spawn_managed_runtime_line_reader<R>(
+    reader: R,
+    sender: mpsc::Sender<String>,
+) -> thread::JoinHandle<()>
 where
-    R: Read + Send + 'static,
+    R: std::io::Read + Send + 'static,
 {
     thread::spawn(move || {
-        let mut buffer = Vec::new();
-        let _ = reader.read_to_end(&mut buffer);
-        buffer
+        let reader = BufReader::new(reader);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    if sender.send(line).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
     })
 }
 
-/// Spawn a background writer for one managed child stdin pipe.
-/// 为一个受管子进程标准输入管道启动后台写入线程。
-fn spawn_managed_runtime_stdin_writer<W>(mut writer: W, input: Vec<u8>) -> thread::JoinHandle<()>
-where
-    W: Write + Send + 'static,
-{
-    thread::spawn(move || {
-        let _ = writer.write_all(&input);
-        let _ = writer.flush();
+/// Build one worker pool key for a managed runtime plan and active skill directory.
+/// 基于受管运行时计划与当前 skill 目录构造一个 worker 池键。
+fn managed_runtime_worker_key(
+    plan: &ManagedRuntimeEnvPlan,
+    skill_dir: &Path,
+) -> ManagedRuntimeWorkerKey {
+    ManagedRuntimeWorkerKey {
+        runtime: plan.runtime.as_str().to_string(),
+        env_hash: plan.env_hash.clone(),
+        skill_dir: normalize_runtime_root_path(skill_dir),
+    }
+}
+
+/// Spawn a new managed runtime worker from a prepared command.
+/// 从已准备好的命令启动一个新的受管运行时 worker。
+fn spawn_managed_runtime_worker(command: &mut Command) -> Result<ManagedRuntimeWorker, String> {
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to spawn managed runtime worker: {error}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "managed runtime worker stdin pipe is unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "managed runtime worker stdout pipe is unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "managed runtime worker stderr pipe is unavailable".to_string())?;
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    Ok(ManagedRuntimeWorker {
+        child,
+        stdin,
+        stdout_rx,
+        stderr_rx,
+        stdout_reader: Some(spawn_managed_runtime_line_reader(stdout, stdout_tx)),
+        stderr_reader: Some(spawn_managed_runtime_line_reader(stderr, stderr_tx)),
+        last_used_at: Instant::now(),
+        fresh: true,
+    })
+}
+
+/// Drain any currently buffered stderr lines from one managed runtime worker.
+/// 排空一个受管运行时 worker 当前已缓冲的 stderr 行。
+fn drain_managed_runtime_worker_stderr(worker: &ManagedRuntimeWorker) -> String {
+    let mut lines = Vec::new();
+    while let Ok(line) = worker.stderr_rx.try_recv() {
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
+/// Invoke one already leased managed runtime worker with one JSON request.
+/// 使用一个已租出的受管运行时 worker 发起一次 JSON 请求。
+fn invoke_managed_runtime_worker(
+    mut worker: ManagedRuntimeWorker,
+    payload: &Value,
+    timeout_ms: Option<u64>,
+    worker_reused: bool,
+) -> (ManagedRuntimeWorker, ManagedRuntimeWorkerInvokeResult) {
+    let mut discard_worker = false;
+    let mut timed_out = false;
+    let payload_text = match serde_json::to_string(payload) {
+        Ok(payload_text) => payload_text,
+        Err(error) => {
+            discard_worker = true;
+            let envelope = json!({
+                "ok": false,
+                "value": null,
+                "stdout": "",
+                "stderr": "",
+                "error": format!("failed to serialize managed runtime request: {error}"),
+            });
+            return (
+                worker,
+                ManagedRuntimeWorkerInvokeResult {
+                    envelope,
+                    timed_out,
+                    worker_reused,
+                    discard_worker,
+                },
+            );
+        }
+    };
+    if let Err(error) = writeln!(worker.stdin, "{payload_text}") {
+        discard_worker = true;
+        let envelope = json!({
+            "ok": false,
+            "value": null,
+            "stdout": "",
+            "stderr": drain_managed_runtime_worker_stderr(&worker),
+            "error": format!("failed to write managed runtime worker stdin: {error}"),
+        });
+        return (
+            worker,
+            ManagedRuntimeWorkerInvokeResult {
+                envelope,
+                timed_out,
+                worker_reused,
+                discard_worker,
+            },
+        );
+    }
+    if let Err(error) = worker.stdin.flush() {
+        discard_worker = true;
+        let envelope = json!({
+            "ok": false,
+            "value": null,
+            "stdout": "",
+            "stderr": drain_managed_runtime_worker_stderr(&worker),
+            "error": format!("failed to flush managed runtime worker stdin: {error}"),
+        });
+        return (
+            worker,
+            ManagedRuntimeWorkerInvokeResult {
+                envelope,
+                timed_out,
+                worker_reused,
+                discard_worker,
+            },
+        );
+    }
+    let line_result = match timeout_ms {
+        Some(timeout_ms) => match worker
+            .stdout_rx
+            .recv_timeout(Duration::from_millis(timeout_ms))
+        {
+            Ok(line) => Ok(line),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                timed_out = true;
+                discard_worker = true;
+                let _ = worker.child.kill();
+                Err("managed runtime worker timed out".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                discard_worker = true;
+                Err("managed runtime worker stdout closed".to_string())
+            }
+        },
+        None => match worker.stdout_rx.recv() {
+            Ok(line) => Ok(line),
+            Err(_) => {
+                discard_worker = true;
+                Err("managed runtime worker stdout closed".to_string())
+            }
+        },
+    };
+    let envelope = match line_result {
+        Ok(line) => serde_json::from_str::<Value>(&line).unwrap_or_else(|error| {
+            discard_worker = true;
+            json!({
+                "ok": false,
+                "value": null,
+                "stdout": line,
+                "stderr": drain_managed_runtime_worker_stderr(&worker),
+                "error": format!("managed runtime worker returned invalid JSON envelope: {error}"),
+            })
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "value": null,
+            "stdout": "",
+            "stderr": drain_managed_runtime_worker_stderr(&worker),
+            "error": error,
+        }),
+    };
+    (
+        worker,
+        ManagedRuntimeWorkerInvokeResult {
+            envelope,
+            timed_out,
+            worker_reused,
+            discard_worker,
+        },
+    )
+}
+
+/// Convert one worker invocation result into the Lua-facing result payload.
+/// 将 worker 调用结果转换为面向 Lua 的返回载荷。
+fn managed_runtime_worker_result_to_json(
+    result: ManagedRuntimeWorkerInvokeResult,
+    plan: &ManagedRuntimeEnvPlan,
+) -> Value {
+    let ok = result
+        .envelope
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && !result.timed_out;
+    json!({
+        "ok": ok,
+        "value": result.envelope.get("value").cloned().unwrap_or(Value::Null),
+        "stdout": result
+            .envelope
+            .get("stdout")
+            .cloned()
+            .unwrap_or_else(|| Value::String(String::new())),
+        "stderr": result
+            .envelope
+            .get("stderr")
+            .cloned()
+            .unwrap_or_else(|| Value::String(String::new())),
+        "error": result.envelope.get("error").cloned().unwrap_or(Value::Null),
+        "trace": result.envelope.get("trace").cloned().unwrap_or(Value::Null),
+        "status": if result.timed_out { Value::Null } else { json!(0) },
+        "timed_out": result.timed_out,
+        "worker_reused": result.worker_reused,
+        "env_hash": plan.env_hash,
+        "env_dir": render_host_visible_path(&plan.env_dir),
     })
 }
 
@@ -1558,108 +1965,9 @@ fn managed_runtime_status_from_plan(plan: &ManagedRuntimeEnvPlan) -> Value {
     })
 }
 
-/// Run one child process with JSON stdin and capture UTF-8 stdout/stderr.
-/// 使用 JSON 标准输入运行一个子进程并捕获 UTF-8 标准输出和标准错误。
-fn run_managed_runtime_process(
-    command: &mut Command,
-    stdin_json: &Value,
-    timeout_ms: Option<u64>,
-) -> Result<ManagedRuntimeProcessResult, String> {
-    let payload = serde_json::to_vec(stdin_json)
-        .map_err(|error| format!("failed to serialize managed runtime request: {error}"))?;
-    command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to spawn managed runtime process: {error}"))?;
-    let stdin_handle = child
-        .stdin
-        .take()
-        .map(|stdin| spawn_managed_runtime_stdin_writer(stdin, payload));
-    let stdout_handle = child.stdout.take().map(spawn_managed_runtime_pipe_reader);
-    let stderr_handle = child.stderr.take().map(spawn_managed_runtime_pipe_reader);
-    let timeout = timeout_ms.map(Duration::from_millis);
-    let started = Instant::now();
-    let mut timed_out = false;
-    let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("failed to wait for managed runtime process: {error}"))?
-        {
-            break Some(status);
-        }
-        if timeout.is_some_and(|limit| started.elapsed() >= limit) {
-            timed_out = true;
-            let _ = child.kill();
-            break child.wait().ok();
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    if let Some(handle) = stdin_handle {
-        let _ = handle.join();
-    }
-    let stdout = stdout_handle
-        .map(|handle| handle.join().unwrap_or_default())
-        .unwrap_or_default();
-    let stderr = stderr_handle
-        .map(|handle| handle.join().unwrap_or_default())
-        .unwrap_or_default();
-    Ok(ManagedRuntimeProcessResult {
-        status: if timed_out {
-            None
-        } else {
-            status.and_then(|status| status.code())
-        },
-        stdout: String::from_utf8_lossy(&stdout).to_string(),
-        stderr: String::from_utf8_lossy(&stderr).to_string(),
-        timed_out,
-    })
-}
-
-/// Convert one process and wrapper envelope into the Lua-facing result payload.
-/// 将进程结果与包装器信封转换为面向 Lua 的返回载荷。
-fn managed_runtime_process_result_to_json(
-    process_result: ManagedRuntimeProcessResult,
-    plan: &ManagedRuntimeEnvPlan,
-) -> Value {
-    let parsed = serde_json::from_str::<Value>(&process_result.stdout).ok();
-    let envelope = parsed.unwrap_or_else(|| {
-        json!({
-            "ok": false,
-            "value": null,
-            "stdout": process_result.stdout,
-            "stderr": process_result.stderr,
-            "error": "managed runtime process did not return a JSON envelope",
-        })
-    });
-    let ok = envelope.get("ok").and_then(Value::as_bool).unwrap_or(false)
-        && !process_result.timed_out
-        && process_result.status.unwrap_or(0) == 0;
-    json!({
-        "ok": ok,
-        "value": envelope.get("value").cloned().unwrap_or(Value::Null),
-        "stdout": envelope
-            .get("stdout")
-            .cloned()
-            .unwrap_or_else(|| Value::String(String::new())),
-        "stderr": envelope
-            .get("stderr")
-            .cloned()
-            .unwrap_or_else(|| Value::String(process_result.stderr)),
-        "error": envelope.get("error").cloned().unwrap_or(Value::Null),
-        "trace": envelope.get("trace").cloned().unwrap_or(Value::Null),
-        "status": process_result.status,
-        "timed_out": process_result.timed_out,
-        "worker_reused": false,
-        "env_hash": plan.env_hash,
-        "env_dir": render_host_visible_path(&plan.env_dir),
-    })
-}
-
-/// Return the Python wrapper code that isolates stdout/stderr and emits one JSON envelope.
-/// 返回隔离标准输出/标准错误并发出单个 JSON 信封的 Python 包装代码。
-fn managed_python_wrapper_source() -> &'static str {
+/// Return the Python worker code that isolates stdout/stderr and emits line-delimited JSON envelopes.
+/// 返回隔离标准输出/标准错误并发出按行分隔 JSON 信封的 Python worker 代码。
+fn managed_python_worker_source() -> &'static str {
     r#"
 import contextlib
 import importlib.util
@@ -1668,57 +1976,75 @@ import json
 import sys
 import traceback
 
-request = json.load(sys.stdin)
-stdout_buffer = io.StringIO()
-stderr_buffer = io.StringIO()
+MODULE_CACHE = {}
 
-try:
-    spec = importlib.util.spec_from_file_location("_luaskills_python_entry", request["file"])
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to load Python module: {request['file']}")
-    module = importlib.util.module_from_spec(spec)
-    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-        spec.loader.exec_module(module)
+def handle(request):
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    try:
+        file_path = request["file"]
+        module = MODULE_CACHE.get(file_path)
+        if module is None:
+            spec = importlib.util.spec_from_file_location("_luaskills_python_entry_" + str(len(MODULE_CACHE)), file_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"failed to load Python module: {file_path}")
+            module = importlib.util.module_from_spec(spec)
+            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+                spec.loader.exec_module(module)
+            MODULE_CACHE[file_path] = module
         handler = getattr(module, request.get("handler") or "main")
-        value = handler(request.get("args") or {}, request.get("ctx") or {})
-    envelope = {"ok": True, "value": value, "stdout": stdout_buffer.getvalue(), "stderr": stderr_buffer.getvalue()}
-except Exception as exc:
-    envelope = {
-        "ok": False,
-        "value": None,
-        "stdout": stdout_buffer.getvalue(),
-        "stderr": stderr_buffer.getvalue(),
-        "error": str(exc),
-        "trace": traceback.format_exc(),
-    }
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            value = handler(request.get("args") or {}, request.get("ctx") or {})
+        envelope = {"ok": True, "value": value, "stdout": stdout_buffer.getvalue(), "stderr": stderr_buffer.getvalue()}
+    except Exception as exc:
+        envelope = {
+            "ok": False,
+            "value": None,
+            "stdout": stdout_buffer.getvalue(),
+            "stderr": stderr_buffer.getvalue(),
+            "error": str(exc),
+            "trace": traceback.format_exc(),
+        }
+    try:
+        return json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+    except Exception as exc:
+        return json.dumps({
+            "ok": False,
+            "value": None,
+            "stdout": stdout_buffer.getvalue(),
+            "stderr": stderr_buffer.getvalue(),
+            "error": f"handler result is not JSON serializable: {exc}",
+            "trace": traceback.format_exc(),
+        }, ensure_ascii=False, separators=(",", ":"))
 
-try:
-    encoded = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
-except Exception as exc:
-    encoded = json.dumps({
-        "ok": False,
-        "value": None,
-        "stdout": stdout_buffer.getvalue(),
-        "stderr": stderr_buffer.getvalue(),
-        "error": f"handler result is not JSON serializable: {exc}",
-        "trace": traceback.format_exc(),
-    }, ensure_ascii=False, separators=(",", ":"))
-
-sys.stdout.write(encoded)
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+        encoded = handle(request)
+    except Exception as exc:
+        encoded = json.dumps({
+            "ok": False,
+            "value": None,
+            "stdout": "",
+            "stderr": "",
+            "error": str(exc),
+            "trace": traceback.format_exc(),
+        }, ensure_ascii=False, separators=(",", ":"))
+    sys.stdout.write(encoded + "\n")
+    sys.stdout.flush()
 "#
 }
 
-/// Return the Node.js wrapper code that isolates console output and emits one JSON envelope.
-/// 返回隔离 console 输出并发出单个 JSON 信封的 Node.js 包装代码。
-fn managed_node_wrapper_source() -> &'static str {
+/// Return the Node.js worker code that isolates console output and emits line-delimited JSON envelopes.
+/// 返回隔离 console 输出并发出按行分隔 JSON 信封的 Node.js worker 代码。
+fn managed_node_worker_source() -> &'static str {
     r#"
+const readline = require("readline");
 const { pathToFileURL } = require("url");
 
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", chunk => { input += chunk; });
-process.stdin.on("end", async () => {
-  const request = JSON.parse(input || "{}");
+const moduleCache = new Map();
+
+async function handle(request) {
   const stdout = [];
   const stderr = [];
   const originalConsole = { ...console };
@@ -1727,28 +2053,83 @@ process.stdin.on("end", async () => {
   console.warn = (...args) => stderr.push(args.map(String).join(" "));
   console.error = (...args) => stderr.push(args.map(String).join(" "));
   try {
-    const module = await import(pathToFileURL(request.file).href);
+    let module = moduleCache.get(request.file);
+    if (!module) {
+      module = await import(pathToFileURL(request.file).href);
+      moduleCache.set(request.file, module);
+    }
     const handlerName = request.handler || "default";
     const handler = handlerName === "default" ? (module.default || module.main) : module[handlerName];
     if (typeof handler !== "function") {
       throw new Error(`handler not found or not callable: ${handlerName}`);
     }
     const value = await handler(request.args || {}, request.ctx || {});
-    process.stdout.write(JSON.stringify({ ok: true, value, stdout: stdout.join("\n"), stderr: stderr.join("\n") }));
+    return JSON.stringify({ ok: true, value, stdout: stdout.join("\n"), stderr: stderr.join("\n") });
   } catch (error) {
-    process.stdout.write(JSON.stringify({
+    return JSON.stringify({
       ok: false,
       value: null,
       stdout: stdout.join("\n"),
       stderr: stderr.join("\n"),
       error: error && error.message ? error.message : String(error),
       trace: error && error.stack ? error.stack : null,
-    }));
+    });
   } finally {
     Object.assign(console, originalConsole);
   }
+}
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", async (line) => {
+  try {
+    const request = JSON.parse(line || "{}");
+    process.stdout.write(await handle(request) + "\n");
+  } catch (error) {
+    process.stdout.write(JSON.stringify({
+      ok: false,
+      value: null,
+      stdout: "",
+      stderr: "",
+      error: error && error.message ? error.message : String(error),
+      trace: error && error.stack ? error.stack : null,
+    }) + "\n");
+  }
 });
 "#
+}
+
+/// Invoke one managed runtime payload through a pooled worker.
+/// 通过池化 worker 调用一个受管运行时载荷。
+fn invoke_pooled_managed_runtime<F>(
+    key: ManagedRuntimeWorkerKey,
+    plan: &ManagedRuntimeEnvPlan,
+    payload: &Value,
+    timeout_ms: Option<u64>,
+    mut factory: F,
+) -> Result<Value, String>
+where
+    F: FnMut() -> Result<ManagedRuntimeWorker, String>,
+{
+    let (worker, worker_reused) = {
+        let mut pool = managed_runtime_worker_pool()
+            .lock()
+            .map_err(|_| "managed runtime worker pool lock poisoned".to_string())?;
+        pool.acquire(key.clone(), &mut factory)?
+    };
+    let (worker, result) =
+        invoke_managed_runtime_worker(worker, payload, timeout_ms, worker_reused);
+    let discard_worker = result.discard_worker;
+    let result_json = managed_runtime_worker_result_to_json(result, plan);
+    let mut pool = managed_runtime_worker_pool()
+        .lock()
+        .map_err(|_| "managed runtime worker pool lock poisoned".to_string())?;
+    if discard_worker {
+        drop(worker);
+        pool.discard(&key);
+    } else {
+        pool.release(key, worker);
+    }
+    Ok(result_json)
 }
 
 /// Invoke one Python handler through the managed Python environment.
@@ -1768,18 +2149,21 @@ fn invoke_managed_python(lua: &Lua, spec: LuaValue) -> Result<LuaValue, mlua::Er
         .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
     let source_file =
         resolve_managed_runtime_skill_file(&skill_dir, &request.file, api_name, "file")?;
-    let mut command = Command::new(managed_python_venv_executable(&plan));
-    command.arg("-c").arg(managed_python_wrapper_source());
-    command.current_dir(source_file.parent().unwrap_or(skill_dir.as_path()));
     let payload = json!({
         "file": source_file,
         "handler": request.handler,
         "args": request.args,
         "ctx": {},
     });
-    let result = run_managed_runtime_process(&mut command, &payload, request.timeout_ms)
-        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
-    json_value_to_lua(lua, &managed_runtime_process_result_to_json(result, &plan))
+    let key = managed_runtime_worker_key(&plan, &skill_dir);
+    let result = invoke_pooled_managed_runtime(key, &plan, &payload, request.timeout_ms, || {
+        let mut command = Command::new(managed_python_venv_executable(&plan));
+        command.arg("-c").arg(managed_python_worker_source());
+        command.current_dir(skill_dir.as_path());
+        spawn_managed_runtime_worker(&mut command)
+    })
+    .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    json_value_to_lua(lua, &result)
 }
 
 /// Invoke one Node.js handler through the managed Node.js environment.
@@ -1800,19 +2184,22 @@ fn invoke_managed_node(lua: &Lua, spec: LuaValue) -> Result<LuaValue, mlua::Erro
         .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
     let source_file =
         resolve_managed_runtime_skill_file(&skill_dir, &request.file, api_name, "file")?;
-    let mut command = Command::new(&plan.runtime_executable);
-    command.arg("-e").arg(managed_node_wrapper_source());
-    command.current_dir(source_file.parent().unwrap_or(skill_dir.as_path()));
-    command.env("NODE_PATH", plan.env_dir.join("node_modules"));
     let payload = json!({
         "file": source_file,
         "handler": request.handler,
         "args": request.args,
         "ctx": {},
     });
-    let result = run_managed_runtime_process(&mut command, &payload, request.timeout_ms)
-        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
-    json_value_to_lua(lua, &managed_runtime_process_result_to_json(result, &plan))
+    let key = managed_runtime_worker_key(&plan, &skill_dir);
+    let result = invoke_pooled_managed_runtime(key, &plan, &payload, request.timeout_ms, || {
+        let mut command = Command::new(&plan.runtime_executable);
+        command.arg("-e").arg(managed_node_worker_source());
+        command.current_dir(skill_dir.as_path());
+        command.env("NODE_PATH", plan.env_dir.join("node_modules"));
+        spawn_managed_runtime_worker(&mut command)
+    })
+    .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    json_value_to_lua(lua, &result)
 }
 
 /// Return status for the active skill's managed Python declaration.

@@ -3,12 +3,13 @@ use super::lease::RuntimeSessionManager;
 use super::runlua::{ExecShellLauncher, runlua_cwd_guard};
 use super::{
     LoadedSkill, LuaEngine, LuaVmPool, LuaVmPoolConfig, LuaVmPoolState, LuaVmRequestScopeGuard,
-    NativeLibrarySearchGuard, SkillConfigStore, VulcanInternalExecutionContext,
-    default_runlua_vm_pool_config, get_vulcan_context_table, get_vulcan_deps_table,
-    get_vulcan_runtime_internal_table, get_vulcan_table, json_to_lua_table,
-    normalize_host_visible_path_text, populate_vulcan_dependency_context,
-    populate_vulcan_file_context, populate_vulcan_internal_execution_context,
-    render_host_visible_path,
+    ManagedRuntimeWorkerPool, NativeLibrarySearchGuard, SkillConfigStore,
+    VulcanInternalExecutionContext, default_runlua_vm_pool_config, get_vulcan_context_table,
+    get_vulcan_deps_table, get_vulcan_runtime_internal_table, get_vulcan_table,
+    invoke_managed_runtime_worker, json_to_lua_table, normalize_host_visible_path_text,
+    populate_vulcan_dependency_context, populate_vulcan_file_context,
+    populate_vulcan_internal_execution_context, render_host_visible_path,
+    spawn_managed_runtime_worker,
 };
 use crate::host::callbacks::runtime_model_callback_test_guard;
 use crate::host::database::RuntimeDatabaseProviderCallbacks;
@@ -38,6 +39,7 @@ use std::os::windows::fs::{
 };
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 /// Guard one process-wide host-tool callback test and clear global callback state on drop.
@@ -4833,4 +4835,68 @@ fn vulcan_call_restores_outer_context_after_nested_failure() {
     assert!(result.content.contains("test-skill"));
 
     let _ = fs::remove_dir_all(&temp_root);
+}
+
+/// Verify the managed runtime worker pool reuses one warm line-oriented worker.
+/// 验证受管运行时 worker 池会复用一个热的逐行协议 worker。
+#[test]
+fn managed_runtime_worker_pool_reuses_warm_worker() {
+    let mut pool = ManagedRuntimeWorkerPool::new();
+    let key = super::ManagedRuntimeWorkerKey {
+        runtime: "test".to_string(),
+        env_hash: "hash".to_string(),
+        skill_dir: PathBuf::from("D:/test-skill"),
+    };
+    let mut spawn_count = 0usize;
+    let mut factory = || {
+        spawn_count += 1;
+        let mut command = managed_runtime_echo_worker_command();
+        spawn_managed_runtime_worker(&mut command)
+    };
+
+    let (worker, reused) = pool
+        .acquire(key.clone(), &mut factory)
+        .expect("first worker should spawn");
+    assert!(!reused);
+    let (worker, first) =
+        invoke_managed_runtime_worker(worker, &json!({"value": 1}), Some(3_000), reused);
+    assert!(!first.worker_reused);
+    assert_eq!(first.envelope["ok"], true);
+    assert_eq!(first.envelope["value"], 1);
+    assert!(!first.discard_worker);
+    pool.release(key.clone(), worker);
+
+    let (worker, reused) = pool
+        .acquire(key.clone(), &mut factory)
+        .expect("second worker should reuse");
+    assert!(reused);
+    let (worker, second) =
+        invoke_managed_runtime_worker(worker, &json!({"value": 2}), Some(3_000), reused);
+    assert!(second.worker_reused);
+    assert_eq!(second.envelope["ok"], true);
+    assert_eq!(second.envelope["value"], 2);
+    assert!(!second.discard_worker);
+    pool.release(key, worker);
+    assert_eq!(spawn_count, 1);
+}
+
+/// Build a tiny cross-platform JSON line echo worker command for pool tests.
+/// 为池测试构造一个极小的跨平台 JSON 行回显 worker 命令。
+fn managed_runtime_echo_worker_command() -> Command {
+    #[cfg(windows)]
+    {
+        let script = "$OutputEncoding=[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; while (($line=[Console]::In.ReadLine()) -ne $null) { $request = $line | ConvertFrom-Json; $response = @{ ok = $true; value = $request.value; stdout = ''; stderr = '' } | ConvertTo-Json -Compress; [Console]::Out.WriteLine($response); [Console]::Out.Flush() }";
+        let mut command = Command::new("powershell");
+        command.args(["-NoProfile", "-Command", script]);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "while IFS= read -r line; do value=$(printf '%s' \"$line\" | sed -n 's/.*\"value\":\\([0-9][0-9]*\\).*/\\1/p'); printf '{\"ok\":true,\"value\":%s,\"stdout\":\"\",\"stderr\":\"\"}\\n' \"$value\"; done",
+        ]);
+        command
+    }
 }
