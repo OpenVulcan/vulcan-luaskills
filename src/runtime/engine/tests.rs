@@ -289,6 +289,36 @@ fn make_runtime_test_engine_with_host_options(host_options: LuaRuntimeHostOption
     .expect("create runtime test engine")
 }
 
+/// Verify managed Python and Node bridge tables are present in the Lua-facing runtime module.
+/// 验证面向 Lua 的运行时模块中已经注册受管 Python 与 Node 桥接表。
+#[test]
+fn vulcan_runtime_registers_managed_child_runtime_bridges() {
+    let engine = make_runtime_test_engine();
+    let result = engine
+        .run_lua(
+            r#"
+return {
+  python_table = type(vulcan.runtime.python),
+  python_status = type(vulcan.runtime.python.status),
+  python_invoke = type(vulcan.runtime.python.invoke),
+  node_table = type(vulcan.runtime.node),
+  node_status = type(vulcan.runtime.node.status),
+  node_invoke = type(vulcan.runtime.node.invoke),
+}
+"#,
+            &json!({}),
+            None,
+        )
+        .expect("managed runtime bridge tables should be registered");
+
+    assert_eq!(result["python_table"], "table");
+    assert_eq!(result["python_status"], "function");
+    assert_eq!(result["python_invoke"], "function");
+    assert_eq!(result["node_table"], "table");
+    assert_eq!(result["node_status"], "function");
+    assert_eq!(result["node_invoke"], "function");
+}
+
 /// Build one temporary runtime root path for one isolated skill-config test case.
 /// 为单个隔离技能配置测试用例构造一条临时运行时根目录路径。
 fn make_temp_runtime_root(label: &str) -> PathBuf {

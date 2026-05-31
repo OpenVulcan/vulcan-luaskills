@@ -39,6 +39,10 @@ use crate::runtime::encoding::{
     RuntimeTextEncoding, decode_runtime_text, default_runtime_text_encoding, encode_runtime_text,
 };
 use crate::runtime::managed_io::{create_vulcan_io_table, install_managed_io_compat};
+use crate::runtime::managed_runtime::{
+    ManagedRuntimeEnvPlan, ensure_managed_env, managed_env_is_ready, resolve_node_env_plan,
+    resolve_python_env_plan,
+};
 use crate::runtime::process_session::create_process_session_table;
 use crate::runtime_context::{RuntimeClientInfo, RuntimeRequestContext};
 use crate::runtime_help::{
@@ -1300,6 +1304,609 @@ fn current_vulcan_config_skill_id(lua: &Lua, api_name: &str) -> Result<String, m
         })
 }
 
+/// Resolve the current skill directory from `vulcan.context.skill_dir`.
+/// 从 `vulcan.context.skill_dir` 解析当前 skill 目录。
+fn current_vulcan_skill_dir(lua: &Lua, api_name: &str) -> Result<PathBuf, mlua::Error> {
+    let context = get_vulcan_context_table(lua).map_err(mlua::Error::runtime)?;
+    let skill_dir: Option<String> = context
+        .get("skill_dir")
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    let skill_dir = skill_dir
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| mlua::Error::runtime(format!("{api_name}: no active skill_dir")))?;
+    Ok(PathBuf::from(skill_dir))
+}
+
+/// Resolve the runtime root that owns one active skill directory.
+/// 解析拥有当前 skill 目录的 runtime 根目录。
+fn runtime_root_from_skill_dir(skill_dir: &Path, api_name: &str) -> Result<PathBuf, mlua::Error> {
+    skill_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            mlua::Error::runtime(format!(
+                "{api_name}: failed to derive runtime root from skill_dir {}",
+                skill_dir.display()
+            ))
+        })
+}
+
+/// Resolve one safe skill-relative file path.
+/// 解析一个安全的 skill 相对文件路径。
+fn resolve_managed_runtime_skill_file(
+    skill_dir: &Path,
+    relative_path: &str,
+    api_name: &str,
+    field_name: &str,
+) -> Result<PathBuf, mlua::Error> {
+    let path = Path::new(relative_path);
+    if relative_path.trim().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(mlua::Error::runtime(format!(
+            "{api_name}: {field_name} must be a safe path under the skill directory"
+        )));
+    }
+    let resolved = skill_dir.join(path);
+    if !resolved.is_file() {
+        return Err(mlua::Error::runtime(format!(
+            "{api_name}: {field_name} not found: {}",
+            resolved.display()
+        )));
+    }
+    Ok(resolved)
+}
+
+/// Load the current skill dependency manifest when it exists.
+/// 当当前 skill 存在依赖清单时加载它。
+fn load_current_managed_runtime_manifest(
+    skill_dir: &Path,
+    api_name: &str,
+) -> Result<SkillDependencyManifest, mlua::Error> {
+    let dependencies_path = skill_dir.join("dependencies.yaml");
+    if !dependencies_path.is_file() {
+        return Err(mlua::Error::runtime(format!(
+            "{api_name}: dependencies.yaml is required for managed runtimes"
+        )));
+    }
+    SkillDependencyManifest::load_from_path(&dependencies_path).map_err(mlua::Error::runtime)
+}
+
+/// Load the current skill dependency manifest when status APIs can tolerate absence.
+/// 在状态 API 可容忍缺失时加载当前 skill 的依赖清单。
+fn load_optional_current_managed_runtime_manifest(
+    skill_dir: &Path,
+    api_name: &str,
+) -> Result<Option<SkillDependencyManifest>, mlua::Error> {
+    let dependencies_path = skill_dir.join("dependencies.yaml");
+    if !dependencies_path.is_file() {
+        return Ok(None);
+    }
+    SkillDependencyManifest::load_from_path(&dependencies_path)
+        .map(Some)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))
+}
+
+/// Read one optional string field from a managed runtime invoke table.
+/// 从受管运行时 invoke 表读取一个可选字符串字段。
+fn managed_runtime_optional_string_field(
+    table: &Table,
+    api_name: &str,
+    field_name: &str,
+) -> Result<Option<String>, mlua::Error> {
+    let value: LuaValue = table
+        .get(field_name)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    match value {
+        LuaValue::Nil => Ok(None),
+        LuaValue::String(value) => Ok(Some(
+            value
+                .to_str()
+                .map_err(|error| {
+                    mlua::Error::runtime(format!("{api_name}: {field_name} is not UTF-8: {error}"))
+                })?
+                .to_string(),
+        )),
+        other => Err(mlua::Error::runtime(format!(
+            "{api_name}: {field_name} must be a string or nil, got {}",
+            lua_value_type_name(&other)
+        ))),
+    }
+}
+
+/// Read one optional timeout field from a managed runtime invoke table.
+/// 从受管运行时 invoke 表读取一个可选超时字段。
+fn managed_runtime_optional_timeout_ms(
+    table: &Table,
+    api_name: &str,
+) -> Result<Option<u64>, mlua::Error> {
+    let value: LuaValue = table
+        .get("timeout_ms")
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    optional_u64_arg(value, api_name, "timeout_ms")
+}
+
+/// Resolved invocation request for one managed child runtime.
+/// 单个受管子运行时的已解析调用请求。
+struct ManagedRuntimeInvokeRequest {
+    /// Skill-relative source file requested by Lua.
+    /// Lua 请求的 skill 相对源文件。
+    file: String,
+    /// Exported handler name inside the source file.
+    /// 源文件内部导出的处理函数名称。
+    handler: String,
+    /// JSON arguments converted from the Lua request table.
+    /// 从 Lua 请求表转换得到的 JSON 参数。
+    args: Value,
+    /// Optional timeout in milliseconds for the child process.
+    /// 子进程可选超时时间，单位为毫秒。
+    timeout_ms: Option<u64>,
+}
+
+/// Captured result from one managed child runtime process.
+/// 单个受管子运行时进程的捕获结果。
+struct ManagedRuntimeProcessResult {
+    /// Process exit code, or `None` when the process timed out.
+    /// 进程退出码；超时时为 `None`。
+    status: Option<i32>,
+    /// Captured UTF-8 stdout text.
+    /// 捕获到的 UTF-8 标准输出文本。
+    stdout: String,
+    /// Captured UTF-8 stderr text.
+    /// 捕获到的 UTF-8 标准错误文本。
+    stderr: String,
+    /// Whether the process was killed because it exceeded the timeout.
+    /// 进程是否因为超过超时限制而被终止。
+    timed_out: bool,
+}
+
+/// Spawn a background reader for one managed child output pipe.
+/// 为一个受管子进程输出管道启动后台读取线程。
+fn spawn_managed_runtime_pipe_reader<R>(mut reader: R) -> thread::JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = reader.read_to_end(&mut buffer);
+        buffer
+    })
+}
+
+/// Spawn a background writer for one managed child stdin pipe.
+/// 为一个受管子进程标准输入管道启动后台写入线程。
+fn spawn_managed_runtime_stdin_writer<W>(mut writer: W, input: Vec<u8>) -> thread::JoinHandle<()>
+where
+    W: Write + Send + 'static,
+{
+    thread::spawn(move || {
+        let _ = writer.write_all(&input);
+        let _ = writer.flush();
+    })
+}
+
+/// Return the Python executable inside a managed virtual environment.
+/// 返回受管虚拟环境内部的 Python 可执行文件。
+fn managed_python_venv_executable(plan: &ManagedRuntimeEnvPlan) -> PathBuf {
+    if cfg!(windows) {
+        plan.env_dir
+            .join(".venv")
+            .join("Scripts")
+            .join("python.exe")
+    } else {
+        plan.env_dir.join(".venv").join("bin").join("python")
+    }
+}
+
+/// Parse a Lua invocation table for `vulcan.runtime.python/node.invoke`.
+/// 解析 `vulcan.runtime.python/node.invoke` 使用的 Lua 调用表。
+fn parse_managed_runtime_invoke_request(
+    value: LuaValue,
+    api_name: &str,
+    default_handler: &str,
+) -> Result<ManagedRuntimeInvokeRequest, mlua::Error> {
+    let table = require_table_arg(value, api_name, "spec")?;
+    let file = managed_runtime_optional_string_field(&table, api_name, "file")?
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| mlua::Error::runtime(format!("{api_name}: file is required")))?;
+    let handler = managed_runtime_optional_string_field(&table, api_name, "handler")?
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_handler.to_string());
+    let args_value: LuaValue = table
+        .get("args")
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    let args = match args_value {
+        LuaValue::Nil => Value::Object(serde_json::Map::new()),
+        other => lua_value_to_json(&other)
+            .map_err(|error| mlua::Error::runtime(format!("{api_name}: args: {error}")))?,
+    };
+    let timeout_ms = managed_runtime_optional_timeout_ms(&table, api_name)?;
+    Ok(ManagedRuntimeInvokeRequest {
+        file,
+        handler,
+        args,
+        timeout_ms,
+    })
+}
+
+/// Build a status JSON value for one resolved managed runtime plan.
+/// 为一个已解析受管运行时计划构造状态 JSON 值。
+fn managed_runtime_status_from_plan(plan: &ManagedRuntimeEnvPlan) -> Value {
+    let ready = managed_env_is_ready(plan).unwrap_or(false);
+    json!({
+        "available": true,
+        "configured": true,
+        "ready": ready,
+        "runtime": plan.runtime.as_str(),
+        "runtime_version": plan.runtime_version,
+        "runtime_executable": render_host_visible_path(&plan.runtime_executable),
+        "package_manager": plan.package_manager,
+        "package_manager_version": plan.package_manager_version,
+        "package_manager_executable": render_host_visible_path(&plan.package_manager_executable),
+        "env_hash": plan.env_hash,
+        "env_dir": render_host_visible_path(&plan.env_dir),
+        "message": if ready {
+            "managed runtime environment is ready"
+        } else {
+            "managed runtime environment is configured but not yet created"
+        },
+    })
+}
+
+/// Run one child process with JSON stdin and capture UTF-8 stdout/stderr.
+/// 使用 JSON 标准输入运行一个子进程并捕获 UTF-8 标准输出和标准错误。
+fn run_managed_runtime_process(
+    command: &mut Command,
+    stdin_json: &Value,
+    timeout_ms: Option<u64>,
+) -> Result<ManagedRuntimeProcessResult, String> {
+    let payload = serde_json::to_vec(stdin_json)
+        .map_err(|error| format!("failed to serialize managed runtime request: {error}"))?;
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to spawn managed runtime process: {error}"))?;
+    let stdin_handle = child
+        .stdin
+        .take()
+        .map(|stdin| spawn_managed_runtime_stdin_writer(stdin, payload));
+    let stdout_handle = child.stdout.take().map(spawn_managed_runtime_pipe_reader);
+    let stderr_handle = child.stderr.take().map(spawn_managed_runtime_pipe_reader);
+    let timeout = timeout_ms.map(Duration::from_millis);
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("failed to wait for managed runtime process: {error}"))?
+        {
+            break Some(status);
+        }
+        if timeout.is_some_and(|limit| started.elapsed() >= limit) {
+            timed_out = true;
+            let _ = child.kill();
+            break child.wait().ok();
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    if let Some(handle) = stdin_handle {
+        let _ = handle.join();
+    }
+    let stdout = stdout_handle
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr = stderr_handle
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    Ok(ManagedRuntimeProcessResult {
+        status: if timed_out {
+            None
+        } else {
+            status.and_then(|status| status.code())
+        },
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        timed_out,
+    })
+}
+
+/// Convert one process and wrapper envelope into the Lua-facing result payload.
+/// 将进程结果与包装器信封转换为面向 Lua 的返回载荷。
+fn managed_runtime_process_result_to_json(
+    process_result: ManagedRuntimeProcessResult,
+    plan: &ManagedRuntimeEnvPlan,
+) -> Value {
+    let parsed = serde_json::from_str::<Value>(&process_result.stdout).ok();
+    let envelope = parsed.unwrap_or_else(|| {
+        json!({
+            "ok": false,
+            "value": null,
+            "stdout": process_result.stdout,
+            "stderr": process_result.stderr,
+            "error": "managed runtime process did not return a JSON envelope",
+        })
+    });
+    let ok = envelope.get("ok").and_then(Value::as_bool).unwrap_or(false)
+        && !process_result.timed_out
+        && process_result.status.unwrap_or(0) == 0;
+    json!({
+        "ok": ok,
+        "value": envelope.get("value").cloned().unwrap_or(Value::Null),
+        "stdout": envelope
+            .get("stdout")
+            .cloned()
+            .unwrap_or_else(|| Value::String(String::new())),
+        "stderr": envelope
+            .get("stderr")
+            .cloned()
+            .unwrap_or_else(|| Value::String(process_result.stderr)),
+        "error": envelope.get("error").cloned().unwrap_or(Value::Null),
+        "trace": envelope.get("trace").cloned().unwrap_or(Value::Null),
+        "status": process_result.status,
+        "timed_out": process_result.timed_out,
+        "worker_reused": false,
+        "env_hash": plan.env_hash,
+        "env_dir": render_host_visible_path(&plan.env_dir),
+    })
+}
+
+/// Return the Python wrapper code that isolates stdout/stderr and emits one JSON envelope.
+/// 返回隔离标准输出/标准错误并发出单个 JSON 信封的 Python 包装代码。
+fn managed_python_wrapper_source() -> &'static str {
+    r#"
+import contextlib
+import importlib.util
+import io
+import json
+import sys
+import traceback
+
+request = json.load(sys.stdin)
+stdout_buffer = io.StringIO()
+stderr_buffer = io.StringIO()
+
+try:
+    spec = importlib.util.spec_from_file_location("_luaskills_python_entry", request["file"])
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load Python module: {request['file']}")
+    module = importlib.util.module_from_spec(spec)
+    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+        spec.loader.exec_module(module)
+        handler = getattr(module, request.get("handler") or "main")
+        value = handler(request.get("args") or {}, request.get("ctx") or {})
+    envelope = {"ok": True, "value": value, "stdout": stdout_buffer.getvalue(), "stderr": stderr_buffer.getvalue()}
+except Exception as exc:
+    envelope = {
+        "ok": False,
+        "value": None,
+        "stdout": stdout_buffer.getvalue(),
+        "stderr": stderr_buffer.getvalue(),
+        "error": str(exc),
+        "trace": traceback.format_exc(),
+    }
+
+try:
+    encoded = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+except Exception as exc:
+    encoded = json.dumps({
+        "ok": False,
+        "value": None,
+        "stdout": stdout_buffer.getvalue(),
+        "stderr": stderr_buffer.getvalue(),
+        "error": f"handler result is not JSON serializable: {exc}",
+        "trace": traceback.format_exc(),
+    }, ensure_ascii=False, separators=(",", ":"))
+
+sys.stdout.write(encoded)
+"#
+}
+
+/// Return the Node.js wrapper code that isolates console output and emits one JSON envelope.
+/// 返回隔离 console 输出并发出单个 JSON 信封的 Node.js 包装代码。
+fn managed_node_wrapper_source() -> &'static str {
+    r#"
+const { pathToFileURL } = require("url");
+
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => { input += chunk; });
+process.stdin.on("end", async () => {
+  const request = JSON.parse(input || "{}");
+  const stdout = [];
+  const stderr = [];
+  const originalConsole = { ...console };
+  console.log = (...args) => stdout.push(args.map(String).join(" "));
+  console.info = (...args) => stdout.push(args.map(String).join(" "));
+  console.warn = (...args) => stderr.push(args.map(String).join(" "));
+  console.error = (...args) => stderr.push(args.map(String).join(" "));
+  try {
+    const module = await import(pathToFileURL(request.file).href);
+    const handlerName = request.handler || "default";
+    const handler = handlerName === "default" ? (module.default || module.main) : module[handlerName];
+    if (typeof handler !== "function") {
+      throw new Error(`handler not found or not callable: ${handlerName}`);
+    }
+    const value = await handler(request.args || {}, request.ctx || {});
+    process.stdout.write(JSON.stringify({ ok: true, value, stdout: stdout.join("\n"), stderr: stderr.join("\n") }));
+  } catch (error) {
+    process.stdout.write(JSON.stringify({
+      ok: false,
+      value: null,
+      stdout: stdout.join("\n"),
+      stderr: stderr.join("\n"),
+      error: error && error.message ? error.message : String(error),
+      trace: error && error.stack ? error.stack : null,
+    }));
+  } finally {
+    Object.assign(console, originalConsole);
+  }
+});
+"#
+}
+
+/// Invoke one Python handler through the managed Python environment.
+/// 通过受管 Python 环境调用一个 Python 处理函数。
+fn invoke_managed_python(lua: &Lua, spec: LuaValue) -> Result<LuaValue, mlua::Error> {
+    let api_name = "vulcan.runtime.python.invoke";
+    let request = parse_managed_runtime_invoke_request(spec, api_name, "main")?;
+    let skill_dir = current_vulcan_skill_dir(lua, api_name)?;
+    let runtime_root = runtime_root_from_skill_dir(&skill_dir, api_name)?;
+    let manifest = load_current_managed_runtime_manifest(&skill_dir, api_name)?;
+    let runtime_spec = manifest.python_runtime.as_ref().ok_or_else(|| {
+        mlua::Error::runtime(format!("{api_name}: python_runtime is not declared"))
+    })?;
+    let plan = resolve_python_env_plan(&runtime_root, &skill_dir, runtime_spec)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    ensure_managed_env(&plan)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    let source_file =
+        resolve_managed_runtime_skill_file(&skill_dir, &request.file, api_name, "file")?;
+    let mut command = Command::new(managed_python_venv_executable(&plan));
+    command.arg("-c").arg(managed_python_wrapper_source());
+    command.current_dir(source_file.parent().unwrap_or(skill_dir.as_path()));
+    let payload = json!({
+        "file": source_file,
+        "handler": request.handler,
+        "args": request.args,
+        "ctx": {},
+    });
+    let result = run_managed_runtime_process(&mut command, &payload, request.timeout_ms)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    json_value_to_lua(lua, &managed_runtime_process_result_to_json(result, &plan))
+}
+
+/// Invoke one Node.js handler through the managed Node.js environment.
+/// 通过受管 Node.js 环境调用一个 Node.js 处理函数。
+fn invoke_managed_node(lua: &Lua, spec: LuaValue) -> Result<LuaValue, mlua::Error> {
+    let api_name = "vulcan.runtime.node.invoke";
+    let request = parse_managed_runtime_invoke_request(spec, api_name, "default")?;
+    let skill_dir = current_vulcan_skill_dir(lua, api_name)?;
+    let runtime_root = runtime_root_from_skill_dir(&skill_dir, api_name)?;
+    let manifest = load_current_managed_runtime_manifest(&skill_dir, api_name)?;
+    let runtime_spec = manifest
+        .node_runtime
+        .as_ref()
+        .ok_or_else(|| mlua::Error::runtime(format!("{api_name}: node_runtime is not declared")))?;
+    let plan = resolve_node_env_plan(&runtime_root, &skill_dir, runtime_spec)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    ensure_managed_env(&plan)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    let source_file =
+        resolve_managed_runtime_skill_file(&skill_dir, &request.file, api_name, "file")?;
+    let mut command = Command::new(&plan.runtime_executable);
+    command.arg("-e").arg(managed_node_wrapper_source());
+    command.current_dir(source_file.parent().unwrap_or(skill_dir.as_path()));
+    command.env("NODE_PATH", plan.env_dir.join("node_modules"));
+    let payload = json!({
+        "file": source_file,
+        "handler": request.handler,
+        "args": request.args,
+        "ctx": {},
+    });
+    let result = run_managed_runtime_process(&mut command, &payload, request.timeout_ms)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    json_value_to_lua(lua, &managed_runtime_process_result_to_json(result, &plan))
+}
+
+/// Return status for the active skill's managed Python declaration.
+/// 返回当前 skill 的受管 Python 声明状态。
+fn managed_python_status(lua: &Lua) -> Result<LuaValue, mlua::Error> {
+    let api_name = "vulcan.runtime.python.status";
+    let skill_dir = current_vulcan_skill_dir(lua, api_name)?;
+    let runtime_root = runtime_root_from_skill_dir(&skill_dir, api_name)?;
+    let Some(manifest) = load_optional_current_managed_runtime_manifest(&skill_dir, api_name)?
+    else {
+        return json_value_to_lua(
+            lua,
+            &json!({
+                "available": false,
+                "configured": false,
+                "ready": false,
+                "runtime": "python",
+                "message": "dependencies.yaml is not present",
+            }),
+        );
+    };
+    let Some(spec) = manifest.python_runtime.as_ref() else {
+        return json_value_to_lua(
+            lua,
+            &json!({
+                "available": false,
+                "configured": false,
+                "ready": false,
+                "runtime": "python",
+                "message": "python_runtime is not declared",
+            }),
+        );
+    };
+    match resolve_python_env_plan(&runtime_root, &skill_dir, spec) {
+        Ok(plan) => json_value_to_lua(lua, &managed_runtime_status_from_plan(&plan)),
+        Err(error) => json_value_to_lua(
+            lua,
+            &json!({
+                "available": false,
+                "configured": true,
+                "ready": false,
+                "runtime": "python",
+                "error": error,
+            }),
+        ),
+    }
+}
+
+/// Return status for the active skill's managed Node.js declaration.
+/// 返回当前 skill 的受管 Node.js 声明状态。
+fn managed_node_status(lua: &Lua) -> Result<LuaValue, mlua::Error> {
+    let api_name = "vulcan.runtime.node.status";
+    let skill_dir = current_vulcan_skill_dir(lua, api_name)?;
+    let runtime_root = runtime_root_from_skill_dir(&skill_dir, api_name)?;
+    let Some(manifest) = load_optional_current_managed_runtime_manifest(&skill_dir, api_name)?
+    else {
+        return json_value_to_lua(
+            lua,
+            &json!({
+                "available": false,
+                "configured": false,
+                "ready": false,
+                "runtime": "node",
+                "message": "dependencies.yaml is not present",
+            }),
+        );
+    };
+    let Some(spec) = manifest.node_runtime.as_ref() else {
+        return json_value_to_lua(
+            lua,
+            &json!({
+                "available": false,
+                "configured": false,
+                "ready": false,
+                "runtime": "node",
+                "message": "node_runtime is not declared",
+            }),
+        );
+    };
+    match resolve_node_env_plan(&runtime_root, &skill_dir, spec) {
+        Ok(plan) => json_value_to_lua(lua, &managed_runtime_status_from_plan(&plan)),
+        Err(error) => json_value_to_lua(
+            lua,
+            &json!({
+                "available": false,
+                "configured": true,
+                "ready": false,
+                "runtime": "node",
+                "error": error,
+            }),
+        ),
+    }
+}
+
 /// Return whether one help payload should be executed as Lua instead of read as plain text.
 /// 判断某个帮助载荷是否应按 Lua 执行，而不是按纯文本读取。
 fn is_lua_help_file(relative_path: &str) -> bool {
@@ -1390,6 +1997,8 @@ struct VulcanCoreModuleState {
     runtime_skills: Table,
     runtime_internal: Table,
     runtime_lua: Table,
+    runtime_python: Table,
+    runtime_node: Table,
     fs: Table,
     io: Table,
     path: Table,
@@ -1421,6 +2030,12 @@ impl VulcanCoreModuleState {
             runtime_lua: runtime
                 .get("lua")
                 .map_err(|error| format!("Failed to get vulcan.runtime.lua: {}", error))?,
+            runtime_python: runtime
+                .get("python")
+                .map_err(|error| format!("Failed to get vulcan.runtime.python: {}", error))?,
+            runtime_node: runtime
+                .get("node")
+                .map_err(|error| format!("Failed to get vulcan.runtime.node: {}", error))?,
             fs: vulcan
                 .get("fs")
                 .map_err(|error| format!("Failed to get vulcan.fs: {}", error))?,
@@ -1468,6 +2083,12 @@ impl VulcanCoreModuleState {
         self.runtime
             .set("lua", self.runtime_lua.clone())
             .map_err(|error| format!("Failed to restore vulcan.runtime.lua: {}", error))?;
+        self.runtime
+            .set("python", self.runtime_python.clone())
+            .map_err(|error| format!("Failed to restore vulcan.runtime.python: {}", error))?;
+        self.runtime
+            .set("node", self.runtime_node.clone())
+            .map_err(|error| format!("Failed to restore vulcan.runtime.node: {}", error))?;
         self.vulcan
             .set("call", self.call.clone())
             .map_err(|error| format!("Failed to restore vulcan.call: {}", error))?;
@@ -5849,6 +6470,8 @@ impl LuaEngine {
         let runtime_skills = lua.create_table()?;
         let runtime_internal = lua.create_table()?;
         let runtime_lua = lua.create_table()?;
+        let runtime_python = lua.create_table()?;
+        let runtime_node = lua.create_table()?;
         let fs = lua.create_table()?;
         let path = lua.create_table()?;
         let process = lua.create_table()?;
@@ -6174,6 +6797,18 @@ impl LuaEngine {
         })?;
         runtime.set("cwd", cwd_fn)?;
 
+        let python_status_fn = lua.create_function(|lua, ()| managed_python_status(lua))?;
+        runtime_python.set("status", python_status_fn)?;
+        let python_invoke_fn =
+            lua.create_function(|lua, spec: LuaValue| invoke_managed_python(lua, spec))?;
+        runtime_python.set("invoke", python_invoke_fn)?;
+
+        let node_status_fn = lua.create_function(|lua, ()| managed_node_status(lua))?;
+        runtime_node.set("status", node_status_fn)?;
+        let node_invoke_fn =
+            lua.create_function(|lua, spec: LuaValue| invoke_managed_node(lua, spec))?;
+        runtime_node.set("invoke", node_invoke_fn)?;
+
         match host_options.temp_dir.as_ref() {
             Some(path_buf) => runtime.set("temp_dir", render_host_visible_path(path_buf))?,
             None => runtime.set("temp_dir", LuaValue::Nil)?,
@@ -6480,6 +7115,8 @@ impl LuaEngine {
         runtime.set("internal", runtime_internal)?;
         runtime.set("skills", runtime_skills)?;
         runtime.set("lua", runtime_lua)?;
+        runtime.set("python", runtime_python)?;
+        runtime.set("node", runtime_node)?;
 
         let call_stub = lua.create_function(|_, _: (LuaValue, LuaValue)| {
             Err::<(), _>(mlua::Error::runtime("vulcan.call not initialized"))
