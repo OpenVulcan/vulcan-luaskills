@@ -197,6 +197,76 @@ pub struct FfiDependencySpec {
     pub packages: BTreeMap<String, DependencyPackageSpec>,
 }
 
+/// Package manager used by one managed Python runtime declaration.
+/// 单个受管 Python 运行时声明使用的包管理器。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PythonRuntimePackageManager {
+    /// Use the uv package manager and environment synchronizer.
+    /// 使用 uv 包管理器与环境同步器。
+    Uv,
+}
+
+/// Package manager used by one managed Node.js runtime declaration.
+/// 单个受管 Node.js 运行时声明使用的包管理器。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeRuntimePackageManager {
+    /// Use pnpm with one host-managed content-addressed package store.
+    /// 使用 pnpm 与宿主管理的内容寻址包存储。
+    Pnpm,
+}
+
+/// Managed Python runtime dependency declared by one skill package.
+/// 单个 skill 包声明的受管 Python 运行时依赖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PythonRuntimeDependencySpec {
+    /// Exact Python runtime version requested by the skill.
+    /// 当前 skill 请求的精确 Python 运行时版本。
+    pub version: String,
+    /// Python package manager selected for environment creation.
+    /// 用于创建环境的 Python 包管理器。
+    pub package_manager: PythonRuntimePackageManager,
+    /// Exact package-manager version requested by the skill.
+    /// 当前 skill 请求的精确包管理器版本。
+    pub package_manager_version: String,
+    /// Lockfile path under the current skill directory.
+    /// 当前 skill 目录下的锁文件路径。
+    #[serde(default)]
+    pub lockfile: String,
+    /// Whether this managed runtime is required for the skill to load.
+    /// 当前受管运行时是否为 skill 加载所必需。
+    #[serde(default = "default_required_dependency")]
+    pub required: bool,
+}
+
+/// Managed Node.js runtime dependency declared by one skill package.
+/// 单个 skill 包声明的受管 Node.js 运行时依赖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRuntimeDependencySpec {
+    /// Exact Node.js runtime version requested by the skill.
+    /// 当前 skill 请求的精确 Node.js 运行时版本。
+    pub version: String,
+    /// Node.js package manager selected for environment creation.
+    /// 用于创建环境的 Node.js 包管理器。
+    pub package_manager: NodeRuntimePackageManager,
+    /// Exact package-manager version requested by the skill.
+    /// 当前 skill 请求的精确包管理器版本。
+    pub package_manager_version: String,
+    /// Optional package.json path under the current skill directory.
+    /// 当前 skill 目录下的可选 package.json 路径。
+    #[serde(default)]
+    pub package_json: String,
+    /// Lockfile path under the current skill directory.
+    /// 当前 skill 目录下的锁文件路径。
+    #[serde(default)]
+    pub lockfile: String,
+    /// Whether this managed runtime is required for the skill to load.
+    /// 当前受管运行时是否为 skill 加载所必需。
+    #[serde(default = "default_required_dependency")]
+    pub required: bool,
+}
+
 /// Full dependencies.yaml payload loaded from one skill package.
 /// 从单个 skill 包加载的完整 dependencies.yaml 载荷。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -213,6 +283,14 @@ pub struct SkillDependencyManifest {
     /// 安装到宿主管理 FFI 根目录下的原生库依赖。
     #[serde(default)]
     pub ffi_dependencies: Vec<FfiDependencySpec>,
+    /// Optional managed Python runtime declaration used by Lua orchestration.
+    /// 由 Lua 编排调用的可选受管 Python 运行时声明。
+    #[serde(default)]
+    pub python_runtime: Option<PythonRuntimeDependencySpec>,
+    /// Optional managed Node.js runtime declaration used by Lua orchestration.
+    /// 由 Lua 编排调用的可选受管 Node.js 运行时声明。
+    #[serde(default)]
+    pub node_runtime: Option<NodeRuntimeDependencySpec>,
 }
 
 /// One skilllist package manifest downloaded from one remote list file.
@@ -273,6 +351,8 @@ impl SkillDependencyManifest {
         self.tool_dependencies.is_empty()
             && self.lua_dependencies.is_empty()
             && self.ffi_dependencies.is_empty()
+            && self.python_runtime.is_none()
+            && self.node_runtime.is_none()
     }
 }
 
@@ -405,6 +485,55 @@ ffi_dependencies:
         assert_eq!(
             manifest.ffi_dependencies[0].scope,
             crate::dependency::types::DependencyScope::Skill
+        );
+    }
+
+    /// Verify that managed Python and Node runtime declarations parse from dependencies.yaml.
+    /// 验证受管 Python 与 Node 运行时声明可以从 dependencies.yaml 中解析。
+    #[test]
+    fn parse_managed_runtime_dependency_declarations() {
+        let yaml_text = r#"
+python_runtime:
+  version: "3.12.8"
+  package_manager: uv
+  package_manager_version: "0.5.0"
+  lockfile: python/requirements.lock
+node_runtime:
+  version: "22.11.0"
+  package_manager: pnpm
+  package_manager_version: "9.15.0"
+  package_json: node/package.json
+  lockfile: node/pnpm-lock.yaml
+"#;
+        let manifest: SkillDependencyManifest =
+            serde_yaml::from_str(yaml_text).expect("manifest should parse");
+        let python_runtime = manifest
+            .python_runtime
+            .expect("python runtime should parse");
+        let node_runtime = manifest.node_runtime.expect("node runtime should parse");
+
+        assert_eq!(python_runtime.version, "3.12.8");
+        assert_eq!(
+            python_runtime.package_manager,
+            super::PythonRuntimePackageManager::Uv
+        );
+        assert_eq!(python_runtime.lockfile, "python/requirements.lock");
+        assert!(python_runtime.required);
+        assert_eq!(node_runtime.version, "22.11.0");
+        assert_eq!(
+            node_runtime.package_manager,
+            super::NodeRuntimePackageManager::Pnpm
+        );
+        assert_eq!(node_runtime.package_json, "node/package.json");
+        assert_eq!(node_runtime.lockfile, "node/pnpm-lock.yaml");
+        assert!(node_runtime.required);
+        assert!(
+            !SkillDependencyManifest {
+                python_runtime: Some(python_runtime),
+                node_runtime: Some(node_runtime),
+                ..SkillDependencyManifest::default()
+            }
+            .is_empty()
         );
     }
 }

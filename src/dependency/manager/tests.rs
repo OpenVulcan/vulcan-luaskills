@@ -147,6 +147,7 @@ fn ensure_dependency_reuses_existing_github_release_exports_without_remote_resol
         )],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
     let dependency_root = build_dependency_install_root(
         &manager.config.tool_root,
@@ -189,6 +190,7 @@ fn ensure_dependency_reuses_existing_unversioned_github_release_exports() {
         tool_dependencies: vec![github_tool_dependency("demo-tool", None, platform_key)],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
     let dependency_root = build_dependency_install_root(
         &manager.config.tool_root,
@@ -235,6 +237,7 @@ fn ensure_dependency_reuses_existing_github_release_tag_exports_without_remote_r
         )],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
     let dependency_root = build_dependency_install_root(
         &manager.config.tool_root,
@@ -285,6 +288,7 @@ fn ensure_dependency_reuses_existing_unversioned_github_release_tag_exports() {
         )],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
     let dependency_root = build_dependency_install_root(
         &manager.config.tool_root,
@@ -326,6 +330,7 @@ fn cleanup_updated_skill_dependencies_removes_stale_roots_and_keeps_reused_roots
         ],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
     let current_manifest = SkillDependencyManifest {
         tool_dependencies: vec![
@@ -334,6 +339,7 @@ fn cleanup_updated_skill_dependencies_removes_stale_roots_and_keeps_reused_roots
         ],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
 
     let stale_root = build_dependency_install_root(
@@ -407,6 +413,7 @@ fn cleanup_updated_skill_dependencies_keeps_identical_roots() {
         tool_dependencies: vec![tool_dependency("rg", "14.1.1", platform_key)],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
 
     let dependency_root = build_dependency_install_root(
@@ -450,6 +457,7 @@ fn cleanup_updated_skill_dependencies_removes_deleted_dependencies() {
         ],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
     let current_manifest = SkillDependencyManifest::default();
 
@@ -509,6 +517,7 @@ fn cleanup_updated_skill_dependencies_preserves_existing_roots_for_add_only_chan
         tool_dependencies: vec![tool_dependency("rg", "14.1.1", platform_key)],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
     let current_manifest = SkillDependencyManifest {
         tool_dependencies: vec![
@@ -517,6 +526,7 @@ fn cleanup_updated_skill_dependencies_preserves_existing_roots_for_add_only_chan
         ],
         lua_dependencies: Vec::new(),
         ffi_dependencies: Vec::new(),
+        ..SkillDependencyManifest::default()
     };
 
     let rg_root = build_dependency_install_root(

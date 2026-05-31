@@ -7,5 +7,6 @@ pub mod entry;
 pub mod help;
 pub mod logging;
 pub mod managed_io;
+pub mod managed_runtime;
 pub mod process_session;
 pub mod result;

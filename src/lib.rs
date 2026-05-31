@@ -44,13 +44,23 @@ pub use runtime::help::{RuntimeHelpDetail, RuntimeHelpNodeDescriptor, RuntimeSki
 pub use runtime::logging::{
     RuntimeLogCallback, RuntimeLogEvent, RuntimeLogLevel, set_log_callback,
 };
+pub use runtime::managed_runtime::{
+    MANAGED_RUNTIME_ENV_MARKER_SCHEMA_VERSION, ManagedRuntimeEnvHashInput, ManagedRuntimeEnvMarker,
+    ManagedRuntimeEnvPlan, ManagedRuntimeInstallManifest, ManagedRuntimeKind,
+    compute_managed_runtime_env_hash, current_managed_runtime_platform_key, ensure_managed_env,
+    managed_env_dir, managed_env_is_ready, managed_env_marker_matches, managed_env_marker_path,
+    read_install_manifest, read_managed_env_marker, resolve_node_env_plan, resolve_python_env_plan,
+    sha256_file, sha256_hex,
+};
 pub use runtime::result::{
     NON_STRING_TOOL_RESULT_ERROR, RuntimeInvocationResult, ToolOverflowMode,
 };
 pub use skill::dependencies::{
     DependencyArchiveType, DependencyExportSpec, DependencyPackageSpec, DependencySourceSpec,
-    FfiDependencySpec, GithubReleaseSourceSpec, LuaDependencySpec, SkillDependencyManifest,
-    SkillListPackageManifest, SkillListSourceSpec, ToolDependencySpec, UrlSourceSpec,
+    FfiDependencySpec, GithubReleaseSourceSpec, LuaDependencySpec, NodeRuntimeDependencySpec,
+    NodeRuntimePackageManager, PythonRuntimeDependencySpec, PythonRuntimePackageManager,
+    SkillDependencyManifest, SkillListPackageManifest, SkillListSourceSpec, ToolDependencySpec,
+    UrlSourceSpec,
 };
 pub use skill::manager::{
     DisabledSkillRecord, ResolvedSkillInstance, SkillApplyResult, SkillInstallRequest,
