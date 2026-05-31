@@ -23,11 +23,21 @@ cargo run --bin luaskills-debug -- call --runtime-root target/managed-runtime-fe
 
 ## Isolated Smoke Test
 
-Run the isolated smoke script when you want the test to create its own runtime root and fetch dependencies independently:
-当希望测试自行创建隔离运行时根目录并独立拉取依赖时，运行隔离冒烟脚本：
+Run the isolated smoke script when you want the test to create its own runtime root and fetch dependencies independently.
+当希望测试自行创建隔离运行时根目录并独立拉取依赖时，运行隔离冒烟脚本。
+
+Windows:
+Windows：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/debug-tools/managed_runtime_smoke.ps1
+```
+
+Linux, macOS, or WSL:
+Linux、macOS 或 WSL：
+
+```bash
+bash scripts/debug-tools/managed_runtime_smoke.sh
 ```
 
 Use `-SkipFetch` only when intentionally reusing an existing runtime root during local iteration:
@@ -36,3 +46,10 @@ Use `-SkipFetch` only when intentionally reusing an existing runtime root during
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/debug-tools/managed_runtime_smoke.ps1 -RuntimeRoot target/managed-runtime-fetch-check-uv01117-all -SkipFetch -KeepRuntimeRoot
 ```
+
+```bash
+bash scripts/debug-tools/managed_runtime_smoke.sh --runtime-root target/managed-runtime-fetch-check-uv01117-all --skip-fetch --keep-runtime-root
+```
+
+The smoke scripts validate the prepared runtime layout before calling the skill.
+冒烟脚本会在调用 skill 前校验已准备好的运行时布局。

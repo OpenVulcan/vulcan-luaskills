@@ -45,6 +45,31 @@ return function(args)
   local python_status_after = vulcan.runtime.python.status()
   local node_status_after = vulcan.runtime.node.status()
 
+  if not python_first.ok then
+    error("python first invoke failed: " .. tostring(python_first.error))
+  end
+  if not node_first.ok then
+    error("node first invoke failed: " .. tostring(node_first.error))
+  end
+  if python_first.value.dependency ~= "24.2" then
+    error("python dependency did not load")
+  end
+  if node_first.value.dependency ~= "is-odd" then
+    error("node dependency did not load")
+  end
+  if node_first.value.namedImport ~= "is-number-named" then
+    error("node named import did not load")
+  end
+  if node_first.value.namespaceImport ~= "is-number-namespace" then
+    error("node namespace import did not load")
+  end
+  if node_first.value.relativeImport ~= "local-helper" then
+    error("node relative import did not load")
+  end
+  if node_first.value.sideEffectImport ~= "side-effect" then
+    error("node side-effect import did not load")
+  end
+
   return vulcan.json.encode({
     python_status_before = python_status_before,
     node_status_before = node_status_before,

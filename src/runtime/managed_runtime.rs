@@ -375,37 +375,46 @@ fn create_python_env(plan: &ManagedRuntimeEnvPlan) -> Result<(), String> {
 /// Create one Node dependency environment and install dependencies from the lockfile.
 /// 创建一个 Node 依赖环境并按锁文件安装依赖。
 fn create_node_env(plan: &ManagedRuntimeEnvPlan) -> Result<(), String> {
-    let build_dir = prepare_build_dir(plan)?;
+    if plan.env_dir.exists() {
+        fs::remove_dir_all(&plan.env_dir)
+            .map_err(|error| format!("Failed to remove {}: {}", plan.env_dir.display(), error))?;
+    }
+    fs::create_dir_all(&plan.env_dir)
+        .map_err(|error| format!("Failed to create {}: {}", plan.env_dir.display(), error))?;
     let package_json = plan.package_manifest_path.as_ref().ok_or_else(|| {
         "node package_json is required to create a managed Node environment".to_string()
     })?;
-    fs::copy(package_json, build_dir.join("package.json")).map_err(|error| {
+    fs::copy(package_json, plan.env_dir.join("package.json")).map_err(|error| {
         format!(
             "Failed to copy {} into {}: {}",
             package_json.display(),
-            build_dir.display(),
+            plan.env_dir.display(),
             error
         )
     })?;
-    fs::copy(&plan.lockfile_path, build_dir.join("pnpm-lock.yaml")).map_err(|error| {
+    fs::copy(&plan.lockfile_path, plan.env_dir.join("pnpm-lock.yaml")).map_err(|error| {
         format!(
             "Failed to copy {} into {}: {}",
             plan.lockfile_path.display(),
-            build_dir.display(),
+            plan.env_dir.display(),
             error
         )
     })?;
-    run_command(
+    let install_result = run_command(
         Command::new(&plan.runtime_executable)
             .arg(&plan.package_manager_executable)
             .arg("install")
             .arg("--frozen-lockfile")
             .arg("--store-dir")
             .arg(package_store_dir_for_plan(plan))
-            .current_dir(&build_dir),
+            .current_dir(&plan.env_dir),
         "install managed Node environment",
-    )?;
-    finish_build_dir(plan, build_dir)
+    )
+    .and_then(|()| write_expected_marker(&plan.env_dir, &plan.expected_marker));
+    if install_result.is_err() {
+        let _ = fs::remove_dir_all(&plan.env_dir);
+    }
+    install_result
 }
 
 /// Prepare one clean temporary build directory next to the target environment.

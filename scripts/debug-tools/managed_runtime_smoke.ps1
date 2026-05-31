@@ -58,6 +58,10 @@ $SkillPath = Join-Path $RepoRoot "examples\managed_runtime\managed-child-runtime
 # FetchScript 保存受管运行时依赖拉取脚本。
 $FetchScript = Join-Path $RepoRoot "scripts\deps\fetch_managed_runtimes.ps1"
 
+# LayoutCheckScript stores the managed runtime layout validator.
+# LayoutCheckScript 保存受管运行时布局校验器。
+$LayoutCheckScript = Join-Path $RepoRoot "scripts\debug-tools\managed_runtime_layout_check.py"
+
 function Invoke-CheckedProcess {
     <#
     .SYNOPSIS
@@ -146,6 +150,12 @@ try {
         }
     }
 
+    Write-Host "Validating managed runtime layout"
+    & python $LayoutCheckScript $RuntimeRootPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "managed runtime layout validation failed"
+    }
+
     Write-Host "Calling managed runtime debug skill"
     $Output = Invoke-CheckedProcess `
         -FilePath "cargo" `
@@ -166,12 +176,18 @@ try {
     if (-not $Payload.python_first.ok) { throw "python_first did not return ok=true" }
     if (-not $Payload.python_second.worker_reused) { throw "python worker was not reused" }
     if (-not $Payload.python_status_after.ready) { throw "python environment is not ready after call" }
+    if ($Payload.python_first.value.dependency -ne "24.2") { throw "python dependency did not load" }
     if ($Payload.python_first.value.text -ne "smoke-script") { throw "python text argument did not round-trip" }
     if ($Payload.python_first.value.number -ne 41) { throw "python numeric result mismatch" }
 
     if (-not $Payload.node_first.ok) { throw "node_first did not return ok=true" }
     if (-not $Payload.node_second.worker_reused) { throw "node worker was not reused" }
     if (-not $Payload.node_status_after.ready) { throw "node environment is not ready after call" }
+    if ($Payload.node_first.value.dependency -ne "is-odd") { throw "node dependency did not load" }
+    if ($Payload.node_first.value.namedImport -ne "is-number-named") { throw "node named import did not load" }
+    if ($Payload.node_first.value.namespaceImport -ne "is-number-namespace") { throw "node namespace import did not load" }
+    if ($Payload.node_first.value.relativeImport -ne "local-helper") { throw "node relative import did not load" }
+    if ($Payload.node_first.value.sideEffectImport -ne "side-effect") { throw "node side-effect import did not load" }
     if ($Payload.node_first.value.text -ne "smoke-script") { throw "node text argument did not round-trip" }
     if ($Payload.node_first.value.number -ne 42) { throw "node numeric result mismatch" }
 

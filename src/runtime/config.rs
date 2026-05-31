@@ -502,7 +502,7 @@ mod tests {
     use super::{SkillConfigEntry, SkillConfigStore, shared_skill_config_path_lock};
     use std::collections::BTreeMap;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -726,7 +726,7 @@ mod tests {
 
         let first_lock =
             shared_skill_config_path_lock(&canonical_path).expect("resolve canonical shared lock");
-        let second_lock = shared_skill_config_path_lock(Path::new(&verbatim_alias))
+        let second_lock = shared_skill_config_path_lock(std::path::Path::new(&verbatim_alias))
             .expect("resolve windows alias shared lock");
         assert!(Arc::ptr_eq(&first_lock, &second_lock));
     }

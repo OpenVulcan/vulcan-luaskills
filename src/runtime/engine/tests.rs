@@ -6,10 +6,9 @@ use super::{
     ManagedRuntimeWorkerPool, NativeLibrarySearchGuard, SkillConfigStore,
     VulcanInternalExecutionContext, default_runlua_vm_pool_config, get_vulcan_context_table,
     get_vulcan_deps_table, get_vulcan_runtime_internal_table, get_vulcan_table,
-    invoke_managed_runtime_worker, json_to_lua_table, normalize_host_visible_path_text,
-    populate_vulcan_dependency_context, populate_vulcan_file_context,
-    populate_vulcan_internal_execution_context, render_host_visible_path,
-    spawn_managed_runtime_worker,
+    invoke_managed_runtime_worker, json_to_lua_table, populate_vulcan_dependency_context,
+    populate_vulcan_file_context, populate_vulcan_internal_execution_context,
+    render_host_visible_path, spawn_managed_runtime_worker,
 };
 use crate::host::callbacks::runtime_model_callback_test_guard;
 use crate::host::database::RuntimeDatabaseProviderCallbacks;
@@ -179,6 +178,7 @@ impl TestEnvRestoreGuard {
 
     /// Capture one additional named environment variable before the current test mutates it.
     /// 在当前测试修改环境变量前，再额外捕获一个具名环境变量。
+    #[cfg(windows)]
     fn and_capture(mut self, name: &str) -> Self {
         self.entries
             .push((name.to_string(), std::env::var_os(name)));
@@ -223,7 +223,7 @@ fn make_loaded_skill(
 #[test]
 fn normalize_host_visible_path_text_strips_windows_drive_verbatim_prefix() {
     assert_eq!(
-        normalize_host_visible_path_text(r"\\?\C:\runtime-test-root\skill.lua"),
+        super::normalize_host_visible_path_text(r"\\?\C:\runtime-test-root\skill.lua"),
         r"C:\runtime-test-root\skill.lua"
     );
 }
@@ -234,8 +234,19 @@ fn normalize_host_visible_path_text_strips_windows_drive_verbatim_prefix() {
 #[test]
 fn normalize_host_visible_path_text_strips_windows_unc_verbatim_prefix() {
     assert_eq!(
-        normalize_host_visible_path_text(r"\\?\UNC\server\share\skill.lua"),
+        super::normalize_host_visible_path_text(r"\\?\UNC\server\share\skill.lua"),
         r"\\server\share\skill.lua"
+    );
+}
+
+/// Verify host-visible path normalization preserves ordinary POSIX paths on Unix-like platforms.
+/// 验证对宿主可见的路径归一化会在类 Unix 平台保留普通 POSIX 路径。
+#[cfg(not(windows))]
+#[test]
+fn normalize_host_visible_path_text_preserves_posix_path() {
+    assert_eq!(
+        super::normalize_host_visible_path_text("/tmp/runtime-test-root/skill.lua"),
+        "/tmp/runtime-test-root/skill.lua"
     );
 }
 

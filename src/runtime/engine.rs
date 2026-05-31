@@ -2098,6 +2098,67 @@ rl.on("line", async (line) => {
 "#
 }
 
+/// Prepare one Node.js import root that keeps native ESM bare-import resolution inside the managed env.
+/// 准备一个 Node.js import 根目录，使原生 ESM bare import 解析停留在受管环境内。
+fn prepare_managed_node_import_root(
+    plan: &ManagedRuntimeEnvPlan,
+    skill_dir: &Path,
+) -> Result<PathBuf, String> {
+    let import_root = plan.env_dir.join(".luaskills-skill");
+    if import_root.exists() {
+        let metadata = fs::symlink_metadata(&import_root)
+            .map_err(|error| format!("Failed to inspect {}: {}", import_root.display(), error))?;
+        if metadata.file_type().is_symlink() && !import_root.is_dir() {
+            fs::remove_file(&import_root).map_err(|error| {
+                format!("Failed to remove {}: {}", import_root.display(), error)
+            })?;
+        } else {
+            fs::remove_dir_all(&import_root).map_err(|error| {
+                format!("Failed to remove {}: {}", import_root.display(), error)
+            })?;
+        }
+    }
+    copy_managed_node_skill_import_root(skill_dir, &import_root)?;
+    Ok(import_root)
+}
+
+/// Recursively copy one skill directory into a managed Node.js import root.
+/// 将单个 skill 目录递归复制到受管 Node.js import 根目录。
+fn copy_managed_node_skill_import_root(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("Failed to create {}: {}", destination.display(), error))?;
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("Failed to read {}: {}", source.display(), error))?
+    {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Failed to read directory entry under {}: {}",
+                source.display(),
+                error
+            )
+        })?;
+        let name = entry.file_name();
+        if name == "node_modules" {
+            continue;
+        }
+        let source_path = entry.path();
+        let destination_path = destination.join(&name);
+        if source_path.is_dir() {
+            copy_managed_node_skill_import_root(&source_path, &destination_path)?;
+        } else if source_path.is_file() {
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                format!(
+                    "Failed to copy {} to {}: {}",
+                    source_path.display(),
+                    destination_path.display(),
+                    error
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Invoke one managed runtime payload through a pooled worker.
 /// 通过池化 worker 调用一个受管运行时载荷。
 fn invoke_pooled_managed_runtime<F>(
@@ -2182,10 +2243,13 @@ fn invoke_managed_node(lua: &Lua, spec: LuaValue) -> Result<LuaValue, mlua::Erro
         .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
     ensure_managed_env(&plan)
         .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
-    let source_file =
-        resolve_managed_runtime_skill_file(&skill_dir, &request.file, api_name, "file")?;
+    let _ = resolve_managed_runtime_skill_file(&skill_dir, &request.file, api_name, "file")?;
+    let import_root = prepare_managed_node_import_root(&plan, &skill_dir)
+        .map_err(|error| mlua::Error::runtime(format!("{api_name}: {error}")))?;
+    let import_file = import_root.join(&request.file);
     let payload = json!({
-        "file": source_file,
+        "file": import_file,
+        "env_dir": plan.env_dir,
         "handler": request.handler,
         "args": request.args,
         "ctx": {},

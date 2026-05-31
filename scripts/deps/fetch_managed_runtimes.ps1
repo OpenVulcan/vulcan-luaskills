@@ -461,6 +461,7 @@ function Install-PythonRuntime {
             version = $PythonVersion
             platform = $Platform.key
             executable = $RelativeExe
+            source = "uv-managed-python"
             package_manager = "uv"
             package_manager_version = $UvVersion
         }

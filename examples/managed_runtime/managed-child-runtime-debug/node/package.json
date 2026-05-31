@@ -3,5 +3,8 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "dependencies": {}
+  "dependencies": {
+    "is-odd": "3.0.1",
+    "is-number": "6.0.0"
+  }
 }
