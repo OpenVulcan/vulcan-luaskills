@@ -665,7 +665,10 @@ pub fn read_install_manifest(install_dir: &Path) -> Result<ManagedRuntimeInstall
     let manifest_path = install_dir.join("runtime-manifest.json");
     let text = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("Failed to read {}: {}", manifest_path.display(), error))?;
-    serde_json::from_str(&text)
+    // PowerShell 5.1 may write UTF-8 JSON files with a BOM when Set-Content is used.
+    // PowerShell 5.1 使用 Set-Content 写 UTF-8 JSON 时可能带有 BOM。
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    serde_json::from_str(text)
         .map_err(|error| format!("Failed to parse {}: {}", manifest_path.display(), error))
 }
 
@@ -864,7 +867,7 @@ mod tests {
             runtime_version: "3.12.8".to_string(),
             platform: "windows-x64".to_string(),
             package_manager: "uv".to_string(),
-            package_manager_version: "0.5.0".to_string(),
+            package_manager_version: "0.11.17".to_string(),
             lock_hash: sha256_hex(b"requests==2.32.3"),
             package_manifest_hash: None,
         };
@@ -940,9 +943,9 @@ mod tests {
         write_install_manifest(
             &runtime_root
                 .join("dependencies/runtimes/python")
-                .join(format!("uv-0.5.0-{}", platform)),
+                .join(format!("uv-0.11.17-{}", platform)),
             "uv",
-            "0.5.0",
+            "0.11.17",
             &platform,
             platform_executable("uv"),
         );
@@ -952,7 +955,7 @@ mod tests {
             &PythonRuntimeDependencySpec {
                 version: "3.12.7".to_string(),
                 package_manager: PythonRuntimePackageManager::Uv,
-                package_manager_version: "0.5.0".to_string(),
+                package_manager_version: "0.11.17".to_string(),
                 lockfile: "python/requirements.lock".to_string(),
                 required: true,
             },
@@ -992,9 +995,9 @@ mod tests {
         write_install_manifest(
             &runtime_root
                 .join("dependencies/runtimes/python")
-                .join(format!("uv-0.5.0-{}", platform)),
+                .join(format!("uv-0.11.17-{}", platform)),
             "uv",
-            "0.5.0",
+            "0.11.17",
             &platform,
             platform_executable("uv"),
         );
@@ -1005,7 +1008,7 @@ mod tests {
             &PythonRuntimeDependencySpec {
                 version: "3.12.7".to_string(),
                 package_manager: PythonRuntimePackageManager::Uv,
-                package_manager_version: "0.5.0".to_string(),
+                package_manager_version: "0.11.17".to_string(),
                 lockfile: "python/requirements.lock".to_string(),
                 required: true,
             },
@@ -1106,9 +1109,9 @@ mod tests {
         write_install_manifest(
             &runtime_root
                 .join("dependencies/runtimes/python")
-                .join(format!("uv-0.5.0-{}", platform)),
+                .join(format!("uv-0.11.17-{}", platform)),
             "uv",
-            "0.5.0",
+            "0.11.17",
             &platform,
             platform_executable("uv"),
         );
@@ -1118,7 +1121,7 @@ mod tests {
             &PythonRuntimeDependencySpec {
                 version: "3.12.7".to_string(),
                 package_manager: PythonRuntimePackageManager::Uv,
-                package_manager_version: "0.5.0".to_string(),
+                package_manager_version: "0.11.17".to_string(),
                 lockfile: "../outside.lock".to_string(),
                 required: true,
             },

@@ -20,7 +20,7 @@ PYTHON_VERSION="${PYTHON_VERSION:-3.12.7}"
 
 # UvVersion selects the standalone uv binary version.
 # UvVersion 选择独立 uv 二进制版本。
-UV_VERSION="${UV_VERSION:-0.5.0}"
+UV_VERSION="${UV_VERSION:-0.11.17}"
 
 # NodeVersion selects the managed Node.js version.
 # NodeVersion 选择受管 Node.js 版本。

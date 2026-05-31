@@ -11,7 +11,7 @@
     [string]$PythonVersion = "3.12.7",
     # UvVersion selects the standalone uv binary version.
     # UvVersion 选择独立 uv 二进制版本。
-    [string]$UvVersion = "0.5.0",
+    [string]$UvVersion = "0.11.17",
     # NodeVersion selects the managed Node.js version.
     # NodeVersion 选择受管 Node.js 版本。
     [string]$NodeVersion = "22.11.0",
@@ -237,7 +237,16 @@ function Expand-ArchivePayload {
 
     Ensure-Dir $Destination
     if ($Archive.EndsWith(".zip", [StringComparison]::OrdinalIgnoreCase)) {
-        Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force
+        # bsdtar handles zip archives without Expand-Archive cleanup races or .NET long-path limits.
+        # bsdtar 可处理 zip 归档，并避开 Expand-Archive 清理竞态和 .NET 长路径限制。
+        if (Test-Path -LiteralPath $Destination) {
+            Remove-Item -Recurse -Force -LiteralPath $Destination
+        }
+        Ensure-Dir $Destination
+        & tar -xf $Archive -C $Destination
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to extract archive: $Archive"
+        }
         return
     }
     & tar -xf $Archive -C $Destination
@@ -267,7 +276,10 @@ function Write-RuntimeManifest {
 
     Ensure-Dir $Directory
     $ManifestPath = Join-Path $Directory "runtime-manifest.json"
-    $Manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+    # Utf8NoBom writes JSON that serde_json can parse consistently across PowerShell versions.
+    # Utf8NoBom 写出 serde_json 在不同 PowerShell 版本下都能稳定解析的 JSON。
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($ManifestPath, (($Manifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $Utf8NoBom)
 }
 
 function Get-RelativePathCompat {

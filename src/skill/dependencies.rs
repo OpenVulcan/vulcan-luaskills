@@ -496,7 +496,7 @@ ffi_dependencies:
 python_runtime:
   version: "3.12.8"
   package_manager: uv
-  package_manager_version: "0.5.0"
+  package_manager_version: "0.11.17"
   lockfile: python/requirements.lock
 node_runtime:
   version: "22.11.0"
